@@ -1,51 +1,42 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import ControlBar from "./components/ControlBar";
+import SettingsPanel from "./components/SettingsPanel";
+import LogsView from "./components/LogsView";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+export default function App() {
+  const [tab, setTab] = useState<"logs" | "settings">("logs");
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      height: "100vh",
+      fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
+      color: "#e6e6e6",
+      background: "#0d0f12",
+    }}>
+      <ControlBar />
+      <div style={{ display: "flex", gap: 4, padding: "8px 16px", background: "#15181d" }}>
+        <button onClick={() => setTab("logs")}
+                style={tabStyle(tab === "logs")}>Logs</button>
+        <button onClick={() => setTab("settings")}
+                style={tabStyle(tab === "settings")}>Settings</button>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {tab === "logs" ? <LogsView /> : <SettingsPanel />}
+      </div>
+    </div>
   );
 }
 
-export default App;
+function tabStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "6px 12px",
+    background: active ? "#2a3038" : "transparent",
+    color: active ? "#fff" : "#9aa0a8",
+    border: "none",
+    borderRadius: 4,
+    cursor: "pointer",
+  };
+}
