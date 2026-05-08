@@ -1,4 +1,5 @@
 pub mod db;
+pub mod llm;
 pub mod queue;
 pub mod secrets;
 
