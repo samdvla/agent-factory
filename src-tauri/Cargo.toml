@@ -30,6 +30,7 @@ thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"
+keyring = { version = "3", features = ["apple-native"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
