@@ -1,5 +1,6 @@
 pub mod budget;
 pub mod db;
+pub mod heartbeat;
 pub mod llm;
 pub mod queue;
 pub mod secrets;
