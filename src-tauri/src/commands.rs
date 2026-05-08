@@ -42,7 +42,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
 
     let agents = vec![supervisor::AgentSpec {
         role: "hello".into(),
-        program: "python3".into(),
+        program: "python3.11".into(),
         args: vec!["-m".into(), "hello".into()],
     }];
 
