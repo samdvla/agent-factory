@@ -1,0 +1,29 @@
+# Node
+node_modules/
+dist/
+.vite/
+
+# Rust
+src-tauri/target/
+**/*.rs.bk
+
+# Python
+workers/**/__pycache__/
+workers/**/.pytest_cache/
+workers/**/*.egg-info/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / runtime
+*.env
+*.env.*
+secrets.enc
+data/
