@@ -1,9 +1,11 @@
 pub mod budget;
 pub mod db;
+pub mod events;
 pub mod heartbeat;
 pub mod llm;
 pub mod queue;
 pub mod secrets;
+pub mod supervisor;
 pub mod worker;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
