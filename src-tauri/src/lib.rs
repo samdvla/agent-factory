@@ -3,6 +3,7 @@ pub mod db;
 pub mod llm;
 pub mod queue;
 pub mod secrets;
+pub mod worker;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
