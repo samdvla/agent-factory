@@ -3,6 +3,8 @@ import { useFactoryStore } from "../state/factoryStore";
 import { iso } from "./geometry";
 import { homeStationFor, stationCount, stationWorld } from "./stations";
 import Avatar from "./Avatar";
+import SpawnFx from "./kit/SpawnFx";
+import DissolveFx from "./kit/DissolveFx";
 
 const STATION_DWELL_MIN_MS = 2400;
 const STATION_DWELL_JITTER_MS = 2200;
@@ -242,6 +244,12 @@ export default function AvatarLayer({
               sizeScale={zoom}
               onClick={() => selectAgent(role.id)}
             />
+            {agent.state === "materializing" && (
+              <SpawnFx accent={role.hex} scale={zoom} />
+            )}
+            {agent.state === "dissolving" && (
+              <DissolveFx accent={role.hex} scale={zoom} />
+            )}
           </div>
         );
       })}
