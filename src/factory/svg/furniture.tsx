@@ -648,3 +648,246 @@ export function ColorRack({
     </>
   );
 }
+
+// ---------- Multi-station rooms ----------
+
+// Long counter: one continuous worktop spanning N grid units. Used for
+// call-center / triage rooms where many agents share a desk.
+export function LongCounter({
+  x, y, w = 5, d = 1.2, accent = "#2a3849",
+}: { x: number; y: number; w?: number; d?: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={w} d={d} h={5}
+        fillTop={accent} fillRight={SURFACE.metalRight} fillLeft={SURFACE.metalLeft} />
+      <IsoBox x={x + 0.05} y={y + 0.05} w={w - 0.1} d={d - 0.1} h={5.4}
+        fillTop={SURFACE.metalTop} fillRight={SURFACE.metalRight} fillLeft={SURFACE.metalLeft} />
+    </>
+  );
+}
+
+// Open desk row: N workstations placed end-to-end at a single y.
+export function OpenDeskRow({
+  x, y, count = 4, gap = 0.05, accent = "#2a3849",
+}: { x: number; y: number; count?: number; gap?: number; accent?: string }) {
+  const each = 1.0;
+  const items: React.ReactNode[] = [];
+  for (let i = 0; i < count; i++) {
+    items.push(
+      <IsoBox key={`d${i}`}
+        x={x + i * (each + gap)} y={y} w={each} d={1.0} h={5.2}
+        fillTop={accent} fillRight={SURFACE.metalRight} fillLeft={SURFACE.metalLeft} />,
+    );
+  }
+  return <>{items}</>;
+}
+
+// Phone bank: vertical bank of phones on the back wall — each is a small
+// rectangle with a colored handset accent.
+export function PhoneBank({
+  x, y, count = 4, accent = "rgba(106, 169, 255, 0.85)",
+}: { x: number; y: number; count?: number; accent?: string }) {
+  const items: React.ReactNode[] = [];
+  for (let i = 0; i < count; i++) {
+    items.push(
+      <IsoBox key={`p${i}`}
+        x={x + i * 0.5} y={y} w={0.4} d={0.18} h={3.4}
+        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />,
+      <IsoBox key={`h${i}`}
+        x={x + 0.05 + i * 0.5} y={y + 0.04} w={0.3} d={0.08} h={3.8}
+        fillTop={accent} fillRight="#1a2532" fillLeft="#15202b" />,
+    );
+  }
+  return <>{items}</>;
+}
+
+export function Headset({
+  x, y, accent = "rgba(106, 169, 255, 0.95)",
+}: { x: number; y: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.32} d={0.18} h={2.2}
+        fillTop={accent} fillRight="#1a2532" fillLeft="#15202b" />
+      <IsoBox x={x + 0.04} y={y + 0.02} w={0.06} d={0.14} h={3.2}
+        fillTop="#cdd5df" fillRight="#1a2532" fillLeft="#15202b" />
+      <IsoBox x={x + 0.22} y={y + 0.02} w={0.06} d={0.14} h={3.2}
+        fillTop="#cdd5df" fillRight="#1a2532" fillLeft="#15202b" />
+    </>
+  );
+}
+
+export function CallQueueBoard({
+  x, y, accent = "rgba(106, 169, 255, 0.9)",
+}: { x: number; y: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={1.4} d={0.06} h={4.6}
+        fillTop="#101820" fillRight="#0c141b" fillLeft="#10171f" />
+      <IsoBox x={x + 0.08} y={y + 0.01} w={1.24} d={0.04} h={5.0}
+        fillTop={accent} fillRight="#0c141b" fillLeft="#10171f" />
+    </>
+  );
+}
+
+// ---------- Dev / automation ----------
+
+export function TerminalRack({
+  x, y, w = 1.6, accent = "rgba(95, 212, 240, 0.85)",
+}: { x: number; y: number; w?: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={w} d={0.18} h={11}
+        fillTop="#101820" fillRight="#0c141b" fillLeft="#10171f" />
+      <IsoBox x={x + 0.05} y={y + 0.02} w={w - 0.1} d={0.14} h={11.5}
+        fillTop={accent} fillRight="#0c141b" fillLeft="#10171f" />
+    </>
+  );
+}
+
+export function CableTray({
+  x, y, w = 2,
+}: { x: number; y: number; w?: number }) {
+  return (
+    <IsoBox x={x} y={y} w={w} d={0.15} h={0.6}
+      fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+  );
+}
+
+// ---------- Legal / compliance ----------
+
+export function LawBookshelf({
+  x, y, h = 14,
+}: { x: number; y: number; h?: number }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.6} d={1.4} h={h}
+        fillTop={SURFACE.woodTop} fillRight={SURFACE.woodRight} fillLeft={SURFACE.woodLeft} />
+      <IsoBox x={x + 0.05} y={y + 0.05} w={0.5} d={1.3} h={h - 1}
+        fillTop="#3a2818" fillRight={SURFACE.woodRight} fillLeft={SURFACE.woodLeft} />
+    </>
+  );
+}
+
+export function FileSafe({
+  x, y, accent = "rgba(196, 217, 67, 0.85)",
+}: { x: number; y: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.7} d={0.7} h={6}
+        fillTop="#1a2532" fillRight="#0e161e" fillLeft="#15202b" />
+      <IsoBox x={x + 0.05} y={y + 0.05} w={0.6} d={0.6} h={6.2}
+        fillTop="#243140" fillRight="#0e161e" fillLeft="#15202b" />
+      <IsoBox x={x + 0.3} y={y + 0.05} w={0.1} d={0.1} h={6.5}
+        fillTop={accent} fillRight="#0e161e" fillLeft="#15202b" />
+    </>
+  );
+}
+
+export function DocStamp({
+  x, y, accent = "rgba(245, 166, 35, 0.9)",
+}: { x: number; y: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.3} d={0.3} h={1.5}
+        fillTop={SURFACE.woodTop} fillRight={SURFACE.woodRight} fillLeft={SURFACE.woodLeft} />
+      <IsoBox x={x + 0.05} y={y + 0.05} w={0.2} d={0.2} h={2.4}
+        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+      <IsoBox x={x + 0.05} y={y + 0.05} w={0.2} d={0.2} h={2.7}
+        fillTop={accent} fillRight="#10171f" fillLeft="#15202b" />
+    </>
+  );
+}
+
+// ---------- Archive ----------
+
+export function ArchiveWall({
+  x, y, w = 4, h = 12,
+}: { x: number; y: number; w?: number; h?: number }) {
+  const cells: React.ReactNode[] = [];
+  const cols = Math.floor(w / 0.5);
+  const rows = 5;
+  const shelfH = h / rows;
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      // Each cell sits on its own shelf elevation: cell r occupies the band
+      // from (r * shelfH) to ((r + 1) * shelfH - 0.4). Tops drawn by IsoBox
+      // land at h = (r + 1) * shelfH - 0.4, producing visually distinct rows.
+      cells.push(
+        <IsoBox key={`a${c}-${r}`}
+          x={x + c * 0.5} y={y + 0.1} w={0.45} d={0.2}
+          h={(r + 1) * shelfH - 0.4}
+          fillTop="#243140" fillRight="#15202b" fillLeft="#1a2532" />,
+      );
+      // Thin shelf divider at the top of each band
+      cells.push(
+        <IsoBox key={`shelf-${c}-${r}`}
+          x={x + c * 0.5} y={y + 0.05} w={0.45} d={0.3}
+          h={(r + 1) * shelfH}
+          fillTop="#10171f" fillRight="#0c141b" fillLeft="#0e161e" />,
+      );
+    }
+  }
+  return (
+    <>
+      <IsoBox x={x} y={y} w={w} d={0.4} h={h}
+        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+      {cells}
+    </>
+  );
+}
+
+export function Carousel({
+  x, y,
+}: { x: number; y: number }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.9} d={0.9} h={4.5}
+        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+      <IsoBox x={x + 0.1} y={y + 0.1} w={0.7} d={0.7} h={5}
+        fillTop="#243140" fillRight="#10171f" fillLeft="#15202b" />
+      <IsoBox x={x + 0.4} y={y + 0.1} w={0.04} d={0.04} h={6}
+        fillTop="#cdd5df" fillRight="#10171f" fillLeft="#15202b" />
+    </>
+  );
+}
+
+// ---------- Strategic / financial dashboards ----------
+
+export function WarMap({
+  x, y, w = 3.2, accent = "rgba(245, 166, 35, 0.7)",
+}: { x: number; y: number; w?: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={w} d={0.08} h={5.2}
+        fillTop="#0a1118" fillRight="#070b11" fillLeft="#0a1118" />
+      <IsoBox x={x + 0.1} y={y + 0.01} w={w - 0.2} d={0.06} h={5.6}
+        fillTop={accent} fillRight="#070b11" fillLeft="#0a1118" />
+    </>
+  );
+}
+
+export function TokenMeter({
+  x, y, accent = "rgba(196, 217, 67, 0.85)",
+}: { x: number; y: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={0.9} d={0.1} h={3.6}
+        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+      <IsoBox x={x + 0.05} y={y + 0.02} w={0.6} d={0.06} h={3.9}
+        fillTop={accent} fillRight="#10171f" fillLeft="#15202b" />
+    </>
+  );
+}
+
+export function KpiPanel({
+  x, y, w = 1.4, accent = "rgba(95, 212, 240, 0.85)",
+}: { x: number; y: number; w?: number; accent?: string }) {
+  return (
+    <>
+      <IsoBox x={x} y={y} w={w} d={0.1} h={4.6}
+        fillTop="#0a1118" fillRight="#070b11" fillLeft="#0a1118" />
+      <IsoBox x={x + 0.05} y={y + 0.01} w={w - 0.1} d={0.08} h={5.0}
+        fillTop={accent} fillRight="#070b11" fillLeft="#0a1118" />
+    </>
+  );
+}

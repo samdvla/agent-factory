@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
-import { ROLES } from "../state/fixtures";
 import { iso } from "./geometry";
 import { homeStationFor, stationCount, stationWorld } from "./stations";
 import Avatar from "./Avatar";
+import SpawnFx from "./kit/SpawnFx";
+import DissolveFx from "./kit/DissolveFx";
 
 const STATION_DWELL_MIN_MS = 2400;
 const STATION_DWELL_JITTER_MS = 2200;
@@ -27,13 +28,14 @@ export default function AvatarLayer({
   const agents = useFactoryStore((s) => s.agents);
   const agentTravel = useFactoryStore((s) => s.agentTravel);
   const selectAgent = useFactoryStore((s) => s.selectAgent);
+  const roles = useFactoryStore((s) => s.roles);
   const layerRef = useRef<HTMLDivElement>(null);
   const [, force] = useState<object>({});
 
   const [stationByRole, setStationByRole] = useState<Record<string, number>>(
     () => {
       const init: Record<string, number> = {};
-      for (const role of Object.values(ROLES)) {
+      for (const role of Object.values(useFactoryStore.getState().roles)) {
         init[role.id] = homeStationFor(role.id, role.room);
       }
       return init;
@@ -72,7 +74,7 @@ export default function AvatarLayer({
       const next = { ...stationByRole };
       const nowMoving = new Set(movingRoles);
 
-      for (const role of Object.values(ROLES)) {
+      for (const role of Object.values(useFactoryStore.getState().roles)) {
         const agent = liveAgents[role.id];
         if (!agent) continue;
         const last = lastMoveAt.current[role.id] ?? 0;
@@ -213,7 +215,7 @@ export default function AvatarLayer({
       id="avatar-layer"
       style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
     >
-      {Object.values(ROLES).map((role) => {
+      {Object.values(roles).map((role) => {
         const agent = agents[role.id];
         if (!agent) return null;
         const pos = project(role.id, role.room);
@@ -242,6 +244,12 @@ export default function AvatarLayer({
               sizeScale={zoom}
               onClick={() => selectAgent(role.id)}
             />
+            {agent.state === "materializing" && (
+              <SpawnFx accent={role.hex} scale={zoom} />
+            )}
+            {agent.state === "dissolving" && (
+              <DissolveFx accent={role.hex} scale={zoom} />
+            )}
           </div>
         );
       })}

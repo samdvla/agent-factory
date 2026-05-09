@@ -4,14 +4,16 @@ import { Group } from "three";
 import { Role, AgentVisualState } from "../state/types";
 
 const STATE_PARAMS: Record<AgentVisualState, { glow: number; bob: number; tint: number }> = {
-  idle:        { glow: 0.4, bob: 0.05, tint: 1.0 },
-  working:     { glow: 0.8, bob: 0.0,  tint: 1.0 },
-  walking:     { glow: 0.6, bob: 0.15, tint: 1.0 },
-  awaiting:    { glow: 0.5, bob: 0.0,  tint: 1.0 },
-  paused:      { glow: 0.15, bob: 0.0, tint: 0.5 },
-  crashed:     { glow: 0.2, bob: 0.0,  tint: 0.3 },
-  killed:      { glow: 0.0, bob: 0.0,  tint: 0.0 },
-  quarantined: { glow: 0.3, bob: 0.0,  tint: 0.4 },
+  idle:          { glow: 0.4,  bob: 0.05, tint: 1.0 },
+  working:       { glow: 0.8,  bob: 0.0,  tint: 1.0 },
+  walking:       { glow: 0.6,  bob: 0.15, tint: 1.0 },
+  awaiting:      { glow: 0.5,  bob: 0.0,  tint: 1.0 },
+  paused:        { glow: 0.15, bob: 0.0,  tint: 0.5 },
+  crashed:       { glow: 0.2,  bob: 0.0,  tint: 0.3 },
+  killed:        { glow: 0.0,  bob: 0.0,  tint: 0.0 },
+  quarantined:   { glow: 0.3,  bob: 0.0,  tint: 0.4 },
+  materializing: { glow: 0.9,  bob: 0.1,  tint: 0.6 },
+  dissolving:    { glow: 0.1,  bob: 0.0,  tint: 0.3 },
 };
 
 export default function Avatar3D({

@@ -73,14 +73,16 @@ function RoleWorkFx({ roleId }: { roleId: string }) {
 }
 
 const STATE_GLYPH: Record<AgentVisualState, string> = {
-  working:     "⌨",
-  idle:        "·",
-  walking:     "→",
-  awaiting:    "?",
-  paused:      "Z",
-  crashed:     "!",
-  killed:      "×",
-  quarantined: "⚠",
+  working:       "⌨",
+  idle:          "·",
+  walking:       "→",
+  awaiting:      "?",
+  paused:        "Z",
+  crashed:       "!",
+  killed:        "×",
+  quarantined:   "⚠",
+  materializing: "◎",
+  dissolving:    "◌",
 };
 
 const W = 32;
