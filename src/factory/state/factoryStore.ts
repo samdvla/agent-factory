@@ -283,6 +283,11 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       delete nextRoles[roleId];
       delete nextAgents[roleId];
 
+      const nextRevenue = { ...cur.revenueByRole };
+      const nextIdle = { ...cur.agentLastIdleAt };
+      delete nextRevenue[roleId];
+      delete nextIdle[roleId];
+
       const room = cur.rooms[role.room];
       const occupants = (room?.occupants ?? []).filter((r) => r !== roleId);
       const willDissolveRoom = !!room && occupants.length === 0;
@@ -290,7 +295,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       const nextRooms = room
         ? { ...cur.rooms, [role.room]: { ...room, occupants, dissolving: willDissolveRoom } }
         : cur.rooms;
-      set({ roles: nextRoles, agents: nextAgents, rooms: nextRooms });
+      set({ roles: nextRoles, agents: nextAgents, rooms: nextRooms,
+            revenueByRole: nextRevenue, agentLastIdleAt: nextIdle });
 
       if (willDissolveRoom) {
         setTimeout(() => {

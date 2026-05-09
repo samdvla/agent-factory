@@ -129,19 +129,37 @@ export default function AvatarLayer({
   }, [stationByRole, movingRoles]);
 
   // While any agent has a waypoint travel in flight, drive a rAF loop that
-  // re-projects them every frame.
+  // re-projects them every frame. The loop stops when all travel is done and
+  // re-arms via a store subscription whenever new travel begins.
   useEffect(() => {
-    const hasActiveTravel = () =>
-      Object.values(useFactoryStore.getState().agentTravel).some(
-        (t) => t?.waypoints && t.waypoints.length > 1,
-      );
     let raf = 0;
     const tick = () => {
-      if (hasActiveTravel()) force({});
+      const active = Object.values(useFactoryStore.getState().agentTravel).some(
+        (t) => t?.waypoints && t.waypoints.length > 1,
+      );
+      if (!active) {
+        raf = 0;
+        return;
+      }
+      force({});
       raf = requestAnimationFrame(tick);
     };
+    // Subscribe to agentTravel changes — re-arm the loop when a new travel starts.
+    const unsub = useFactoryStore.subscribe((state, prev) => {
+      if (state.agentTravel === prev.agentTravel) return;
+      const nowActive = Object.values(state.agentTravel).some(
+        (t) => t?.waypoints && t.waypoints.length > 1,
+      );
+      if (nowActive && raf === 0) {
+        raf = requestAnimationFrame(tick);
+      }
+    });
+    // Initial check on mount
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      unsub();
+    };
   }, []);
 
   const project = (

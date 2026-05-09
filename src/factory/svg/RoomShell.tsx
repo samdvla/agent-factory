@@ -2,15 +2,14 @@ import { useFactoryStore } from "../state/factoryStore";
 import {
   floorPoly, wallNorthPoly, wallEastPoly, getRoomBounds, iso, ROOM_W, WALL_H,
 } from "./geometry";
-import { computeDoors } from "./layout";
+import { DoorSet } from "./layout";
 import { composeRoom } from "./kit/composer";
 
 const DOOR_W = 1.0;
 const DOOR_H = WALL_H * 0.66;
 
-export default function RoomShell({ roomId }: { roomId: string }) {
+export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string; doors?: DoorSet }) {
   const room = useFactoryStore((s) => s.rooms[roomId]);
-  const allRooms = useFactoryStore((s) => s.rooms);
   const roomState = useFactoryStore((s) => {
     const r = s.rooms[roomId];
     if (!r) return "idle";
@@ -25,7 +24,7 @@ export default function RoomShell({ roomId }: { roomId: string }) {
   const accent = room.kit?.accent ?? "#5fd4f0";
   const b = getRoomBounds(roomId);
   if (!b) return null;
-  const doors = computeDoors(Object.values(allRooms)).get(roomId) ?? { north: false, east: false, south: false, west: false };
+  const doors = doorsProp ?? { north: false, east: false, south: false, west: false };
 
   const gridLines: React.ReactNode[] = [];
   for (let i = 1; i < ROOM_W; i++) {

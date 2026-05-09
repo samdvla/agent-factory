@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, useCallback } from "react";
 import { useFactoryStore } from "../state/factoryStore";
 import { Room } from "../state/types";
 import { GAP, ROOM_W, ROOM_H, WALL_H, iso } from "./geometry";
+import { computeFacilityLayout, roomsHash } from "./layout";
 import RoomShell from "./RoomShell";
 import AvatarLayer from "./AvatarLayer";
 import HandoffLayer from "./HandoffLayer";
@@ -40,6 +41,11 @@ export default function SvgFactoryFloor() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rooms = useFactoryStore((s) => s.rooms);
+  const layout = useMemo(
+    () => computeFacilityLayout(Object.values(rooms)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roomsHash(Object.values(rooms))],
+  );
   const base = useMemo(() => computeBaseViewBox(Object.values(rooms)), [rooms]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -141,9 +147,9 @@ export default function SvgFactoryFloor() {
             <stop offset="100%" stopColor="#5fd4f0" stopOpacity={0} />
           </radialGradient>
         </defs>
-        <Corridors />
+        <Corridors strips={layout.corridors} />
         {ordered.map((id) => (
-          <RoomShell key={id} roomId={id} />
+          <RoomShell key={id} roomId={id} doors={layout.doors.get(id)} />
         ))}
       </svg>
       <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} />

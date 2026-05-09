@@ -1,5 +1,4 @@
-import { useFactoryStore } from "../state/factoryStore";
-import { computeCorridors } from "./layout";
+import { Strip } from "./layout";
 import { iso } from "./geometry";
 
 function floorPoly(x0: number, y0: number, x1: number, y1: number) {
@@ -7,9 +6,7 @@ function floorPoly(x0: number, y0: number, x1: number, y1: number) {
   return `${a.x},${a.y} ${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`;
 }
 
-export default function Corridors() {
-  const rooms = useFactoryStore((s) => s.rooms);
-  const strips = computeCorridors(Object.values(rooms));
+export default function Corridors({ strips }: { strips: Strip[] }) {
 
   return (
     <g className="corridors">
