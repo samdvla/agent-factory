@@ -61,45 +61,52 @@ pub fn run() {
 
             let auto_state = state.clone();
             let pool_for_job = pool.clone();
+            let project_id_for_job = project_id;
             tauri::async_runtime::spawn(async move {
+                let api_key_env = ("ANTHROPIC_API_KEY".into(), api_key.clone());
+                let make_spec = |role: &str, worker_dir: &str| supervisor::AgentSpec {
+                    role: role.into(),
+                    program: "python3.11".into(),
+                    args: vec!["-m".into(), role.into()],
+                    env: vec![
+                        api_key_env.clone(),
+                        ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
+                    ],
+                };
+
                 let agents = vec![
                     supervisor::AgentSpec {
                         role: "hello".into(),
                         program: "python3.11".into(),
                         args: vec!["-m".into(), "hello".into()],
                         env: vec![
-                            ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                            api_key_env.clone(),
                             ("PYTHONPATH".into(), "workers/hello".into()),
                         ],
                     },
-                    supervisor::AgentSpec {
-                        role: "research".into(),
-                        program: "python3.11".into(),
-                        args: vec!["-m".into(), "research".into()],
-                        env: vec![
-                            ("ANTHROPIC_API_KEY".into(), api_key.clone()),
-                            ("PYTHONPATH".into(), "workers/research".into()),
-                        ],
-                    },
+                    make_spec("research", "research"),
+                    make_spec("orchestrator", "orchestrator"),
+                    make_spec("designer", "designer"),
+                    make_spec("listing", "listing"),
+                    make_spec("publisher", "publisher"),
+                    make_spec("cfo", "cfo"),
                 ];
-                match supervisor::start(pool_for_job.clone(), bus, agents).await {
+                match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job).await {
                     Ok(handle) => {
                         let mut guard = auto_state.supervisor_handle.lock().await;
                         *guard = Some(handle);
                         tracing::info!("supervisor auto-started");
 
-                        // Auto-enqueue one research job so the user sees a real
-                        // Demand Brief on first launch.
-                        let project_id_for_job = project_id;
+                        // Auto-enqueue an orchestrator job to kick off the full pipeline.
                         tauri::async_runtime::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             if let Err(e) = queue::enqueue(
                                 &pool_for_job,
                                 project_id_for_job,
-                                "research",
+                                "orchestrator",
                                 serde_json::json!({"trigger": "boot"}),
                             ).await {
-                                tracing::warn!("auto-enqueue research failed: {e}");
+                                tracing::warn!("auto-enqueue orchestrator failed: {e}");
                             }
                         });
                     }

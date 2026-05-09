@@ -60,8 +60,23 @@ def call_anthropic(api_key: str) -> dict:
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
 
+    # Strip markdown code fences if present
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+
     brief = json.loads(text)
     return brief, tokens_in, tokens_out
+
+
+def handle(method: str, params: dict) -> dict:
+    if method != "process_job":
+        return {"ok": False, "error": f"unknown method {method}"}
+
+    job_id = params.get("job_id", 0)
+    payload = params.get("payload", {})
+    return process_job(job_id, payload)
 
 
 def process_job(job_id: int, payload: dict) -> dict:
@@ -90,6 +105,10 @@ def process_job(job_id: int, payload: dict) -> dict:
             "model": MODEL,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "handoff": {
+                "to_role": "designer",
+                "payload": {"brief": brief},
+            },
         }
     except Exception as e:
         msg = str(e)
@@ -116,6 +135,13 @@ def run() -> None:
                 job_id = params.get("job_id", 0)
                 payload = params.get("payload", {})
                 result = process_job(job_id, payload)
+                # Check for handoff before sending response
+                handoff = result.pop("handoff", None) if isinstance(result, dict) else None
+                if handoff:
+                    p.send_notification("enqueue_handoff", {
+                        "to_role": handoff["to_role"],
+                        "payload": handoff["payload"],
+                    })
                 if rid is not None:
                     p.send_response(rid, result)
             elif method == "ping":

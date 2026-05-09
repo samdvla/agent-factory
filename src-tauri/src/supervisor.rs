@@ -32,6 +32,7 @@ pub async fn start(
     pool: SqlitePool,
     bus: EventBus,
     agents: Vec<AgentSpec>,
+    project_id: i64,
 ) -> anyhow::Result<SupervisorHandle> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handles = Vec::new();
@@ -66,7 +67,7 @@ pub async fn start(
                 };
 
                 let crashed =
-                    run_worker_loop(&spec.role, worker, &pool, &bus, &mut shutdown_rx).await;
+                    run_worker_loop(&spec.role, worker, &pool, &bus, &mut shutdown_rx, project_id).await;
 
                 bus.send(SupervisorEvent::AgentExited {
                     role: spec.role.clone(),
@@ -100,6 +101,7 @@ async fn run_worker_loop(
     pool: &SqlitePool,
     bus: &EventBus,
     shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
+    project_id: i64,
 ) -> bool {
     // Poll interval for claiming the next job when the queue is empty.
     let mut poll_interval = tokio::time::interval(Duration::from_millis(250));
@@ -120,6 +122,21 @@ async fn run_worker_loop(
             evt = worker.next_event() => {
                 match evt {
                     Some(WorkerEvent::Notification { method, params }) => {
+                        if method == "enqueue_handoff" {
+                            let to_role = params.get("to_role")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let payload = params.get("payload")
+                                .cloned()
+                                .unwrap_or(serde_json::json!({}));
+                            if !to_role.is_empty() {
+                                if let Err(e) = queue::enqueue(pool, project_id, to_role, payload).await {
+                                    tracing::error!("handoff enqueue failed: {e}");
+                                } else {
+                                    tracing::info!("handoff enqueued: {} → {}", role, to_role);
+                                }
+                            }
+                        }
                         bus.send(SupervisorEvent::WorkerNotification {
                             role: role.into(),
                             method,

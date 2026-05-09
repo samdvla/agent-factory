@@ -52,7 +52,15 @@ export const INITIAL_AGENTS: Record<string, AgentEntry> = {
   si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Sonnet", tokensToday:0, currentJobId:null },
 };
 
-export const SUPERVISOR_ROLE_MAP: Record<string, string> = { hello: "orchestrator" };
+export const SUPERVISOR_ROLE_MAP: Record<string, string> = {
+  hello: "orchestrator",
+  orchestrator: "orchestrator",
+  research: "research",
+  designer: "designer",
+  listing: "listing",
+  publisher: "publisher",
+  cfo: "cfo",
+};
 
 export const FOUNDING_HIRE_EVENTS: HireEvent[] = Object.values(ROLES).map((role) => ({
   id: `founding-${role.id}`,

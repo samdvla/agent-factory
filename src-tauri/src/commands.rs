@@ -44,28 +44,36 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         .ok()
         .flatten()
         .unwrap_or_default();
+    let api_key_env = ("ANTHROPIC_API_KEY".into(), api_key.clone());
+    let make_spec = |role: &str, worker_dir: &str| supervisor::AgentSpec {
+        role: role.into(),
+        program: "python3.11".into(),
+        args: vec!["-m".into(), role.into()],
+        env: vec![
+            api_key_env.clone(),
+            ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
+        ],
+    };
+
     let agents = vec![
         supervisor::AgentSpec {
             role: "hello".into(),
             program: "python3.11".into(),
             args: vec!["-m".into(), "hello".into()],
             env: vec![
-                ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                api_key_env.clone(),
                 ("PYTHONPATH".into(), "workers/hello".into()),
             ],
         },
-        supervisor::AgentSpec {
-            role: "research".into(),
-            program: "python3.11".into(),
-            args: vec!["-m".into(), "research".into()],
-            env: vec![
-                ("ANTHROPIC_API_KEY".into(), api_key.clone()),
-                ("PYTHONPATH".into(), "workers/research".into()),
-            ],
-        },
+        make_spec("research", "research"),
+        make_spec("orchestrator", "orchestrator"),
+        make_spec("designer", "designer"),
+        make_spec("listing", "listing"),
+        make_spec("publisher", "publisher"),
+        make_spec("cfo", "cfo"),
     ];
 
-    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents)
+    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id)
         .await
         .map_err(|e| e.to_string())?;
     *guard = Some(handle);
