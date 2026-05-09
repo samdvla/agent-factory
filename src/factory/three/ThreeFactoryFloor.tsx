@@ -1,5 +1,5 @@
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrthographicCamera } from "@react-three/drei";
+import { OrbitControls, OrthographicCamera } from "@react-three/drei";
 import { Suspense, useEffect } from "react";
 import * as THREE from "three";
 import { ROOMS, ROLES } from "../state/fixtures";
@@ -54,8 +54,14 @@ export default function ThreeFactoryFloor() {
       shadows
       dpr={[1, 2]}
     >
-      <OrthographicCamera makeDefault zoom={32} near={0.1} far={1000} />
+      <OrthographicCamera makeDefault zoom={18} near={0.1} far={1000} />
       <CameraRig target={[10, 0, 7]} />
+      <OrbitControls
+        target={[10, 0, 7]}
+        enablePan={true}
+        enableZoom={true}
+        enableRotate={true}
+      />
       <ambientLight intensity={1.2} />
       <directionalLight
         position={[20, 30, 15]}

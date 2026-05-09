@@ -1,4 +1,5 @@
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
+import { Box3, Vector3 } from "three";
 import { ROOMS, ROLES } from "../state/fixtures";
 import { useFbxClone } from "./fbxLoader";
 import wallEmptyUrl from "../../assets/quaternius-scifi/Walls/Wall_Empty.fbx?url";
@@ -30,8 +31,8 @@ export default function Room3D({ roomId }: { roomId: string }) {
       </mesh>
       {/* Back walls (north + east, so camera sees inside) */}
       <Suspense fallback={null}>
-        <FbxWall position={[ROOM_W / 2, 0, 0]} rotationY={0} length={ROOM_W} />
-        <FbxWall position={[ROOM_W, 0, ROOM_H / 2]} rotationY={Math.PI / 2} length={ROOM_H} />
+        <FbxWall position={[ROOM_W / 2, 0, 0]} rotationY={0} />
+        <FbxWall position={[ROOM_W, 0, ROOM_H / 2]} rotationY={Math.PI / 2} />
       </Suspense>
       {/* Per-kind props */}
       {(PROP_LAYOUTS[room.kind] ?? []).map((p, i) => (
@@ -54,21 +55,31 @@ export default function Room3D({ roomId }: { roomId: string }) {
 function FbxWall({
   position,
   rotationY,
-  length,
 }: {
   position: [number, number, number];
   rotationY: number;
-  length: number;
 }) {
   const cloned = useFbxClone(wallEmptyUrl);
-  // Quaternius walls are typically 1m wide; scale Z to fit the run.
-  // Scale on local Z which after rotationY may be world X — adjust if walls look wrong.
+  useEffect(() => {
+    const box = new Box3().setFromObject(cloned);
+    const size = new Vector3();
+    box.getSize(size);
+    console.log(
+      "Wall bounding box:",
+      size.x.toFixed(2),
+      "×",
+      size.y.toFixed(2),
+      "×",
+      size.z.toFixed(2)
+    );
+    (window as any).__wallSize = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
+  }, [cloned]);
   return (
     <primitive
       object={cloned}
       position={position}
       rotation={[0, rotationY, 0]}
-      scale={[1, 1, length]}
+      scale={1}
     />
   );
 }
