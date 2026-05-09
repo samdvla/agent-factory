@@ -806,12 +806,24 @@ export function ArchiveWall({
   const cells: React.ReactNode[] = [];
   const cols = Math.floor(w / 0.5);
   const rows = 5;
+  const shelfH = h / rows;
   for (let c = 0; c < cols; c++) {
     for (let r = 0; r < rows; r++) {
+      // Each cell sits on its own shelf elevation: cell r occupies the band
+      // from (r * shelfH) to ((r + 1) * shelfH - 0.4). Tops drawn by IsoBox
+      // land at h = (r + 1) * shelfH - 0.4, producing visually distinct rows.
       cells.push(
         <IsoBox key={`a${c}-${r}`}
-          x={x + c * 0.5} y={y + 0.05 + r * 0.04} w={0.45} d={0.2} h={(h / rows) - 0.4}
+          x={x + c * 0.5} y={y + 0.1} w={0.45} d={0.2}
+          h={(r + 1) * shelfH - 0.4}
           fillTop="#243140" fillRight="#15202b" fillLeft="#1a2532" />,
+      );
+      // Thin shelf divider at the top of each band
+      cells.push(
+        <IsoBox key={`shelf-${c}-${r}`}
+          x={x + c * 0.5} y={y + 0.05} w={0.45} d={0.3}
+          h={(r + 1) * shelfH}
+          fillTop="#10171f" fillRight="#0c141b" fillLeft="#0e161e" />,
       );
     }
   }
