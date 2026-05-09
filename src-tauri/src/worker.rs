@@ -23,15 +23,17 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn spawn(program: &str, args: &[&str]) -> anyhow::Result<Self> {
-        let mut child = Command::new(program)
-            .args(args)
+    pub async fn spawn(program: &str, args: &[&str], env: &[(&str, &str)]) -> anyhow::Result<Self> {
+        let mut cmd = Command::new(program);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .context("spawn worker")?;
+            .kill_on_drop(true);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().context("spawn worker")?;
 
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;

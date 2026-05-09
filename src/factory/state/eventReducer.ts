@@ -64,18 +64,33 @@ export function applySupervisorEvent(
         });
       }
       break;
-    case "job_completed":
+    case "job_completed": {
       if (r && evt.job_id !== undefined) {
         store.setAgentState(r, "idle");
         store.setAgentJob(r, null);
         store.setAgentTask(r, "");
+        const result = evt.result as Record<string, unknown> | null | undefined;
+        const tickerText =
+          result && typeof result["ticker_text"] === "string"
+            ? result["ticker_text"]
+            : `job #${evt.job_id} done`;
+        if (result && result["ok"] === false) {
+          store.pushAlert({
+            kind: "warn",
+            title: `${r} job #${evt.job_id} failed`,
+            sub: typeof result["error"] === "string" ? result["error"] : "unknown",
+            ts: Date.now(),
+            agent: r,
+          });
+        }
         store.pushTicker({
           ts: Date.now(),
           source: r,
-          text: `job #${evt.job_id} done`,
+          text: tickerText,
         });
       }
       break;
+    }
     case "job_failed":
       if (r && evt.job_id !== undefined) {
         store.setAgentState(r, "crashed");

@@ -40,11 +40,30 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
     let mut guard = state.supervisor_handle.lock().await;
     if guard.is_some() { return Ok(()); }
 
-    let agents = vec![supervisor::AgentSpec {
-        role: "hello".into(),
-        program: "python3.11".into(),
-        args: vec!["-m".into(), "hello".into()],
-    }];
+    let api_key = secrets::get("anthropic_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let agents = vec![
+        supervisor::AgentSpec {
+            role: "hello".into(),
+            program: "python3.11".into(),
+            args: vec!["-m".into(), "hello".into()],
+            env: vec![
+                ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                ("PYTHONPATH".into(), "workers/hello".into()),
+            ],
+        },
+        supervisor::AgentSpec {
+            role: "research".into(),
+            program: "python3.11".into(),
+            args: vec!["-m".into(), "research".into()],
+            env: vec![
+                ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                ("PYTHONPATH".into(), "workers/research".into()),
+            ],
+        },
+    ];
 
     let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents)
         .await

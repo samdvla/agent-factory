@@ -54,18 +54,54 @@ pub fn run() {
             // Auto-start the supervisor so the floor is live the moment the
             // window paints. Failures are non-fatal — the user can still hit
             // Start in the top bar to retry.
+            let api_key = secrets::get("anthropic_api_key")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+
             let auto_state = state.clone();
+            let pool_for_job = pool.clone();
             tauri::async_runtime::spawn(async move {
-                let agents = vec![supervisor::AgentSpec {
-                    role: "hello".into(),
-                    program: "python3.11".into(),
-                    args: vec!["-m".into(), "hello".into()],
-                }];
-                match supervisor::start(pool, bus, agents).await {
+                let agents = vec![
+                    supervisor::AgentSpec {
+                        role: "hello".into(),
+                        program: "python3.11".into(),
+                        args: vec!["-m".into(), "hello".into()],
+                        env: vec![
+                            ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                            ("PYTHONPATH".into(), "workers/hello".into()),
+                        ],
+                    },
+                    supervisor::AgentSpec {
+                        role: "research".into(),
+                        program: "python3.11".into(),
+                        args: vec!["-m".into(), "research".into()],
+                        env: vec![
+                            ("ANTHROPIC_API_KEY".into(), api_key.clone()),
+                            ("PYTHONPATH".into(), "workers/research".into()),
+                        ],
+                    },
+                ];
+                match supervisor::start(pool_for_job.clone(), bus, agents).await {
                     Ok(handle) => {
                         let mut guard = auto_state.supervisor_handle.lock().await;
                         *guard = Some(handle);
                         tracing::info!("supervisor auto-started");
+
+                        // Auto-enqueue one research job so the user sees a real
+                        // Demand Brief on first launch.
+                        let project_id_for_job = project_id;
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            if let Err(e) = queue::enqueue(
+                                &pool_for_job,
+                                project_id_for_job,
+                                "research",
+                                serde_json::json!({"trigger": "boot"}),
+                            ).await {
+                                tracing::warn!("auto-enqueue research failed: {e}");
+                            }
+                        });
                     }
                     Err(e) => tracing::error!("supervisor auto-start failed: {e}"),
                 }

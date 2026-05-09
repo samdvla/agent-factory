@@ -11,6 +11,7 @@ pub struct AgentSpec {
     pub role: String,
     pub program: String,
     pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
 }
 
 pub struct SupervisorHandle {
@@ -47,7 +48,8 @@ pub async fn start(
                 }
 
                 let args_str: Vec<&str> = spec.args.iter().map(|s| s.as_str()).collect();
-                let worker = match Worker::spawn(&spec.program, &args_str).await {
+                let env_str: Vec<(&str, &str)> = spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                let worker = match Worker::spawn(&spec.program, &args_str, &env_str).await {
                     Ok(w) => {
                         bus.send(SupervisorEvent::AgentStarted {
                             role: spec.role.clone(),
