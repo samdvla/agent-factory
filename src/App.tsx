@@ -1,43 +1,37 @@
-import { useState } from "react";
-import ControlBar from "./components/ControlBar";
-import SettingsPanel from "./components/SettingsPanel";
-import LogsView from "./components/LogsView";
-import "./App.css";
+import { useEffect, useState } from "react";
+import ThreeFactoryFloor from "./factory/three/ThreeFactoryFloor";
+import TopBar from "./factory/ui/TopBar";
+import Ticker from "./factory/ui/Ticker";
+import SideDrawer from "./factory/ui/SideDrawer";
+import AlertTray from "./factory/ui/AlertTray";
+import GateModal from "./factory/ui/GateModal";
+import OnboardingWizard from "./factory/ui/OnboardingWizard";
+import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
+import { api } from "./api";
 import "./factory/ui/factory-floor.css";
+import "./App.css";
 
 export default function App() {
-  const [tab, setTab] = useState<"logs" | "settings">("logs");
+  useSupervisorEventsToStore();
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [alertTrayOpen, setAlertTrayOpen] = useState(false);
+
+  // Open onboarding on cold start if no Anthropic key set
+  useEffect(() => {
+    api.getSecret("anthropic_api_key").then((v) => {
+      if (!v) setWizardOpen(true);
+    });
+  }, []);
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      height: "100vh",
-      fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
-      color: "#e6e6e6",
-      background: "#0d0f12",
-    }}>
-      <ControlBar />
-      <div style={{ display: "flex", gap: 4, padding: "8px 16px", background: "#15181d" }}>
-        <button onClick={() => setTab("logs")}
-                style={tabStyle(tab === "logs")}>Logs</button>
-        <button onClick={() => setTab("settings")}
-                style={tabStyle(tab === "settings")}>Settings</button>
-      </div>
-      <div style={{ flex: 1, overflow: "auto" }}>
-        {tab === "logs" ? <LogsView /> : <SettingsPanel />}
-      </div>
+    <div className="app">
+      <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
+      <ThreeFactoryFloor />
+      <Ticker />
+      <SideDrawer />
+      <AlertTray open={alertTrayOpen} onClose={() => setAlertTrayOpen(false)} />
+      <GateModal />
+      <OnboardingWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
-}
-
-function tabStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: "6px 12px",
-    background: active ? "#2a3038" : "transparent",
-    color: active ? "#fff" : "#9aa0a8",
-    border: "none",
-    borderRadius: 4,
-    cursor: "pointer",
-  };
 }

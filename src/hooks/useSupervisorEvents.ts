@@ -19,9 +19,3 @@ export function useSupervisorEventsToStore() {
     };
   }, []);
 }
-
-// Backwards compat stub for existing code (e.g., LogsView from P0).
-// LogsView will be removed in T11, but keeping this stub allows the build to pass.
-export function useSupervisorEvents(_maxRows?: number) {
-  return [] as { ts: number; evt: SupervisorEvent }[];
-}
