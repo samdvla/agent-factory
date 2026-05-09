@@ -993,3 +993,149 @@ input, textarea { font: inherit; color: inherit; }
   color: var(--ink-2);
   font-family: var(--font-mono);
 }
+
+/* ============== Onboarding wizard ============== */
+
+.wiz-back {
+  position: fixed; inset: 0;
+  z-index: 70;
+  background: rgba(7, 9, 12, 0.65);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wizard {
+  width: 560px;
+  max-width: 92vw;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.wiz-rail {
+  display: flex;
+  gap: 6px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-0);
+}
+
+.wiz-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wiz-step .bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+
+.wiz-step.on .bar { background: var(--accent); }
+.wiz-step.done .bar { background: var(--accent-ok); }
+
+.wiz-step .lb {
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+
+.wiz-step.on .lb, .wiz-step.done .lb { color: var(--ink-1); }
+
+.wiz-body {
+  padding: 22px 24px;
+  min-height: 240px;
+}
+
+.wiz-body h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+}
+
+.wiz-body .sub {
+  color: var(--ink-2);
+  font-size: 13px;
+  margin-bottom: 18px;
+  line-height: 1.55;
+}
+
+.wiz-body label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin: 14px 0 6px;
+  font-family: var(--font-mono);
+}
+
+.wiz-body input[type=text], .wiz-body input[type=password] {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-0);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  color: var(--ink-0);
+  font-size: 13px;
+  padding: 9px 11px;
+  outline: none;
+}
+
+.wiz-body input:focus { border-color: var(--accent); }
+
+.wiz-body .helper {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 6px;
+}
+
+.wiz-body .ck {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--ink-1);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-0);
+  margin-top: 8px;
+}
+
+.wiz-body .ck.ok {
+  border-color: rgba(58, 106, 82, 0.6);
+  color: #aae3c5;
+  background: rgba(14, 26, 20, 0.6);
+}
+
+.wiz-f {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-0);
+}
+
+.wiz-f .lh {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+}
+
+.wiz-f .rh {
+  display: flex;
+  gap: 8px;
+}
