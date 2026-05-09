@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeCorridors } from "../layout";
+import { computeDoors } from "../layout";
 import type { Room } from "../../state/types";
 
 const FOUNDING_ROOMS: Room[] = [
@@ -59,5 +60,31 @@ describe("computeCorridors", () => {
     expect(row01).toBeDefined();
     expect(row01!.x0).toBeCloseTo(0, 5);
     expect(row01!.x1).toBeCloseTo(20, 5);
+  });
+});
+
+describe("computeDoors", () => {
+  it("never puts a door on the north face", () => {
+    const doors = computeDoors(FOUNDING_ROOMS);
+    for (const [, faces] of doors) {
+      expect(faces.north).toBe(false);
+    }
+  });
+
+  it("col 0 rooms have an east door (corridor at gap 6..7)", () => {
+    const doors = computeDoors(FOUNDING_ROOMS);
+    expect(doors.get("strategy")?.east).toBe(true);
+    expect(doors.get("listing")?.east).toBe(true);
+  });
+
+  it("col 2 rooms have a west door (corridor at gap 13..14)", () => {
+    const doors = computeDoors(FOUNDING_ROOMS);
+    expect(doors.get("design")?.west).toBe(true);
+    expect(doors.get("finance")?.west).toBe(true);
+  });
+
+  it("row 0 rooms have a south door (corridor at gap 6..7)", () => {
+    const doors = computeDoors(FOUNDING_ROOMS);
+    expect(doors.get("research")?.south).toBe(true);
   });
 });

@@ -64,3 +64,23 @@ export function computeCorridors(rooms: Room[]): Strip[] {
 
   return strips;
 }
+
+export type DoorSet = {
+  north: boolean;   // always false (title wall)
+  east: boolean;
+  south: boolean;
+  west: boolean;
+};
+
+export function computeDoors(rooms: Room[]): Map<string, DoorSet> {
+  const out = new Map<string, DoorSet>();
+  for (const r of rooms) {
+    out.set(r.id, {
+      north: false,
+      east:  rooms.some((o) => o.col > r.col),
+      west:  rooms.some((o) => o.col < r.col),
+      south: rooms.some((o) => o.row > r.row),
+    });
+  }
+  return out;
+}
