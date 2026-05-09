@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import { AgentEntry, AgentVisualState, AlertItem, GateRequest, TickerEntry } from "./types";
+import {
+  AgentEntry,
+  AgentVisualState,
+  AlertItem,
+  GateRequest,
+  Handoff,
+  TickerEntry,
+} from "./types";
 import { INITIAL_AGENTS } from "./fixtures";
 
 export type FactoryStore = {
@@ -13,6 +20,18 @@ export type FactoryStore = {
   allStop: boolean;
   budgetTodayUsd: number;
   budgetCapUsd: number;
+  handoffs: Handoff[];
+  lastActivityAt: number;
+  agentTravel: Record<
+    string,
+    {
+      roomId: string;
+      stationIdx: number;
+      waypoints?: Array<{ x: number; y: number }>;
+      startedAt?: number;
+      durationPerSegmentMs?: number;
+    } | undefined
+  >;
 
   setAgentState: (role: string, state: AgentVisualState) => void;
   setAgentJob: (role: string, jobId: number | null) => void;
@@ -26,6 +45,21 @@ export type FactoryStore = {
   setSandbox: (v: boolean) => void;
   setAllStop: (v: boolean) => void;
   setBudget: (usd: number) => void;
+  pushHandoff: (h: Handoff) => void;
+  expireHandoffs: (now: number) => void;
+  bumpActivity: () => void;
+  setAgentTravel: (
+    roleId: string,
+    target:
+      | {
+          roomId: string;
+          stationIdx: number;
+          waypoints?: Array<{ x: number; y: number }>;
+          startedAt?: number;
+          durationPerSegmentMs?: number;
+        }
+      | null,
+  ) => void;
 };
 
 export const useFactoryStore = create<FactoryStore>((set) => ({
@@ -39,9 +73,13 @@ export const useFactoryStore = create<FactoryStore>((set) => ({
   allStop: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
+  handoffs: [],
+  lastActivityAt: 0,
+  agentTravel: {},
 
   setAgentState: (role, state) => set((s) => ({
     agents: { ...s.agents, [role]: { ...s.agents[role], state } },
+    lastActivityAt: Date.now(),
   })),
   setAgentJob: (role, jobId) => set((s) => ({
     agents: { ...s.agents, [role]: { ...s.agents[role], currentJobId: jobId } },
@@ -55,6 +93,7 @@ export const useFactoryStore = create<FactoryStore>((set) => ({
       walkTarget: target ?? undefined,
       state: target ? "walking" : "idle",
     }},
+    lastActivityAt: Date.now(),
   })),
   pushTicker: (entry) => set((s) => ({ ticker: [entry, ...s.ticker].slice(0, 200) })),
   pushAlert: (a) => set((s) => ({ alerts: [a, ...s.alerts].slice(0, 50) })),
@@ -64,4 +103,19 @@ export const useFactoryStore = create<FactoryStore>((set) => ({
   setSandbox: (v) => set({ sandbox: v }),
   setAllStop: (v) => set({ allStop: v }),
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
+  pushHandoff: (h) => set((s) => ({
+    handoffs: [...s.handoffs, h],
+    lastActivityAt: Date.now(),
+  })),
+  expireHandoffs: (now) => set((s) => {
+    const live = s.handoffs.filter((h) => now - h.startedAt < h.durationMs + 200);
+    return live.length === s.handoffs.length ? s : { handoffs: live };
+  }),
+  bumpActivity: () => set({ lastActivityAt: Date.now() }),
+  setAgentTravel: (roleId, target) => set((s) => {
+    const next = { ...s.agentTravel };
+    if (target) next[roleId] = target;
+    else delete next[roleId];
+    return { agentTravel: next, lastActivityAt: Date.now() };
+  }),
 }));

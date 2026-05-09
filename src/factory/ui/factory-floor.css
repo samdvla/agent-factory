@@ -945,6 +945,63 @@ input, textarea { font: inherit; color: inherit; }
 }
 #avatar-layer > * { pointer-events: auto; }
 
+/* Zoom controls — floating bottom-right of the stage */
+.zoom-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: var(--shadow);
+  user-select: none;
+}
+.zoom-btn,
+.zoom-readout {
+  appearance: none;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  width: 36px;
+  height: 30px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.zoom-btn:hover,
+.zoom-readout:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  color: var(--ink-0);
+}
+.zoom-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.zoom-readout {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+/* Avatar anchors hold the projected screen position. The transition is on
+   left/top (set inline) so they smoothly walk between stations. */
+.avatar-anchor {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55));
+}
+.avatar-anchor.is-moving {
+  z-index: 3; /* lift the walker over still co-workers */
+}
+
 /* ============== Avatar figure styles ============== */
 .avatar {
   display: inline-block;
@@ -952,19 +1009,532 @@ input, textarea { font: inherit; color: inherit; }
   pointer-events: auto;
   position: relative;
 }
+.avatar-paused   { opacity: 0.5; }
+.avatar-crashed  { filter: hue-rotate(330deg) saturate(1.4); animation: avatar-shake 0.4s ease-in-out 3; }
+.avatar-killed   { display: none; }
+
+/* Subtle living motion on every state */
+.avatar-figure {
+  display: block;
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+.avatar-idle    .avatar-figure { animation: avatar-breathe 4.2s ease-in-out infinite; }
+.avatar-awaiting .avatar-figure { animation: avatar-breathe 2.4s ease-in-out infinite; }
+.avatar-paused  .avatar-figure { animation: avatar-breathe 6s ease-in-out infinite; }
+.avatar-working .avatar-figure { animation: avatar-typing 0.42s ease-in-out infinite alternate; }
+.avatar-walking .avatar-figure { animation: avatar-walk 0.6s ease-in-out infinite; }
+
+@keyframes avatar-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50%      { transform: translateY(-1px) scale(1.015); }
+}
+@keyframes avatar-typing {
+  0%   { transform: translateY(0) rotate(-0.4deg); }
+  100% { transform: translateY(-1.5px) rotate(0.4deg); }
+}
+@keyframes avatar-walk {
+  0%, 100% { transform: translateY(0) rotate(-1.2deg); }
+  50%      { transform: translateY(-2.5px) rotate(1.2deg); }
+}
+@keyframes avatar-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+
+/* Working FX — keeps a fixed 32×44 box anchored to the avatar's
+   bottom-center; an inline transform: scale(sizeScale) on the wrapper
+   scales every child uniformly so badges grow with zoom. */
+.avatar-fx {
+  position: absolute;
+  pointer-events: none;
+  width: 32px;
+  height: 44px;
+  bottom: 0;
+  left: 50%;
+}
+/* Per-role work FX panel. Hidden by default; each role's working state
+   reveals a small badge on the side of the avatar that mimics what the
+   agent actually does. */
+.avatar-fx .fx {
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 38px;
+  height: 28px;
+  margin-left: -56px;
+  border-radius: 3px;
+  background: rgba(7, 9, 12, 0.78);
+  border: 1px solid var(--line-2);
+  box-shadow:
+    0 6px 16px rgba(0,0,0,0.45),
+    0 0 14px rgba(0,0,0,0.55);
+  opacity: 0;
+  transform: translateY(4px) scale(0.9);
+  transition: opacity 0.25s, transform 0.25s;
+  overflow: hidden;
+  pointer-events: none;
+}
+.avatar-working .avatar-fx .fx {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* Research — Iris scraping bestsellers, charts climbing */
+.fx-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 4px 3px;
+  border-color: rgba(95, 212, 240, 0.35);
+}
+.fx-chart .bar {
+  flex: 1;
+  background: linear-gradient(180deg, #5fd4f0, #2a7c92);
+  border-radius: 0.5px;
+  height: 30%;
+  transform-origin: 50% 100%;
+}
+.avatar-working .fx-chart .bar { animation: chart-bar 1.6s ease-in-out infinite; }
+.avatar-working .fx-chart .b1 { animation-delay: 0s; }
+.avatar-working .fx-chart .b2 { animation-delay: 0.12s; }
+.avatar-working .fx-chart .b3 { animation-delay: 0.24s; }
+.avatar-working .fx-chart .b4 { animation-delay: 0.36s; }
+@keyframes chart-bar {
+  0%, 100% { height: 25%; opacity: 0.7; }
+  50%      { height: 92%; opacity: 1; }
+}
+
+/* Designer — Mara generating mockups, color swatches popping */
+.fx-swatch {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-color: rgba(255, 107, 157, 0.35);
+}
+.fx-swatch .sw {
+  width: 9px; height: 14px;
+  border-radius: 1px;
+  background: #ff6b9d;
+  box-shadow: 0 0 4px rgba(255, 107, 157, 0.5);
+}
+.fx-swatch .s1 { background: #ff6b9d; }
+.fx-swatch .s2 { background: #f5a623; }
+.fx-swatch .s3 { background: #5fd4f0; }
+.avatar-working .fx-swatch .sw { animation: swatch-pop 1.4s ease-in-out infinite; }
+.avatar-working .fx-swatch .s2 { animation-delay: 0.18s; }
+.avatar-working .fx-swatch .s3 { animation-delay: 0.36s; }
+@keyframes swatch-pop {
+  0%, 70%, 100% { transform: translateY(0) scale(1); opacity: 0.85; }
+  35% { transform: translateY(-3px) scale(1.18); opacity: 1; }
+}
+
+/* Listing copywriter — Theo writing tags */
+.fx-tags {
+  position: absolute;
+  display: block;
+  padding: 2px 3px;
+  border-color: rgba(107, 217, 104, 0.35);
+}
+.fx-tags .tag {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #c4ffba;
+  background: rgba(107, 217, 104, 0.20);
+  border: 1px solid rgba(107, 217, 104, 0.5);
+  padding: 0.5px 2px;
+  border-radius: 4px;
+  font-style: normal;
+  white-space: nowrap;
+  opacity: 0;
+}
+.fx-tags .t1 { top: 3px;  left: 3px; }
+.fx-tags .t2 { top: 11px; left: 4px; }
+.fx-tags .t3 { top: 19px; left: 6px; }
+.avatar-working .fx-tags .tag { animation: tag-in 2.4s ease-in-out infinite; }
+.avatar-working .fx-tags .t2 { animation-delay: 0.4s; }
+.avatar-working .fx-tags .t3 { animation-delay: 0.8s; }
+@keyframes tag-in {
+  0%, 80%, 100% { opacity: 0; transform: translateX(-6px); }
+  20%, 60%      { opacity: 1; transform: translateX(0); }
+}
+
+/* Publisher — Avery uploading to Etsy */
+.fx-upload {
+  display: block;
+  padding: 8px 5px;
+  border-color: rgba(107, 217, 104, 0.35);
+}
+.fx-upload .upbar {
+  display: block;
+  height: 4px;
+  background: rgba(107, 217, 104, 0.18);
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+.fx-upload .upbar::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #6bd968, #c4d943);
+  width: 0%;
+  animation: upload-fill 2.2s ease-in-out infinite;
+  border-radius: 2px;
+}
+.fx-upload .upcheck {
+  display: block;
+  margin: 4px auto 0;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: rgba(94, 208, 168, 0.0);
+  position: relative;
+  animation: upload-check 2.2s ease-in-out infinite;
+}
+.fx-upload .upcheck::before {
+  content: "";
+  position: absolute;
+  left: 2px; top: 4px;
+  width: 3px; height: 1.6px;
+  background: #5ed0a8;
+  transform: rotate(45deg);
+  transform-origin: 0 50%;
+  opacity: 0;
+}
+.fx-upload .upcheck::after {
+  content: "";
+  position: absolute;
+  left: 4px; top: 5px;
+  width: 5.5px; height: 1.6px;
+  background: #5ed0a8;
+  transform: rotate(-50deg);
+  transform-origin: 0 50%;
+  opacity: 0;
+}
+.avatar-working .fx-upload .upcheck::before,
+.avatar-working .fx-upload .upcheck::after {
+  animation: upload-check-strokes 2.2s ease-in-out infinite;
+}
+@keyframes upload-fill {
+  0%   { width: 0%; }
+  70%  { width: 100%; }
+  85%  { width: 100%; }
+  100% { width: 0%; }
+}
+@keyframes upload-check {
+  0%, 70% { background: rgba(94, 208, 168, 0); transform: scale(0.6); }
+  85%     { background: rgba(94, 208, 168, 0.25); transform: scale(1.1); }
+  100%    { background: rgba(94, 208, 168, 0); transform: scale(1); }
+}
+@keyframes upload-check-strokes {
+  0%, 75% { opacity: 0; }
+  85%, 95% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Customer Service — Lina chatting with buyers */
+.fx-chat {
+  display: block;
+  padding: 4px;
+  border-color: rgba(106, 169, 255, 0.35);
+}
+.fx-chat .bub {
+  position: absolute;
+  width: 14px;
+  height: 8px;
+  border-radius: 4px 4px 4px 1px;
+  opacity: 0;
+}
+.fx-chat .buyer {
+  background: rgba(255,255,255,0.85);
+  left: 4px;
+  top: 5px;
+  border-radius: 4px 4px 1px 4px;
+}
+.fx-chat .agent {
+  background: #6aa9ff;
+  right: 4px;
+  bottom: 5px;
+}
+.avatar-working .fx-chat .buyer { animation: chat-buyer 2.4s ease-in-out infinite; }
+.avatar-working .fx-chat .agent { animation: chat-agent 2.4s ease-in-out infinite; }
+@keyframes chat-buyer {
+  0%, 100% { opacity: 0; transform: translateY(-4px); }
+  15%, 45% { opacity: 1; transform: translateY(0); }
+}
+@keyframes chat-agent {
+  0%, 50% { opacity: 0; transform: translateY(4px); }
+  60%, 95% { opacity: 1; transform: translateY(0); }
+}
+
+/* CFO — Roman reconciling cash flow */
+.fx-cash {
+  display: block;
+  padding: 4px;
+  border-color: rgba(196, 217, 67, 0.35);
+}
+.fx-cash .coin {
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #ffd166, #c4d943);
+  box-shadow: inset 0 -1px 0 rgba(0,0,0,0.25), 0 0 4px rgba(196,217,67,0.6);
+  opacity: 0;
+}
+.fx-cash .c1 { left: 4px;  bottom: 4px; }
+.fx-cash .c2 { left: 11px; bottom: 4px; }
+.fx-cash .c3 { left: 18px; bottom: 4px; }
+.fx-cash .dollar {
+  position: absolute;
+  right: 5px;
+  top: 4px;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c4d943;
+  text-shadow: 0 0 6px rgba(196,217,67,0.6);
+  opacity: 0;
+}
+.avatar-working .fx-cash .coin { animation: coin-stack 2s ease-in-out infinite; }
+.avatar-working .fx-cash .c2 { animation-delay: 0.18s; }
+.avatar-working .fx-cash .c3 { animation-delay: 0.36s; }
+.avatar-working .fx-cash .dollar { animation: dollar-flash 2s ease-in-out infinite 0.6s; }
+@keyframes coin-stack {
+  0%, 100% { opacity: 0; transform: translateY(-8px); }
+  35%, 75% { opacity: 1; transform: translateY(0); }
+}
+@keyframes dollar-flash {
+  0%, 100% { opacity: 0; transform: scale(0.7); }
+  50%      { opacity: 1; transform: scale(1.15); }
+}
+
+/* Self-Improvement Lab — Sable analyzing outcomes */
+.fx-spark {
+  display: block;
+  padding: 4px;
+  border-color: rgba(179, 147, 245, 0.4);
+}
+.fx-spark .core {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 6px; height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #b393f5;
+  box-shadow: 0 0 10px #b393f5;
+  animation: spark-core 1.6s ease-in-out infinite;
+}
+.fx-spark .orbit {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 24px; height: 24px;
+  margin: -12px 0 0 -12px;
+  border: 1px dashed rgba(179, 147, 245, 0.55);
+  border-radius: 50%;
+  animation: spark-orbit 4s linear infinite;
+}
+.fx-spark .orbit::after {
+  content: "";
+  position: absolute;
+  top: -2px; left: 50%;
+  width: 4px; height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: #ff6b9d;
+  box-shadow: 0 0 6px #ff6b9d;
+}
+.fx-spark .o2 {
+  width: 16px; height: 16px;
+  margin: -8px 0 0 -8px;
+  animation: spark-orbit 2.6s linear infinite reverse;
+  border-color: rgba(95, 212, 240, 0.5);
+}
+.fx-spark .o2::after { background: #5fd4f0; box-shadow: 0 0 6px #5fd4f0; }
+@keyframes spark-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes spark-core {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.4); }
+}
+
+/* Orchestrator — boss running the kanban board */
+.fx-board {
+  display: block;
+  padding: 5px;
+  border-color: rgba(245, 166, 35, 0.4);
+}
+.fx-board .row {
+  position: absolute;
+  left: 5px;
+  height: 3px;
+  border-radius: 1px;
+  background: rgba(245, 166, 35, 0.5);
+}
+.fx-board .r1 { top: 5px;  width: 22px; }
+.fx-board .r2 { top: 11px; width: 18px; }
+.fx-board .r3 { top: 17px; width: 24px; }
+.fx-board .check {
+  position: absolute;
+  right: 4px; top: 5px;
+  width: 6px; height: 6px;
+  border-right: 1.6px solid #5ed0a8;
+  border-bottom: 1.6px solid #5ed0a8;
+  transform: rotate(45deg);
+  opacity: 0;
+}
+.avatar-working .fx-board .row { animation: row-fill 2.1s ease-in-out infinite; }
+.avatar-working .fx-board .r2 { animation-delay: 0.25s; }
+.avatar-working .fx-board .r3 { animation-delay: 0.5s; }
+.avatar-working .fx-board .check { animation: row-check 2.1s ease-in-out infinite 0.8s; }
+@keyframes row-fill {
+  0%, 100% { background: rgba(245, 166, 35, 0.2); }
+  50%      { background: rgba(245, 166, 35, 0.85); }
+}
+@keyframes row-check {
+  0%, 70% { opacity: 0; transform: rotate(45deg) scale(0.5); }
+  85%     { opacity: 1; transform: rotate(45deg) scale(1.2); }
+  100%    { opacity: 0; transform: rotate(45deg) scale(1); }
+}
+
+.avatar-fx .fx-paper { display: none; }
+
+.avatar-fx .glow {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 60px;
+  height: 16px;
+  margin-left: -30px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center,
+    var(--role-color, #5fd4f0) 0%,
+    transparent 70%);
+  opacity: 0;
+  filter: blur(2px);
+}
+.avatar-working .avatar-fx .glow {
+  animation: work-glow 1.6s ease-in-out infinite;
+}
+.avatar-walking .avatar-fx .glow {
+  opacity: 0.45;
+}
+@keyframes work-glow {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50%      { opacity: 0.65; transform: scale(1.15); }
+}
+
+/* Status glyph pulses & ring. Position + transform are set inline in
+   Avatar.tsx so they can scale with sizeScale; CSS only handles the
+   visual chrome here. */
 .avatar-glyph {
   position: absolute;
-  top: -12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  padding: 1px 4px;
   left: 50%;
-  transform: translateX(-50%);
-  font-size: 11px;
-  color: #aeb9c7;
-  text-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  border-radius: 8px;
+  background: rgba(7, 9, 12, 0.85);
+  border: 1px solid var(--line-2);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
   white-space: nowrap;
 }
-.avatar-paused   { opacity: 0.5; }
-.avatar-crashed  { filter: hue-rotate(330deg) saturate(1.4); }
-.avatar-killed   { display: none; }
+.glyph-working   { color: var(--accent-ok); border-color: rgba(94,208,168,0.45); animation: glyph-pulse 1.1s ease-in-out infinite; }
+.glyph-walking   { color: var(--accent);    border-color: rgba(95,212,240,0.45); }
+.glyph-awaiting  { color: var(--accent-warm); border-color: rgba(245,166,35,0.5); animation: glyph-pulse 1.6s ease-in-out infinite; }
+.glyph-crashed   { color: var(--accent-bad); border-color: rgba(239,79,90,0.5);  }
+.glyph-paused    { color: var(--ink-2); }
+.glyph-idle      { color: var(--ink-2); opacity: 0.55; }
+.glyph-killed    { display: none; }
+.glyph-quarantined { color: var(--accent-warm); border-color: rgba(245,166,35,0.4); }
+
+@keyframes glyph-pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(94,208,168,0); }
+  50%      { box-shadow: 0 0 10px rgba(94,208,168,0.6); }
+}
+
+/* Room state — accent the room when an agent in it is busy */
+.iso-room { transition: filter 0.6s ease; }
+.iso-room.is-working { filter: brightness(1.18) saturate(1.25); }
+.iso-room.is-walking { filter: brightness(1.08); }
+.iso-room.is-crashed { filter: hue-rotate(330deg) saturate(1.4) brightness(0.85); }
+.iso-room.is-working .room-glow {
+  opacity: 1 !important;
+  animation: room-glow-pulse 2.4s ease-in-out infinite;
+}
+@keyframes room-glow-pulse {
+  0%, 100% { fill-opacity: 0.06; }
+  50%      { fill-opacity: 0.18; }
+}
+
+/* Handoff layer — flying doc sprites between rooms */
+#handoff-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 4;
+}
+.handoff-doc {
+  position: absolute;
+  width: 24px;
+  height: 18px;
+  margin-left: -12px;
+  margin-top: -9px;
+  background: linear-gradient(180deg, #f4f7fb 0%, #cdd5df 100%);
+  border-radius: 2px;
+  box-shadow:
+    0 6px 18px rgba(0,0,0,0.45),
+    0 0 0 1px rgba(0,0,0,0.4),
+    0 0 14px var(--doc-color, #5fd4f0);
+  transform-origin: 50% 50%;
+  will-change: transform, left, top;
+}
+.handoff-doc::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: repeating-linear-gradient(
+    180deg,
+    var(--doc-color, #5fd4f0) 0 1px,
+    transparent 1px 4px
+  );
+  opacity: 0.55;
+  border-radius: 1px;
+}
+.handoff-doc::after {
+  content: "";
+  position: absolute;
+  top: -3px; right: -3px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--doc-color, #5fd4f0);
+  box-shadow: 0 0 10px var(--doc-color, #5fd4f0);
+}
+.handoff-trail {
+  position: absolute;
+  width: 4px; height: 4px;
+  margin-left: -2px; margin-top: -2px;
+  border-radius: 50%;
+  background: var(--doc-color, #5fd4f0);
+  opacity: 0.7;
+  animation: handoff-trail-fade 0.8s ease-out forwards;
+}
+@keyframes handoff-trail-fade {
+  0% { opacity: 0.8; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.3); }
+}
 
 /* ============== Drawer tabs (added for SideDrawer.tsx) ============== */
 

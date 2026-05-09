@@ -7,12 +7,17 @@ import AlertTray from "./factory/ui/AlertTray";
 import GateModal from "./factory/ui/GateModal";
 import OnboardingWizard from "./factory/ui/OnboardingWizard";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
+import { useDemoFloor } from "./hooks/useDemoFloor";
+import { useFactoryStore } from "./factory/state/factoryStore";
 import { api } from "./api";
 import "./factory/ui/factory-floor.css";
 import "./App.css";
 
 export default function App() {
   useSupervisorEventsToStore();
+  const sandbox = useFactoryStore((s) => s.sandbox);
+  useDemoFloor(sandbox);
+
   const [wizardOpen, setWizardOpen] = useState(false);
   const [alertTrayOpen, setAlertTrayOpen] = useState(false);
 

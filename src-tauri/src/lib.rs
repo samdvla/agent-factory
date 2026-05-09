@@ -43,14 +43,35 @@ pub fn run() {
 
             let bus = events::EventBus::new();
             let state = Arc::new(commands::AppState {
-                pool,
+                pool: pool.clone(),
                 bus: bus.clone(),
                 project_id,
                 supervisor_handle: tokio::sync::Mutex::new(None),
             });
-            app.manage(state);
 
-            commands::forward_events_to_window(app.handle().clone(), bus);
+            commands::forward_events_to_window(app.handle().clone(), bus.clone());
+
+            // Auto-start the supervisor so the floor is live the moment the
+            // window paints. Failures are non-fatal — the user can still hit
+            // Start in the top bar to retry.
+            let auto_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                let agents = vec![supervisor::AgentSpec {
+                    role: "hello".into(),
+                    program: "python3.11".into(),
+                    args: vec!["-m".into(), "hello".into()],
+                }];
+                match supervisor::start(pool, bus, agents).await {
+                    Ok(handle) => {
+                        let mut guard = auto_state.supervisor_handle.lock().await;
+                        *guard = Some(handle);
+                        tracing::info!("supervisor auto-started");
+                    }
+                    Err(e) => tracing::error!("supervisor auto-start failed: {e}"),
+                }
+            });
+
+            app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

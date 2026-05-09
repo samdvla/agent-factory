@@ -31,3 +31,13 @@ export type GateRequest = {
   agent: string; actionClass: string; title: string;
   rationale: string; payload: Record<string, unknown>;
 };
+
+export type Handoff = {
+  id: string;
+  fromRoom: string;
+  toRoom: string;
+  color: string;
+  label: string;
+  startedAt: number;
+  durationMs: number;
+};
