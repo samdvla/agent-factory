@@ -944,3 +944,52 @@ input, textarea { font: inherit; color: inherit; }
   pointer-events: none;
 }
 #avatar-layer > * { pointer-events: auto; }
+
+/* ============== Drawer tabs (added for SideDrawer.tsx) ============== */
+
+.drawer-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  flex: 0 0 auto;
+}
+.drawer-tab {
+  flex: 1;
+  padding: 9px 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.drawer-tab:hover { color: var(--ink-1); }
+.drawer-tab.is-active {
+  color: var(--role-color, var(--accent));
+  border-bottom-color: var(--role-color, var(--accent));
+}
+
+/* ============== Shared utility classes (added for panel components) ============== */
+
+.section-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  margin: 0 0 8px;
+}
+
+.empty-state {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-style: italic;
+}
+
+.token-spend {
+  font-size: 11px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+}
