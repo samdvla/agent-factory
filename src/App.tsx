@@ -26,7 +26,9 @@ export default function App() {
   return (
     <div className="app">
       <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
-      <ThreeFactoryFloor />
+      <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
+        <ThreeFactoryFloor />
+      </div>
       <Ticker />
       <SideDrawer />
       <AlertTray open={alertTrayOpen} onClose={() => setAlertTrayOpen(false)} />

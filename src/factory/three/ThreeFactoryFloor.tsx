@@ -39,7 +39,7 @@ function AvatarsLayer() {
 export default function ThreeFactoryFloor() {
   return (
     <Canvas
-      style={{ position: "absolute", inset: 0, background: "#0a0e14" }}
+      style={{ width: "100%", height: "100%", display: "block", background: "#0a0e14" }}
       shadows
       dpr={[1, 2]}
     >
@@ -51,11 +51,24 @@ export default function ThreeFactoryFloor() {
         castShadow
         shadow-mapSize={[2048, 2048]}
       />
+      {/* DEBUG: hot-pink cube at origin — confirms three.js/WebGL is working */}
+      <mesh position={[0, 1, 0]}>
+        <boxGeometry args={[2, 2, 2]} />
+        <meshStandardMaterial color="hotpink" />
+      </mesh>
+      <axesHelper args={[5]} />
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow position={[10, -0.01, 10]}>
         <planeGeometry args={[60, 60]} />
         <meshStandardMaterial color="#0a0e14" />
       </mesh>
-      <Suspense fallback={null}>
+      <Suspense
+        fallback={
+          <mesh position={[5, 0.5, 5]}>
+            <sphereGeometry args={[0.5]} />
+            <meshBasicMaterial color="cyan" wireframe />
+          </mesh>
+        }
+      >
         {Object.keys(ROOMS).map((id) => (
           <Room3D key={id} roomId={id} />
         ))}
