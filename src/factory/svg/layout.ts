@@ -167,3 +167,74 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
   }
   return best;
 }
+
+export type Waypoint = { x: number; y: number };
+
+function roomCenterPt(room: Room): Waypoint {
+  const cx = roomCellX(room.col);
+  const y0 = room.row * (ROOM_H + GAP);
+  const y1 = y0 + ROOM_H;
+  return { x: (cx.x0 + cx.x1) / 2, y: (y0 + y1) / 2 };
+}
+
+function doorWaypoint(room: Room, face: "east" | "south" | "west"): Waypoint {
+  const cx = roomCellX(room.col);
+  const y0 = room.row * (ROOM_H + GAP);
+  const y1 = y0 + ROOM_H;
+  const my = (y0 + y1) / 2;
+  const mx = (cx.x0 + cx.x1) / 2;
+  if (face === "east") return { x: cx.x1, y: my };
+  if (face === "west") return { x: cx.x0, y: my };
+  return { x: mx, y: y1 };
+}
+
+function corridorCenterX(c: number) {
+  return c * (ROOM_W + GAP) + ROOM_W + GAP / 2;
+}
+function corridorCenterY(r: number) {
+  return r * (ROOM_H + GAP) + ROOM_H + GAP / 2;
+}
+
+export function findPath(rooms: Room[], fromId: string, toId: string): Waypoint[] {
+  const from = rooms.find((r) => r.id === fromId);
+  const to = rooms.find((r) => r.id === toId);
+  if (!from || !to) return [];
+
+  if (from.id === to.id) return [roomCenterPt(from)];
+
+  const path: Waypoint[] = [];
+  const start = roomCenterPt(from);
+  const end = roomCenterPt(to);
+
+  let exit: Waypoint;
+  let entry: Waypoint;
+  if (to.col > from.col) {
+    exit = doorWaypoint(from, "east");
+    entry = doorWaypoint(to, "west");
+  } else if (to.col < from.col) {
+    exit = doorWaypoint(from, "west");
+    entry = doorWaypoint(to, "east");
+  } else {
+    exit = doorWaypoint(from, "south");
+    entry = doorWaypoint(to, to.row > from.row ? "west" : "east");
+  }
+
+  const exitCorridorY = corridorCenterY(Math.min(from.row, to.row));
+  const entryCorridorX =
+    to.col > from.col
+      ? corridorCenterX(to.col - 1)
+      : corridorCenterX(to.col);
+
+  path.push(start);
+  path.push(exit);
+  if (from.row !== to.row) {
+    path.push({ x: exit.x, y: exitCorridorY });
+    path.push({ x: entryCorridorX, y: exitCorridorY });
+    path.push({ x: entryCorridorX, y: entry.y });
+  } else {
+    path.push({ x: entry.x, y: exit.y });
+  }
+  path.push(entry);
+  path.push(end);
+  return path;
+}

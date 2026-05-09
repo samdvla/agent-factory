@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeCorridors } from "../layout";
 import { computeDoors } from "../layout";
 import { placeNewRoom } from "../layout";
+import { findPath } from "../layout";
 import type { Room, RoomKit } from "../../state/types";
 
 const FOUNDING_ROOMS: Room[] = [
@@ -126,5 +127,23 @@ describe("placeNewRoom", () => {
   it("never returns a position that an existing room occupies", () => {
     const pos = placeNewRoom(FOUNDING_ROOMS, "analyst");
     expect(FOUNDING_ROOMS.some((r) => r.col === pos.col && r.row === pos.row)).toBe(false);
+  });
+});
+
+describe("findPath", () => {
+  it("returns a path between two adjacent rooms", () => {
+    const path = findPath(FOUNDING_ROOMS, "strategy", "research");
+    expect(path.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns a path that crosses the central corridor for diagonally placed rooms", () => {
+    const path = findPath(FOUNDING_ROOMS, "strategy", "finance");
+    expect(path.length).toBeGreaterThan(2);
+    expect(path.some((p) => p.y >= 6 && p.y <= 7)).toBe(true);
+  });
+
+  it("returns empty when source or dest is unknown", () => {
+    expect(findPath(FOUNDING_ROOMS, "strategy", "nonexistent")).toEqual([]);
+    expect(findPath(FOUNDING_ROOMS, "nonexistent", "strategy")).toEqual([]);
   });
 });
