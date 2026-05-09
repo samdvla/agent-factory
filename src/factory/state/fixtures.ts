@@ -1,32 +1,44 @@
-import { Role, Room, AgentEntry } from "./types";
+import { Role, Room, AgentEntry, HireEvent, RoomKit, RoomTag } from "./types";
+import { kitFromTag } from "../svg/kit/recipes";
+
+function k(tag: RoomTag, accent: string, cap?: number): RoomKit {
+  return kitFromTag(tag, accent, cap);
+}
 
 export const ROLES: Record<string, Role> = {
   orchestrator: { id:"orchestrator", name:"Orchestrator", title:"Strategy Lead",
-    hex:"#f5a623", archetype:"authoritative", portrait:"O", room:"strategy" },
+    hex:"#f5a623", archetype:"authoritative", portrait:"O", room:"strategy", permanent:true },
   research: { id:"research", name:"Iris Vega", title:"Market Research Analyst",
-    hex:"#5fd4f0", archetype:"slim", portrait:"I", room:"research" },
+    hex:"#5fd4f0", archetype:"slim", portrait:"I", room:"research", permanent:true },
   designer: { id:"designer", name:"Mara Chen", title:"Designer",
-    hex:"#ff6b9d", archetype:"relaxed", portrait:"M", room:"design" },
+    hex:"#ff6b9d", archetype:"relaxed", portrait:"M", room:"design", permanent:true },
   listing: { id:"listing", name:"Theo Park", title:"Listing Copywriter",
-    hex:"#6bd968", archetype:"office", portrait:"T", room:"listing" },
+    hex:"#6bd968", archetype:"office", portrait:"T", room:"listing", permanent:true },
   publisher: { id:"publisher", name:"Avery Holt", title:"Publisher",
-    hex:"#6bd968", archetype:"office", portrait:"A", room:"listing" },
+    hex:"#6bd968", archetype:"office", portrait:"A", room:"listing", permanent:true },
   cs: { id:"cs", name:"Lina Okafor", title:"Customer Service",
-    hex:"#6aa9ff", archetype:"friendly", portrait:"L", room:"cs" },
+    hex:"#6aa9ff", archetype:"friendly", portrait:"L", room:"cs", permanent:true },
   cfo: { id:"cfo", name:"Roman Voss", title:"CFO",
-    hex:"#c4d943", archetype:"formal", portrait:"R", room:"finance" },
+    hex:"#c4d943", archetype:"formal", portrait:"R", room:"finance", permanent:true },
   si: { id:"si", name:"Sable Wynn", title:"Self-Improvement Lab",
-    hex:"#b393f5", archetype:"lab", portrait:"S", room:"silab" },
+    hex:"#b393f5", archetype:"lab", portrait:"S", room:"silab", permanent:true },
 };
 
 export const ROOMS: Record<string, Room> = {
-  strategy: { id:"strategy", name:"Strategy Room", occupant:"Orchestrator", col:0, row:0, kind:"bridge" },
-  research: { id:"research", name:"Research Lab", occupant:"Market Research", col:1, row:0, kind:"analyst" },
-  design: { id:"design", name:"Design Studio", occupant:"Designer", col:2, row:0, kind:"fab" },
-  listing: { id:"listing", name:"Listing Desk", occupant:"Copywriter & Publisher", col:0, row:1, kind:"dispatch" },
-  cs: { id:"cs", name:"CS Booth", occupant:"Customer Service", col:1, row:1, kind:"comms" },
-  finance: { id:"finance", name:"Finance Office", occupant:"CFO", col:2, row:1, kind:"control" },
-  silab: { id:"silab", name:"Self-Improvement Lab", occupant:"SI Agent", col:1, row:2, kind:"rd" },
+  strategy: { id:"strategy", name:"Strategy Room", occupant:"Orchestrator", col:0, row:0, kind:"bridge",
+    kit: k("bridge", "#f5a623", 1), occupants:["orchestrator"], createdAt:0 },
+  research: { id:"research", name:"Research Lab", occupant:"Market Research", col:1, row:0, kind:"analyst",
+    kit: k("analyst", "#5fd4f0", 2), occupants:["research"], createdAt:0 },
+  design: { id:"design", name:"Design Studio", occupant:"Designer", col:2, row:0, kind:"fab",
+    kit: k("creative", "#ff6b9d", 1), occupants:["designer"], createdAt:0 },
+  listing: { id:"listing", name:"Listing Desk", occupant:"Copywriter & Publisher", col:0, row:1, kind:"dispatch",
+    kit: k("copy", "#6bd968", 2), occupants:["listing","publisher"], createdAt:0 },
+  cs: { id:"cs", name:"CS Booth", occupant:"Customer Service", col:1, row:1, kind:"comms",
+    kit: k("comms", "#6aa9ff", 4), occupants:["cs"], createdAt:0 },
+  finance: { id:"finance", name:"Finance Office", occupant:"CFO", col:2, row:1, kind:"control",
+    kit: k("finance", "#c4d943", 1), occupants:["cfo"], createdAt:0 },
+  silab: { id:"silab", name:"Self-Improvement Lab", occupant:"SI Agent", col:1, row:2, kind:"rd",
+    kit: k("rd", "#b393f5", 1), occupants:["si"], createdAt:0 },
 };
 
 export const INITIAL_AGENTS: Record<string, AgentEntry> = {
@@ -40,8 +52,19 @@ export const INITIAL_AGENTS: Record<string, AgentEntry> = {
   si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Sonnet", tokensToday:0, currentJobId:null },
 };
 
-// P0 only ships the `hello` agent. Map it to one of the designed roles for visual purposes.
-// When P2 wires real agents, this mapping goes away.
-export const SUPERVISOR_ROLE_MAP: Record<string, string> = {
-  hello: "orchestrator",
-};
+export const SUPERVISOR_ROLE_MAP: Record<string, string> = { hello: "orchestrator" };
+
+export const FOUNDING_HIRE_EVENTS: HireEvent[] = Object.values(ROLES).map((role) => ({
+  id: `founding-${role.id}`,
+  ts: 0,
+  roleSpec: {
+    name: role.name,
+    title: role.title,
+    primaryTag: ROOMS[role.room].kit!.primaryTag,
+    archetype: role.archetype,
+    model: INITIAL_AGENTS[role.id].model,
+    accent: role.hex,
+    portrait: role.portrait,
+  },
+  justification: { reason: "founding", metric: "founding role" },
+}));
