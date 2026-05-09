@@ -300,7 +300,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
           set({ rooms: nr });
         }, 800);
       }
-    }, 600);
+    }, 900);
   },
 
   idleDissolveTick: (now, idleThresholdMs = 90_000) => {

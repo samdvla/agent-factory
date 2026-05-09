@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
-import { ROLES } from "../state/fixtures";
 import ChatPanel from "./ChatPanel";
 import LiveLog from "./LiveLog";
 import QueuePanel from "./QueuePanel";
@@ -18,9 +17,9 @@ export default function SideDrawer() {
 
   const close = () => useFactoryStore.getState().selectAgent(null);
 
-  if (!drawerOpen || !selectedAgentId || !agent) return null;
+  const role = useFactoryStore((s) => selectedAgentId ? s.roles[selectedAgentId] : undefined);
 
-  const role = ROLES[selectedAgentId];
+  if (!drawerOpen || !selectedAgentId || !agent) return null;
 
   return (
     <>

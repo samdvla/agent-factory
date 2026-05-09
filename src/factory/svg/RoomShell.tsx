@@ -24,6 +24,7 @@ export default function RoomShell({ roomId }: { roomId: string }) {
   if (!room) return null;
   const accent = room.kit?.accent ?? "#5fd4f0";
   const b = getRoomBounds(roomId);
+  if (!b) return null;
   const doors = computeDoors(Object.values(allRooms)).get(roomId) ?? { north: false, east: false, south: false, west: false };
 
   const gridLines: React.ReactNode[] = [];

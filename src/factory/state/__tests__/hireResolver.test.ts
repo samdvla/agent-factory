@@ -45,7 +45,7 @@ describe("hire resolver", () => {
     const tax = Object.values(useFactoryStore.getState().roles).find((r) => r.name === "Tax");
     expect(tax).toBeDefined();
     useFactoryStore.getState().dissolveAgent(tax!.id);
-    vi.advanceTimersByTime(700);
+    vi.advanceTimersByTime(1000);
     expect(useFactoryStore.getState().rooms[legalRoom.id]?.dissolving).toBe(true);
   });
 

@@ -115,8 +115,11 @@ function projectAt(
   const ease = t < 0.5
     ? 2 * t * t
     : 1 - Math.pow(-2 * t + 2, 2) / 2;
-  const fromW = iso(deskHotspot(h.fromRoom).x, deskHotspot(h.fromRoom).y);
-  const toW = iso(deskHotspot(h.toRoom).x, deskHotspot(h.toRoom).y);
+  const fromHotspot = deskHotspot(h.fromRoom);
+  const toHotspot = deskHotspot(h.toRoom);
+  if (!fromHotspot || !toHotspot) return null;
+  const fromW = iso(fromHotspot.x, fromHotspot.y);
+  const toW = iso(toHotspot.x, toHotspot.y);
   const ctm = svg.getScreenCTM();
   if (!ctm) return null;
   const fp = svg.createSVGPoint();

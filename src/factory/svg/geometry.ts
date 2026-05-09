@@ -17,17 +17,20 @@ export function roomOrigin(col: number, row: number) {
 
 export function getRoomBounds(roomId: string) {
   const room = useFactoryStore.getState().rooms[roomId];
+  if (!room) return null;
   const { wx, wy } = roomOrigin(room.col, room.row);
   return { x0: wx, y0: wy, x1: wx + ROOM_W, y1: wy + ROOM_H };
 }
 
 export function roomCenter(roomId: string) {
   const b = getRoomBounds(roomId);
+  if (!b) return null;
   return iso((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);
 }
 
 export function deskHotspot(roomId: string) {
   const b = getRoomBounds(roomId);
+  if (!b) return null;
   const cx = (b.x0 + b.x1) / 2;
   const cy = b.y0 + (ROOM_H * 0.55);
   return { x: cx, y: cy };
