@@ -29,14 +29,7 @@ export default function Room3D({ roomId }: { roomId: string }) {
         <meshBasicMaterial color={accent} transparent opacity={0.4} />
       </mesh>
       {/* Back walls (north + east, so camera sees inside) */}
-      <Suspense
-        fallback={
-          <mesh position={[ROOM_W / 2, 0.5, 0]}>
-            <boxGeometry args={[ROOM_W, 1, 0.1]} />
-            <meshBasicMaterial color="yellow" wireframe />
-          </mesh>
-        }
-      >
+      <Suspense fallback={null}>
         <FbxWall position={[ROOM_W / 2, 0, 0]} rotationY={0} length={ROOM_W} />
         <FbxWall position={[ROOM_W, 0, ROOM_H / 2]} rotationY={Math.PI / 2} length={ROOM_H} />
       </Suspense>
@@ -44,12 +37,7 @@ export default function Room3D({ roomId }: { roomId: string }) {
       {(PROP_LAYOUTS[room.kind] ?? []).map((p, i) => (
         <Suspense
           key={i}
-          fallback={
-            <mesh position={p.position}>
-              <boxGeometry args={[0.3, 0.3, 0.3]} />
-              <meshBasicMaterial color="orange" wireframe />
-            </mesh>
-          }
+          fallback={null}
         >
           <FbxProp
             url={p.url}

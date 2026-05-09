@@ -1,6 +1,7 @@
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrthographicCamera } from "@react-three/drei";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
+import * as THREE from "three";
 import { ROOMS, ROLES } from "../state/fixtures";
 import Room3D from "./Room3D";
 import Avatar3D from "./Avatar3D";
@@ -9,6 +10,16 @@ import { useFactoryStore } from "../state/factoryStore";
 const ROOM_W = 6;
 const ROOM_H = 6;
 const GAP = 1;
+
+function CameraRig({ target }: { target: [number, number, number] }) {
+  const { camera } = useThree();
+  useEffect(() => {
+    camera.position.set(target[0] + 20, 25, target[2] + 20);
+    camera.lookAt(new THREE.Vector3(...target));
+    if ((camera as any).updateProjectionMatrix) (camera as any).updateProjectionMatrix();
+  }, [camera, target]);
+  return null;
+}
 
 function AvatarsLayer() {
   const agents = useFactoryStore((s) => s.agents);
@@ -43,32 +54,21 @@ export default function ThreeFactoryFloor() {
       shadows
       dpr={[1, 2]}
     >
-      <OrthographicCamera makeDefault position={[20, 20, 20]} zoom={40} near={0.1} far={1000} />
-      <ambientLight intensity={0.4} />
+      <OrthographicCamera makeDefault zoom={32} near={0.1} far={1000} />
+      <CameraRig target={[10, 0, 7]} />
+      <ambientLight intensity={1.2} />
       <directionalLight
-        position={[10, 20, 5]}
-        intensity={1.0}
+        position={[20, 30, 15]}
+        intensity={2.0}
         castShadow
         shadow-mapSize={[2048, 2048]}
       />
-      {/* DEBUG: hot-pink cube at origin — confirms three.js/WebGL is working */}
-      <mesh position={[0, 1, 0]}>
-        <boxGeometry args={[2, 2, 2]} />
-        <meshStandardMaterial color="hotpink" />
-      </mesh>
-      <axesHelper args={[5]} />
+      <directionalLight position={[-10, 10, -5]} intensity={0.8} />
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow position={[10, -0.01, 10]}>
         <planeGeometry args={[60, 60]} />
         <meshStandardMaterial color="#0a0e14" />
       </mesh>
-      <Suspense
-        fallback={
-          <mesh position={[5, 0.5, 5]}>
-            <sphereGeometry args={[0.5]} />
-            <meshBasicMaterial color="cyan" wireframe />
-          </mesh>
-        }
-      >
+      <Suspense fallback={null}>
         {Object.keys(ROOMS).map((id) => (
           <Room3D key={id} roomId={id} />
         ))}
