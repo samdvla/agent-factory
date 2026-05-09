@@ -3,6 +3,7 @@ import ControlBar from "./components/ControlBar";
 import SettingsPanel from "./components/SettingsPanel";
 import LogsView from "./components/LogsView";
 import "./App.css";
+import "./factory/ui/factory-floor.css";
 
 export default function App() {
   const [tab, setTab] = useState<"logs" | "settings">("logs");
