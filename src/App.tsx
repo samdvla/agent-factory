@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ThreeFactoryFloor from "./factory/three/ThreeFactoryFloor";
+import SvgFactoryFloor from "./factory/svg/SvgFactoryFloor";
 import TopBar from "./factory/ui/TopBar";
 import Ticker from "./factory/ui/Ticker";
 import SideDrawer from "./factory/ui/SideDrawer";
@@ -27,7 +27,7 @@ export default function App() {
     <div className="app">
       <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
       <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
-        <ThreeFactoryFloor />
+        <SvgFactoryFloor />
       </div>
       <Ticker />
       <SideDrawer />

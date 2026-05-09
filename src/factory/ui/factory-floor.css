@@ -945,6 +945,27 @@ input, textarea { font: inherit; color: inherit; }
 }
 #avatar-layer > * { pointer-events: auto; }
 
+/* ============== Avatar figure styles ============== */
+.avatar {
+  display: inline-block;
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+}
+.avatar-glyph {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #aeb9c7;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+.avatar-paused   { opacity: 0.5; }
+.avatar-crashed  { filter: hue-rotate(330deg) saturate(1.4); }
+.avatar-killed   { display: none; }
+
 /* ============== Drawer tabs (added for SideDrawer.tsx) ============== */
 
 .drawer-tabs {
