@@ -1,24 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { useFactoryStore } from "../factory/state/factoryStore";
+import {
+  applySupervisorEvent,
+  SupervisorEvent,
+} from "../factory/state/eventReducer";
 
-export type SupervisorEvent = {
-  kind: string;
-  [k: string]: unknown;
-};
-
-export function useSupervisorEvents(maxRows = 500) {
-  const [events, setEvents] = useState<{ ts: number; evt: SupervisorEvent }[]>([]);
-
+export function useSupervisorEventsToStore() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     listen<SupervisorEvent>("supervisor.event", (e) => {
-      setEvents((prev) => {
-        const next = [...prev, { ts: Date.now(), evt: e.payload }];
-        return next.slice(-maxRows);
-      });
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [maxRows]);
+      applySupervisorEvent(useFactoryStore.getState(), e.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+}
 
-  return events;
+// Backwards compat stub for existing code (e.g., LogsView from P0).
+// LogsView will be removed in T11, but keeping this stub allows the build to pass.
+export function useSupervisorEvents(_maxRows?: number) {
+  return [] as { ts: number; evt: SupervisorEvent }[];
 }
