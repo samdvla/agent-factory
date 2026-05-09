@@ -1,4 +1,4 @@
-import { ROOMS } from "../state/fixtures";
+import { useFactoryStore } from "../state/factoryStore";
 
 export const TW = 64;
 export const TH = 32;
@@ -16,7 +16,7 @@ export function roomOrigin(col: number, row: number) {
 }
 
 export function getRoomBounds(roomId: string) {
-  const room = ROOMS[roomId];
+  const room = useFactoryStore.getState().rooms[roomId];
   const { wx, wy } = roomOrigin(room.col, room.row);
   return { x0: wx, y0: wy, x1: wx + ROOM_W, y1: wy + ROOM_H };
 }

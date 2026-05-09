@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useCallback } from "react";
-import { ROOMS } from "../state/fixtures";
+import { useFactoryStore } from "../state/factoryStore";
+import { Room } from "../state/types";
 import { GAP, ROOM_W, ROOM_H, WALL_H, iso } from "./geometry";
 import RoomShell from "./RoomShell";
 import AvatarLayer from "./AvatarLayer";
@@ -8,9 +9,9 @@ import Corridors from "./Corridors";
 
 type ViewBox = { minX: number; minY: number; w: number; h: number };
 
-function computeBaseViewBox(): ViewBox {
+function computeBaseViewBox(roomList: Room[]): ViewBox {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  Object.values(ROOMS).forEach((r) => {
+  roomList.forEach((r) => {
     const x0 = r.col * (ROOM_W + GAP);
     const y0 = r.row * (ROOM_H + GAP);
     const x1 = x0 + ROOM_W;
@@ -38,18 +39,19 @@ const ZOOM_STEP = 1.25;
 export default function SvgFactoryFloor() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const base = useMemo(computeBaseViewBox, []);
+  const rooms = useFactoryStore((s) => s.rooms);
+  const base = useMemo(() => computeBaseViewBox(Object.values(rooms)), [rooms]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const isDragging = useRef(false);
 
   const ordered = useMemo(
     () =>
-      Object.keys(ROOMS).sort((a, b) => {
-        const ra = ROOMS[a], rb = ROOMS[b];
+      Object.keys(rooms).sort((a, b) => {
+        const ra = rooms[a], rb = rooms[b];
         return ra.row + ra.col - (rb.row + rb.col);
       }),
-    [],
+    [rooms],
   );
 
   // Apply zoom + pan around the scene center
