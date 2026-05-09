@@ -218,11 +218,26 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       text: `hired ${roleSpec.name} · ${justification.metric}`,
     });
 
+    const isPermanent = justification.reason === "founding";
     setTimeout(() => {
       const live = get().agents[roleId];
-      if (live && live.state === "materializing") {
+      if (!live || live.state !== "materializing") return;
+      // Permanent (founding) roles: hand off to the founding loop (idle baseline).
+      // Specialists: enter a randomized working window so the user sees them
+      // earn their keep before idle-dissolve fires.
+      if (isPermanent) {
         get().setAgentState(roleId, "idle");
+        return;
       }
+      get().setAgentState(roleId, "working");
+      get().setAgentTask(roleId, `${justification.reason}: handling load`);
+      const workMs = 45_000 + Math.random() * 30_000; // 45–75s
+      setTimeout(() => {
+        const stillThere = get().agents[roleId];
+        if (stillThere && stillThere.state === "working") {
+          get().setAgentState(roleId, "idle");
+        }
+      }, workMs);
     }, 600);
   },
 
