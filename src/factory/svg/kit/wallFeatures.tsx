@@ -2,7 +2,7 @@ import React from "react";
 import { iso } from "../geometry";
 import { WallFeature } from "../../state/types";
 
-type FeatureProps = { ox: number; oy: number; accent: string };
+export type FeatureProps = { ox: number; oy: number; accent: string };
 
 function WallPanel({
   x0, y0: _y0, x1, y1, baseY, height, color,
@@ -49,7 +49,7 @@ export function KanbanWall({ ox, oy, accent }: FeatureProps) {
   }
   return (
     <g>
-      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={10} height={26} color={withAlpha(accent, 0.10)} />
+      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={8} height={28} color={withAlpha(accent, 0.10)} />
       {cards}
       {headers}
     </g>
@@ -169,7 +169,7 @@ export function DataFeedWall({ ox, oy, accent }: FeatureProps) {
   }
   return (
     <g>
-      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={10} height={26} color={withAlpha(accent, 0.10)} />
+      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={6} height={30} color={withAlpha(accent, 0.10)} />
       {rows}
     </g>
   );
