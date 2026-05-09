@@ -3,6 +3,9 @@ node_modules/
 dist/
 .vite/
 
+# Worktrees
+.worktrees/
+
 # Rust
 src-tauri/target/
 **/*.rs.bk
