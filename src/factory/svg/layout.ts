@@ -84,3 +84,86 @@ export function computeDoors(rooms: Room[]): Map<string, DoorSet> {
   }
   return out;
 }
+
+import { RoomTag } from "../state/types";
+
+function dist(a: { col: number; row: number }, b: { col: number; row: number }): number {
+  return Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
+}
+
+function adjacentToCount(cell: { col: number; row: number }, rooms: Room[]): number {
+  return rooms.filter((r) =>
+    (Math.abs(r.col - cell.col) + Math.abs(r.row - cell.row)) === 1
+  ).length;
+}
+
+function isolatesAnyRoom(cell: { col: number; row: number }, rooms: Room[]): boolean {
+  // Approximation: a placement isolates a room if that room would have no
+  // 4-connected room or `cell` neighbor after the placement. The check is
+  // strong enough for our small grids.
+  for (const r of rooms) {
+    const others = [...rooms.filter((o) => o.id !== r.id), { col: cell.col, row: cell.row }];
+    const hasNeighbor = others.some(
+      (o) => Math.abs(o.col - r.col) + Math.abs(o.row - r.row) === 1,
+    );
+    if (!hasNeighbor) return true;
+  }
+  return false;
+}
+
+export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: number } {
+  if (rooms.length === 0) return { col: 0, row: 0 };
+
+  const occupied = new Set(rooms.map((r) => `${r.col},${r.row}`));
+
+  const sameTag = rooms.filter((r) => r.kit?.primaryTag === tag);
+  const tagCent = sameTag.length
+    ? {
+        col: sameTag.reduce((s, r) => s + r.col, 0) / sameTag.length,
+        row: sameTag.reduce((s, r) => s + r.row, 0) / sameTag.length,
+      }
+    : null;
+  const globalCent = {
+    col: rooms.reduce((s, r) => s + r.col, 0) / rooms.length,
+    row: rooms.reduce((s, r) => s + r.row, 0) / rooms.length,
+  };
+
+  const candidates: { col: number; row: number }[] = [];
+  const seen = new Set<string>();
+  const deltas = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  for (const r of rooms) {
+    for (const [dc, dr] of deltas) {
+      const c = r.col + dc;
+      const rr = r.row + dr;
+      if (c < 0 || rr < 0) continue;
+      const key = `${c},${rr}`;
+      if (occupied.has(key)) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ col: c, row: rr });
+    }
+  }
+
+  if (!candidates.length) return { col: 0, row: rooms.length };
+
+  const W_TAG = 4.0, W_GLOBAL = 1.0, W_ADJ = 0.5, W_ISOLATE = 100.0;
+
+  let best = candidates[0];
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    let score = 0;
+    if (tagCent) score += -W_TAG * dist(c, tagCent);
+    score += -W_GLOBAL * dist(c, globalCent);
+    score += W_ADJ * adjacentToCount(c, rooms);
+    if (isolatesAnyRoom(c, rooms)) score -= W_ISOLATE;
+    if (
+      score > bestScore ||
+      (score === bestScore &&
+        (c.col < best.col || (c.col === best.col && c.row < best.row)))
+    ) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}

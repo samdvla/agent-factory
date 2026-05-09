@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { computeCorridors } from "../layout";
 import { computeDoors } from "../layout";
-import type { Room } from "../../state/types";
+import { placeNewRoom } from "../layout";
+import type { Room, RoomKit } from "../../state/types";
 
 const FOUNDING_ROOMS: Room[] = [
   { id: "strategy", name: "Strategy",  occupant: "", col: 0, row: 0, kind: "bridge"   },
@@ -86,5 +87,44 @@ describe("computeDoors", () => {
   it("row 0 rooms have a south door (corridor at gap 6..7)", () => {
     const doors = computeDoors(FOUNDING_ROOMS);
     expect(doors.get("research")?.south).toBe(true);
+  });
+});
+
+const KIT_CREATIVE: RoomKit = {
+  primaryTag: "creative", capacity: 1, accent: "#ff6b9d",
+  stationLayout: "central", wallFeature: "moodboard", features: [],
+};
+const KIT_ANALYST: RoomKit = {
+  primaryTag: "analyst", capacity: 2, accent: "#5fd4f0",
+  stationLayout: "row", wallFeature: "trends", features: [],
+};
+
+function withKit(rooms: Room[], idsToTags: Record<string, RoomKit>): Room[] {
+  return rooms.map((r) => idsToTags[r.id] ? { ...r, kit: idsToTags[r.id] } : r);
+}
+
+describe("placeNewRoom", () => {
+  it("returns a cell adjacent to existing rooms when none of the tag exist", () => {
+    const tagged = withKit(FOUNDING_ROOMS, { design: KIT_CREATIVE });
+    const pos = placeNewRoom(tagged, "creative");
+    expect([
+      `${3},${0}`, `${2},${1}`, `${3},${1}`,
+    ]).toContain(`${pos.col},${pos.row}`);
+  });
+
+  it("clusters same-tag rooms — second creative goes adjacent to first", () => {
+    const tagged = withKit(FOUNDING_ROOMS, {
+      design: KIT_CREATIVE,
+      research: KIT_ANALYST,
+    });
+    const pos = placeNewRoom(tagged, "creative");
+    const dx = Math.abs(pos.col - 2);
+    const dy = Math.abs(pos.row - 0);
+    expect(dx + dy).toBeLessThanOrEqual(2);
+  });
+
+  it("never returns a position that an existing room occupies", () => {
+    const pos = placeNewRoom(FOUNDING_ROOMS, "analyst");
+    expect(FOUNDING_ROOMS.some((r) => r.col === pos.col && r.row === pos.row)).toBe(false);
   });
 });
