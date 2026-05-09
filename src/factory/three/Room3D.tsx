@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { ROOMS, ROLES } from "../state/fixtures";
 import { useFbxClone } from "./fbxLoader";
 import wallEmptyUrl from "../../assets/quaternius-scifi/Walls/Wall_Empty.fbx?url";
+import { PROP_LAYOUTS } from "./propLayouts";
 
 const ROOM_W = 6;
 const ROOM_H = 6;
@@ -32,6 +33,17 @@ export default function Room3D({ roomId }: { roomId: string }) {
         <FbxWall position={[ROOM_W / 2, 0, 0]} rotationY={0} length={ROOM_W} />
         <FbxWall position={[ROOM_W, 0, ROOM_H / 2]} rotationY={Math.PI / 2} length={ROOM_H} />
       </Suspense>
+      {/* Per-kind props */}
+      {(PROP_LAYOUTS[room.kind] ?? []).map((p, i) => (
+        <Suspense key={i} fallback={null}>
+          <FbxProp
+            url={p.url}
+            position={p.position}
+            rotationY={p.rotationY ?? 0}
+            scale={p.scale ?? 1}
+          />
+        </Suspense>
+      ))}
     </group>
   );
 }
@@ -56,4 +68,14 @@ function FbxWall({
       scale={[1, 1, length]}
     />
   );
+}
+
+function FbxProp({ url, position, rotationY, scale }: {
+  url: string;
+  position: [number, number, number];
+  rotationY: number;
+  scale: number;
+}) {
+  const cloned = useFbxClone(url);
+  return <primitive object={cloned} position={position} rotation={[0, rotationY, 0]} scale={scale} />;
 }
