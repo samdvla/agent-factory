@@ -190,7 +190,7 @@ export function ArchiveWallFeature({ ox, oy, accent }: FeatureProps) {
   }
   return (
     <g>
-      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={10} height={26} color={withAlpha(accent, 0.10)} />
+      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={8} height={28} color={withAlpha(accent, 0.10)} />
       {cells}
     </g>
   );
@@ -210,7 +210,7 @@ export function DocsWall({ ox, oy, accent }: FeatureProps) {
   }
   return (
     <g>
-      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={12} height={28} color={withAlpha(accent, 0.10)} />
+      <WallPanel x0={ox + 0.5} y0={oy} x1={ox + 5.5} y1={oy + 0.5} baseY={8} height={32} color={withAlpha(accent, 0.10)} />
       {items}
     </g>
   );
