@@ -3,6 +3,72 @@ import { useFactoryStore } from "../factory/state/factoryStore";
 import { ROLES } from "../factory/state/fixtures";
 import { planRoomToRoomPath } from "../factory/svg/pathing";
 import { homeStationFor } from "../factory/svg/stations";
+import { HireEvent } from "../factory/state/types";
+
+type SimState = {
+  designerQueue: number;
+  openDisputes: number;
+  intlOrdersPending: number;
+  nichesQueued: number;
+  dayInQuarter: number;
+};
+
+const SIM: SimState = {
+  designerQueue: 0,
+  openDisputes: 0,
+  intlOrdersPending: 0,
+  nichesQueued: 0,
+  dayInQuarter: 0,
+};
+
+type HireSignal = {
+  name: string;
+  trigger: (s: SimState) => boolean;
+  spec: () => Omit<HireEvent, "id" | "ts">;
+};
+
+const HIRE_SIGNALS: HireSignal[] = [
+  {
+    name: "designer queue backlog",
+    trigger: (s) => s.designerQueue > 5,
+    spec: () => ({
+      roleSpec: { name: "Mockup Artist", title: "Specialist · Designer", primaryTag: "creative", archetype: "relaxed", model: "Haiku" },
+      justification: { reason: "queue_backlog", metric: `designer queue = ${SIM.designerQueue} > 5` },
+    }),
+  },
+  {
+    name: "dispute volume",
+    trigger: (s) => s.openDisputes > 3,
+    spec: () => ({
+      roleSpec: { name: "Dispute Negotiator", title: "Specialist · CS", primaryTag: "comms", archetype: "formal", model: "Sonnet" },
+      justification: { reason: "dispute_volume", metric: `open disputes = ${SIM.openDisputes} > 3` },
+    }),
+  },
+  {
+    name: "translation demand",
+    trigger: (s) => s.intlOrdersPending > 8,
+    spec: () => ({
+      roleSpec: { name: "Translator", title: "Specialist · Listing", primaryTag: "copy", archetype: "office", model: "Haiku" },
+      justification: { reason: "translation_demand", metric: `intl orders = ${SIM.intlOrdersPending} > 8` },
+    }),
+  },
+  {
+    name: "tax cycle",
+    trigger: (s) => s.dayInQuarter > 80,
+    spec: () => ({
+      roleSpec: { name: "Tax Helper", title: "Specialist · Finance", primaryTag: "legal", archetype: "formal", model: "Sonnet" },
+      justification: { reason: "tax_cycle", metric: `Q-end in ${Math.max(0, 90 - Math.floor(SIM.dayInQuarter))} days` },
+    }),
+  },
+  {
+    name: "niche backlog",
+    trigger: (s) => s.nichesQueued > 5,
+    spec: () => ({
+      roleSpec: { name: "Trend Hunter", title: "Specialist · Research", primaryTag: "analyst", archetype: "slim", model: "Haiku" },
+      justification: { reason: "niche_demand", metric: `niche backlog = ${SIM.nichesQueued} > 5` },
+    }),
+  },
+];
 
 type Phase = { task: string; ticker: string };
 
@@ -216,6 +282,14 @@ export function useDemoFloor(enabled = true) {
         await sleep(workMs);
         if (cancelled) return;
 
+        // Bump simulated business counters to drive hire-signal thresholds.
+        if (roleId === "research")     SIM.nichesQueued += 1;
+        if (roleId === "designer")     SIM.designerQueue = Math.max(0, SIM.designerQueue - 1);
+        if (roleId === "orchestrator") SIM.designerQueue += Math.random() < 0.7 ? 1 : 0;
+        if (roleId === "cs")           SIM.openDisputes += Math.random() < 0.15 ? 1 : 0;
+        if (roleId === "publisher")    SIM.intlOrdersPending += Math.random() < 0.25 ? 1 : 0;
+        SIM.dayInQuarter = Math.min(90, SIM.dayInQuarter + 0.2);
+
         // End-of-phase: fire the chain handoff but DO NOT go idle —
         // every agent rolls straight into their next phase.
         if (loop.handoffTo) {
@@ -332,8 +406,43 @@ export function useDemoFloor(enabled = true) {
     }
     orchestratorSiteVisits();
 
+    // TODO: chain-handoff integration with specialists is deferred.
+    const hiredSignals = new Set<string>();
+    const hireInterval = setInterval(() => {
+      if (cancelled) return;
+      for (const sig of HIRE_SIGNALS) {
+        if (hiredSignals.has(sig.name)) continue;
+        if (!sig.trigger(SIM)) continue;
+        hiredSignals.add(sig.name);
+        const e = sig.spec();
+        store.getState().fireHireEvent({
+          ...e,
+          id: `demo-${sig.name}-${Date.now()}`,
+          ts: Date.now(),
+        });
+        if (sig.name === "designer queue backlog") SIM.designerQueue = 1;
+        if (sig.name === "dispute volume")        SIM.openDisputes = 0;
+        if (sig.name === "translation demand")    SIM.intlOrdersPending = 0;
+        if (sig.name === "niche backlog")         SIM.nichesQueued = 1;
+        if (sig.name === "tax cycle")             SIM.dayInQuarter = 0;
+      }
+    }, 10_000);
+
+    const dissolveInterval = setInterval(() => {
+      if (cancelled) return;
+      store.getState().idleDissolveTick(Date.now(), 90_000);
+      for (const sig of HIRE_SIGNALS) {
+        const stillHired = Object.values(store.getState().roles).some(
+          (r) => r.name === sig.spec().roleSpec.name,
+        );
+        if (!stillHired) hiredSignals.delete(sig.name);
+      }
+    }, 30_000);
+
     return () => {
       cancelled = true;
+      clearInterval(hireInterval);
+      clearInterval(dissolveInterval);
       store.getState().setAgentTravel("orchestrator", null);
     };
   }, [enabled]);
