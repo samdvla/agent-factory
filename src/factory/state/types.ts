@@ -109,3 +109,52 @@ export type HireEvent = {
     expectedRoiUsd?: number;
   };
 };
+
+export type FactoryStore = {
+  roles: Record<string, Role>;
+  rooms: Record<string, Room>;
+  agents: Record<string, AgentEntry>;
+  ticker: TickerEntry[];
+  alerts: AlertItem[];
+  pendingGate: GateRequest | null;
+  selectedAgent: string | null;
+  drawerOpen: boolean;
+  sandbox: boolean;
+  allStop: boolean;
+  budgetTodayUsd: number;
+  budgetCapUsd: number;
+  revenueTodayUsd: number;
+  revenueByRole: Record<string, number>;
+  handoffs: Handoff[];
+  lastActivityAt: number;
+  agentTravel: Record<string, {
+    roomId: string;
+    stationIdx: number;
+    waypoints?: Array<{ x: number; y: number }>;
+    startedAt?: number;
+    durationPerSegmentMs?: number;
+  } | undefined>;
+  agentLastIdleAt: Record<string, number>;
+
+  setAgentState: (role: string, state: AgentVisualState) => void;
+  setAgentJob: (role: string, jobId: number | null) => void;
+  setAgentTask: (role: string, task: string) => void;
+  walkAgent: (role: string, target: string | null) => void;
+  pushTicker: (entry: TickerEntry) => void;
+  pushAlert: (a: AlertItem) => void;
+  dismissAlert: (idx: number) => void;
+  setPendingGate: (g: GateRequest | null) => void;
+  selectAgent: (role: string | null) => void;
+  setSandbox: (v: boolean) => void;
+  setAllStop: (v: boolean) => void;
+  setBudget: (usd: number) => void;
+  pushHandoff: (h: Handoff) => void;
+  expireHandoffs: (now: number) => void;
+  bumpActivity: () => void;
+  setAgentTravel: (roleId: string, target: FactoryStore["agentTravel"][string] | null) => void;
+  addRevenue: (roleId: string, usd: number) => void;
+
+  fireHireEvent: (e: HireEvent) => void;
+  dissolveAgent: (roleId: string) => void;
+  idleDissolveTick: (now: number, idleThresholdMs?: number) => void;
+};
