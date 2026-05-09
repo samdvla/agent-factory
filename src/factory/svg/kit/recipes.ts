@@ -1,10 +1,10 @@
-import { RoomKit, RoomTag, StationLayout, WallFeature } from "../../state/types";
+import { RoomKit, RoomTag, StationLayout, WallFeature, RoomFeature } from "../../state/types";
 
 export type RecipeDefaults = {
   wallFeature: WallFeature;
   stationLayout: StationLayout;
   defaultCapacity: number;
-  features: string[];
+  features: RoomFeature[];
 };
 
 export const RECIPES: Record<RoomTag, RecipeDefaults> = {

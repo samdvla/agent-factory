@@ -72,15 +72,28 @@ export type DoorSet = {
   west: boolean;
 };
 
-export function computeDoors(rooms: Room[]): Map<string, DoorSet> {
+export function computeDoors(rooms: Room[], corridors: Strip[]): Map<string, DoorSet> {
   const out = new Map<string, DoorSet>();
   for (const r of rooms) {
-    out.set(r.id, {
-      north: false,
-      east:  rooms.some((o) => o.col > r.col),
-      west:  rooms.some((o) => o.col < r.col),
-      south: rooms.some((o) => o.row > r.row),
-    });
+    const cellX = roomCellX(r.col);
+    const y0 = r.row * (ROOM_H + GAP);
+    const y1 = y0 + ROOM_H;
+    const eps = 0.01;
+
+    // East face is at x=cellX.x1. Strip is east-adjacent if its x0 == cellX.x1 (within eps)
+    // and it overlaps the room's y range.
+    const east = corridors.some(
+      (c) => Math.abs(c.x0 - cellX.x1) < eps && c.y0 < y1 && c.y1 > y0,
+    );
+    // West face is at x=cellX.x0. Strip is west-adjacent if its x1 == cellX.x0.
+    const west = corridors.some(
+      (c) => Math.abs(c.x1 - cellX.x0) < eps && c.y0 < y1 && c.y1 > y0,
+    );
+    // South face at y=y1.
+    const south = corridors.some(
+      (c) => Math.abs(c.y0 - y1) < eps && c.x0 < cellX.x1 && c.x1 > cellX.x0,
+    );
+    out.set(r.id, { north: false, east, south, west });
   }
   return out;
 }
@@ -146,7 +159,7 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
 
   if (!candidates.length) return { col: 0, row: rooms.length };
 
-  const W_TAG = 4.0, W_GLOBAL = 1.0, W_ADJ = 0.5, W_ISOLATE = 100.0;
+  const W_TAG = 4.0, W_GLOBAL = 1.0, W_ADJ = 0.5, W_ISOLATE = 100.0, W_NORTH = 100.0;
 
   let best = candidates[0];
   let bestScore = -Infinity;
@@ -156,6 +169,12 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
     score += -W_GLOBAL * dist(c, globalCent);
     score += W_ADJ * adjacentToCount(c, rooms);
     if (isolatesAnyRoom(c, rooms)) score -= W_ISOLATE;
+    // Penalise cells that would only be accessible from the north (title wall — no door allowed).
+    const hasNonNorth =
+      rooms.some((o) => o.col === c.col + 1) ||
+      rooms.some((o) => o.col === c.col - 1) ||
+      rooms.some((o) => o.row === c.row + 1);
+    if (!hasNonNorth) score -= W_NORTH;
     if (
       score > bestScore ||
       (score === bestScore &&
@@ -183,10 +202,11 @@ export function roomsHash(rooms: Room[]): string {
 }
 
 export function computeFacilityLayout(rooms: Room[]): FacilityLayout {
+  const corridors = computeCorridors(rooms);
   return {
     hash: roomsHash(rooms),
-    corridors: computeCorridors(rooms),
-    doors: computeDoors(rooms),
+    corridors,
+    doors: computeDoors(rooms, corridors),
   };
 }
 
@@ -199,64 +219,149 @@ function roomCenterPt(room: Room): Waypoint {
   return { x: (cx.x0 + cx.x1) / 2, y: (y0 + y1) / 2 };
 }
 
-function doorWaypoint(room: Room, face: "east" | "south" | "west"): Waypoint {
-  const cx = roomCellX(room.col);
-  const y0 = room.row * (ROOM_H + GAP);
-  const y1 = y0 + ROOM_H;
-  const my = (y0 + y1) / 2;
-  const mx = (cx.x0 + cx.x1) / 2;
-  if (face === "east") return { x: cx.x1, y: my };
-  if (face === "west") return { x: cx.x0, y: my };
-  return { x: mx, y: y1 };
-}
+// --- A* pathfinder with corridor-cell graph and per-roomsHash cache ---
 
-function corridorCenterX(c: number) {
-  return c * (ROOM_W + GAP) + ROOM_W + GAP / 2;
-}
-function corridorCenterY(r: number) {
-  return r * (ROOM_H + GAP) + ROOM_H + GAP / 2;
+type GraphNode = { x: number; y: number; key: string; isRoom?: string };
+
+let cachedGraph: {
+  hash: string;
+  nodes: Map<string, GraphNode>;
+  edges: Map<string, Set<string>>;
+} | null = null;
+
+function buildGraph(rooms: Room[]): {
+  nodes: Map<string, GraphNode>;
+  edges: Map<string, Set<string>>;
+} {
+  const corridors = computeCorridors(rooms);
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, Set<string>>();
+
+  const addNode = (n: GraphNode) => {
+    if (!nodes.has(n.key)) {
+      nodes.set(n.key, n);
+      edges.set(n.key, new Set());
+    }
+  };
+  const addEdge = (a: string, b: string) => {
+    edges.get(a)?.add(b);
+    edges.get(b)?.add(a);
+  };
+
+  // 1. Sample corridor cells at 1-unit resolution along each strip's center.
+  //    Each strip is a thin 1xN or Nx1 rectangle. Walk the long axis.
+  for (const c of corridors) {
+    const horizontal = (c.x1 - c.x0) >= (c.y1 - c.y0);
+    const cy = (c.y0 + c.y1) / 2;
+    const cx = (c.x0 + c.x1) / 2;
+    if (horizontal) {
+      const start = Math.floor(c.x0);
+      const end = Math.ceil(c.x1);
+      let prevKey: string | null = null;
+      for (let xi = start; xi <= end; xi++) {
+        const key = `c-${xi.toFixed(2)},${cy.toFixed(2)}`;
+        addNode({ x: xi, y: cy, key });
+        if (prevKey) addEdge(prevKey, key);
+        prevKey = key;
+      }
+    } else {
+      const start = Math.floor(c.y0);
+      const end = Math.ceil(c.y1);
+      let prevKey: string | null = null;
+      for (let yi = start; yi <= end; yi++) {
+        const key = `c-${cx.toFixed(2)},${yi.toFixed(2)}`;
+        addNode({ x: cx, y: yi, key });
+        if (prevKey) addEdge(prevKey, key);
+        prevKey = key;
+      }
+    }
+  }
+
+  // 2. Intersections are handled automatically: corridor cells that share a key
+  //    (same x,y from different strips) dedup via addNode.
+
+  // 3. Add room-center nodes and connect each to adjacent corridor cells on its perimeter.
+  for (const r of rooms) {
+    const cxR = roomCellX(r.col);
+    const y0 = r.row * (ROOM_H + GAP);
+    const y1 = y0 + ROOM_H;
+    const roomKey = `r-${r.id}`;
+    addNode({ x: (cxR.x0 + cxR.x1) / 2, y: (y0 + y1) / 2, key: roomKey, isRoom: r.id });
+
+    for (const [, n] of nodes) {
+      if (n.isRoom) continue;
+      // East face at x=cxR.x1, corridor strip center at x1+GAP/2
+      const onEast = Math.abs(n.x - (cxR.x1 + GAP / 2)) < 0.01 && n.y >= y0 && n.y <= y1 + GAP;
+      // West face at x=cxR.x0, corridor strip center at x0-GAP/2
+      const onWest = Math.abs(n.x - (cxR.x0 - GAP / 2)) < 0.01 && n.y >= y0 && n.y <= y1 + GAP;
+      // South face at y=y1, corridor strip center at y1+GAP/2
+      const onSouth = Math.abs(n.y - (y1 + GAP / 2)) < 0.01 && n.x >= cxR.x0 && n.x <= cxR.x1 + GAP;
+      // No north — title wall.
+      if (onEast || onWest || onSouth) {
+        addEdge(roomKey, n.key);
+      }
+    }
+  }
+  return { nodes, edges };
 }
 
 export function findPath(rooms: Room[], fromId: string, toId: string): Waypoint[] {
   const from = rooms.find((r) => r.id === fromId);
   const to = rooms.find((r) => r.id === toId);
   if (!from || !to) return [];
-
   if (from.id === to.id) return [roomCenterPt(from)];
 
-  const path: Waypoint[] = [];
-  const start = roomCenterPt(from);
-  const end = roomCenterPt(to);
-
-  let exit: Waypoint;
-  let entry: Waypoint;
-  if (to.col > from.col) {
-    exit = doorWaypoint(from, "east");
-    entry = doorWaypoint(to, "west");
-  } else if (to.col < from.col) {
-    exit = doorWaypoint(from, "west");
-    entry = doorWaypoint(to, "east");
-  } else {
-    exit = doorWaypoint(from, "south");
-    entry = doorWaypoint(to, to.row > from.row ? "west" : "east");
+  const hash = roomsHash(rooms);
+  if (!cachedGraph || cachedGraph.hash !== hash) {
+    const g = buildGraph(rooms);
+    cachedGraph = { hash, nodes: g.nodes, edges: g.edges };
   }
+  const { nodes, edges } = cachedGraph;
 
-  const exitCorridorY = corridorCenterY(Math.min(from.row, to.row));
-  const entryCorridorX =
-    to.col > from.col
-      ? corridorCenterX(to.col - 1)
-      : corridorCenterX(to.col);
+  const startKey = `r-${from.id}`;
+  const goalKey = `r-${to.id}`;
+  if (!nodes.has(startKey) || !nodes.has(goalKey)) return [];
 
-  path.push(start);
-  path.push(exit);
-  if (from.row !== to.row) {
-    path.push({ x: exit.x, y: exitCorridorY });
-    path.push({ x: entryCorridorX, y: exitCorridorY });
-    path.push({ x: entryCorridorX, y: entry.y });
-  } else {
-    path.push({ x: entry.x, y: exit.y });
+  // A* with Manhattan heuristic.
+  const heur = (a: GraphNode, b: GraphNode) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  const goalNode = nodes.get(goalKey)!;
+  const open = new Set<string>([startKey]);
+  const cameFrom = new Map<string, string>();
+  const gScore = new Map<string, number>([[startKey, 0]]);
+  const fScore = new Map<string, number>([[startKey, heur(nodes.get(startKey)!, goalNode)]]);
+
+  while (open.size) {
+    let currentKey: string | null = null;
+    let bestF = Infinity;
+    for (const k of open) {
+      const f = fScore.get(k) ?? Infinity;
+      if (f < bestF) { bestF = f; currentKey = k; }
+    }
+    if (!currentKey) break;
+    if (currentKey === goalKey) break;
+    open.delete(currentKey);
+    const current = nodes.get(currentKey)!;
+    const neighbors = edges.get(currentKey) ?? new Set();
+    for (const n of neighbors) {
+      const neighbor = nodes.get(n)!;
+      const tentative = (gScore.get(currentKey) ?? Infinity) + heur(current, neighbor);
+      if (tentative < (gScore.get(n) ?? Infinity)) {
+        cameFrom.set(n, currentKey);
+        gScore.set(n, tentative);
+        fScore.set(n, tentative + heur(neighbor, goalNode));
+        open.add(n);
+      }
+    }
   }
-  path.push(entry);
-  path.push(end);
-  return path;
+  if (!cameFrom.has(goalKey) && startKey !== goalKey) return [];
+
+  const out: Waypoint[] = [];
+  let k: string | undefined = goalKey;
+  while (k) {
+    const n = nodes.get(k);
+    if (!n) break;
+    out.unshift({ x: n.x, y: n.y });
+    k = cameFrom.get(k);
+  }
+  return out;
 }

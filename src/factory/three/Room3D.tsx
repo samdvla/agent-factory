@@ -35,7 +35,7 @@ export default function Room3D({ roomId }: { roomId: string }) {
         <FbxWall position={[ROOM_W, 0, ROOM_H / 2]} rotationY={Math.PI / 2} />
       </Suspense>
       {/* Per-kind props */}
-      {(PROP_LAYOUTS[room.kind] ?? []).map((p, i) => (
+      {(PROP_LAYOUTS[room.kit?.primaryTag ?? ""] ?? []).map((p, i) => (
         <Suspense
           key={i}
           fallback={null}

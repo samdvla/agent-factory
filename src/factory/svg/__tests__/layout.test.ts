@@ -6,13 +6,13 @@ import { findPath } from "../layout";
 import type { Room, RoomKit } from "../../state/types";
 
 const FOUNDING_ROOMS: Room[] = [
-  { id: "strategy", name: "Strategy",  occupant: "", col: 0, row: 0, kind: "bridge"   },
-  { id: "research", name: "Research",  occupant: "", col: 1, row: 0, kind: "analyst"  },
-  { id: "design",   name: "Design",    occupant: "", col: 2, row: 0, kind: "fab"      },
-  { id: "listing",  name: "Listing",   occupant: "", col: 0, row: 1, kind: "dispatch" },
-  { id: "cs",       name: "CS",        occupant: "", col: 1, row: 1, kind: "comms"    },
-  { id: "finance",  name: "Finance",   occupant: "", col: 2, row: 1, kind: "control"  },
-  { id: "silab",    name: "SI Lab",    occupant: "", col: 1, row: 2, kind: "rd"       },
+  { id: "strategy", name: "Strategy", col: 0, row: 0 },
+  { id: "research", name: "Research", col: 1, row: 0 },
+  { id: "design",   name: "Design",   col: 2, row: 0 },
+  { id: "listing",  name: "Listing",  col: 0, row: 1 },
+  { id: "cs",       name: "CS",       col: 1, row: 1 },
+  { id: "finance",  name: "Finance",  col: 2, row: 1 },
+  { id: "silab",    name: "SI Lab",   col: 1, row: 2 },
 ];
 
 describe("computeCorridors", () => {
@@ -67,26 +67,30 @@ describe("computeCorridors", () => {
 
 describe("computeDoors", () => {
   it("never puts a door on the north face", () => {
-    const doors = computeDoors(FOUNDING_ROOMS);
+    const corridors = computeCorridors(FOUNDING_ROOMS);
+    const doors = computeDoors(FOUNDING_ROOMS, corridors);
     for (const [, faces] of doors) {
       expect(faces.north).toBe(false);
     }
   });
 
   it("col 0 rooms have an east door (corridor at gap 6..7)", () => {
-    const doors = computeDoors(FOUNDING_ROOMS);
+    const corridors = computeCorridors(FOUNDING_ROOMS);
+    const doors = computeDoors(FOUNDING_ROOMS, corridors);
     expect(doors.get("strategy")?.east).toBe(true);
     expect(doors.get("listing")?.east).toBe(true);
   });
 
   it("col 2 rooms have a west door (corridor at gap 13..14)", () => {
-    const doors = computeDoors(FOUNDING_ROOMS);
+    const corridors = computeCorridors(FOUNDING_ROOMS);
+    const doors = computeDoors(FOUNDING_ROOMS, corridors);
     expect(doors.get("design")?.west).toBe(true);
     expect(doors.get("finance")?.west).toBe(true);
   });
 
   it("row 0 rooms have a south door (corridor at gap 6..7)", () => {
-    const doors = computeDoors(FOUNDING_ROOMS);
+    const corridors = computeCorridors(FOUNDING_ROOMS);
+    const doors = computeDoors(FOUNDING_ROOMS, corridors);
     expect(doors.get("research")?.south).toBe(true);
   });
 });

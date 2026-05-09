@@ -17,13 +17,19 @@ export type WallFeature =
 
 export type StationLayout = "row" | "cluster" | "central" | "perimeter";
 
+export type RoomFeature =
+  | "bookshelf" | "binder-stack" | "color-rack" | "drafting" | "printer"
+  | "safe" | "file-cabinet" | "conference-table" | "lab-bench" | "law-shelf"
+  | "file-safe" | "terminal-rack" | "server-rack" | "phone-bank" | "headset"
+  | "queue-board" | "archive-wall";
+
 export type RoomKit = {
   primaryTag: RoomTag;
   capacity: number;            // 1..6
   accent: string;
   stationLayout: StationLayout;
   wallFeature: WallFeature;
-  features: string[];
+  features: RoomFeature[];
 };
 
 export type Role = {
@@ -40,13 +46,8 @@ export type Role = {
 export type Room = {
   id: string;
   name: string;
-  occupant: string;             // legacy display label, kept for migration
   col: number;
   row: number;
-  kind:
-    | "bridge" | "analyst" | "fab" | "dispatch"
-    | "comms" | "control" | "rd";        // legacy; deleted in Task 13
-  // New fields:
   kit?: RoomKit;                // populated by hire resolver
   occupants?: string[];         // role ids occupying this room
   createdAt?: number;

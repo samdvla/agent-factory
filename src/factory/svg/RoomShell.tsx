@@ -11,6 +11,7 @@ const DOOR_H = WALL_H * 0.66;
 
 export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string; doors?: DoorSet }) {
   const room = useFactoryStore((s) => s.rooms[roomId]);
+  const roles = useFactoryStore((s) => s.roles);
   const roomState = useFactoryStore((s) => {
     const r = s.rooms[roomId];
     if (!r) return "idle";
@@ -23,6 +24,14 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
   });
   if (!room) return null;
   const accent = room.kit?.accent ?? "#5fd4f0";
+  const subtitleText = (() => {
+    const ids = room.occupants ?? [];
+    if (ids.length === 0) return room.name.toUpperCase();
+    const titles = ids.map((id) => roles[id]?.title).filter(Boolean) as string[];
+    if (titles.length === 0) return room.name.toUpperCase();
+    if (titles.length === 1) return titles[0].toUpperCase();
+    return `${titles[0].toUpperCase()} +${titles.length - 1}`;
+  })();
   const b = getRoomBounds(roomId);
   if (!b) return null;
   const doors = doorsProp ?? { north: false, east: false, south: false, west: false };
@@ -106,7 +115,7 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
 
   return (
     <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
-       data-room={roomId} data-name={room.name} data-occupant={room.occupant}
+       data-room={roomId} data-name={room.name}
        style={{ opacity, transition: room.dissolving ? "opacity 800ms ease-out" : "opacity 500ms ease-in" }}>
       <polygon className="room-glow" points={glowPolyPts} fill={accent} fillOpacity={0.06} />
       <polygon className="room-floor"
@@ -139,7 +148,7 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
         textAnchor="middle" dominantBaseline="middle"
         fontFamily="JetBrains Mono, monospace" fontSize={2.6} letterSpacing={0.8}
         fill={accent} fillOpacity={0.55}>
-        {room.occupant.toUpperCase()}
+        {subtitleText}
       </text>
     </g>
   );

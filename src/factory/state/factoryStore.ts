@@ -182,10 +182,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       const newRoom: Room = {
         id: newId,
         name: ROOM_NAME_BY_TAG[tag],
-        occupant: roleSpec.name,
         col: pos.col,
         row: pos.row,
-        kind: "rd",
         kit: newKit,
         occupants: [],
         createdAt: e.ts,

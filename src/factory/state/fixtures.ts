@@ -25,19 +25,19 @@ export const ROLES: Record<string, Role> = {
 };
 
 export const ROOMS: Record<string, Room> = {
-  strategy: { id:"strategy", name:"Strategy Room", occupant:"Orchestrator", col:0, row:0, kind:"bridge",
+  strategy: { id:"strategy", name:"Strategy Room", col:0, row:0,
     kit: k("bridge", "#f5a623", 1), occupants:["orchestrator"], createdAt:0 },
-  research: { id:"research", name:"Research Lab", occupant:"Market Research", col:1, row:0, kind:"analyst",
+  research: { id:"research", name:"Research Lab", col:1, row:0,
     kit: k("analyst", "#5fd4f0", 2), occupants:["research"], createdAt:0 },
-  design: { id:"design", name:"Design Studio", occupant:"Designer", col:2, row:0, kind:"fab",
+  design: { id:"design", name:"Design Studio", col:2, row:0,
     kit: k("creative", "#ff6b9d", 1), occupants:["designer"], createdAt:0 },
-  listing: { id:"listing", name:"Listing Desk", occupant:"Copywriter & Publisher", col:0, row:1, kind:"dispatch",
+  listing: { id:"listing", name:"Listing Desk", col:0, row:1,
     kit: k("copy", "#6bd968", 2), occupants:["listing","publisher"], createdAt:0 },
-  cs: { id:"cs", name:"CS Booth", occupant:"Customer Service", col:1, row:1, kind:"comms",
+  cs: { id:"cs", name:"CS Booth", col:1, row:1,
     kit: k("comms", "#6aa9ff", 4), occupants:["cs"], createdAt:0 },
-  finance: { id:"finance", name:"Finance Office", occupant:"CFO", col:2, row:1, kind:"control",
+  finance: { id:"finance", name:"Finance Office", col:2, row:1,
     kit: k("finance", "#c4d943", 1), occupants:["cfo"], createdAt:0 },
-  silab: { id:"silab", name:"Self-Improvement Lab", occupant:"SI Agent", col:1, row:2, kind:"rd",
+  silab: { id:"silab", name:"Self-Improvement Lab", col:1, row:2,
     kit: k("rd", "#b393f5", 1), occupants:["si"], createdAt:0 },
 };
 
