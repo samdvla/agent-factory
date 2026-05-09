@@ -1,8 +1,40 @@
 import { Canvas } from "@react-three/fiber";
 import { OrthographicCamera } from "@react-three/drei";
 import { Suspense } from "react";
-import { ROOMS } from "../state/fixtures";
+import { ROOMS, ROLES } from "../state/fixtures";
 import Room3D from "./Room3D";
+import Avatar3D from "./Avatar3D";
+import { useFactoryStore } from "../state/factoryStore";
+
+const ROOM_W = 6;
+const ROOM_H = 6;
+const GAP = 1;
+
+function AvatarsLayer() {
+  const agents = useFactoryStore((s) => s.agents);
+  const selectAgent = useFactoryStore((s) => s.selectAgent);
+
+  return (
+    <>
+      {Object.values(ROLES).map((role) => {
+        const room = ROOMS[role.room];
+        const agent = agents[role.id];
+        if (!room || !agent) return null;
+        const x = room.col * (ROOM_W + GAP) + ROOM_W / 2;
+        const z = room.row * (ROOM_H + GAP) + ROOM_H * 0.55;
+        return (
+          <Avatar3D
+            key={role.id}
+            role={role}
+            position={[x, 0, z]}
+            state={agent.state}
+            onClick={() => selectAgent(role.id)}
+          />
+        );
+      })}
+    </>
+  );
+}
 
 export default function ThreeFactoryFloor() {
   return (
@@ -28,6 +60,7 @@ export default function ThreeFactoryFloor() {
           <Room3D key={id} roomId={id} />
         ))}
       </Suspense>
+      <AvatarsLayer />
     </Canvas>
   );
 }
