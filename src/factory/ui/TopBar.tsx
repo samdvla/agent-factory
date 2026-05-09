@@ -8,6 +8,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
   const budgetCap = useFactoryStore((s) => s.budgetCapUsd);
+  const revenueUsd = useFactoryStore((s) => s.revenueTodayUsd);
   const alerts = useFactoryStore((s) => s.alerts);
   const setAllStop = useFactoryStore((s) => s.setAllStop);
 
@@ -18,6 +19,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
     return () => clearInterval(id);
   }, []);
 
+  const netUsd = revenueUsd - budgetUsd;
   const pct = Math.min(100, (budgetUsd / budgetCap) * 100);
   const fillClass =
     pct > 90
@@ -92,6 +94,16 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
           <span className="spent">${budgetUsd.toFixed(2)}</span>
           <span className="cap"> / ${budgetCap.toFixed(2)}</span>
         </div>
+      </div>
+
+      <div className="topbar-pill">
+        <span className="topbar-pill-label">Revenue</span>
+        <span className="topbar-pill-value">${revenueUsd.toFixed(2)}</span>
+      </div>
+
+      <div className={`topbar-pill topbar-net ${netUsd >= 0 ? "is-gain" : "is-loss"}`}>
+        <span className="topbar-pill-label">Net</span>
+        <span className="topbar-pill-value">{netUsd >= 0 ? "+" : ""}${netUsd.toFixed(2)}</span>
       </div>
 
       <div className="topbar-spacer" />

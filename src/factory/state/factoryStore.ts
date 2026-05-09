@@ -36,6 +36,8 @@ export type FactoryStore = {
   allStop: boolean;
   budgetTodayUsd: number;
   budgetCapUsd: number;
+  revenueTodayUsd: number;
+  revenueByRole: Record<string, number>;
   handoffs: Handoff[];
   lastActivityAt: number;
   agentTravel: Record<string, {
@@ -63,6 +65,7 @@ export type FactoryStore = {
   expireHandoffs: (now: number) => void;
   bumpActivity: () => void;
   setAgentTravel: (roleId: string, target: FactoryStore["agentTravel"][string] | null) => void;
+  addRevenue: (roleId: string, usd: number) => void;
 
   fireHireEvent: (e: HireEvent) => void;
   dissolveAgent: (roleId: string) => void;
@@ -91,6 +94,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   allStop: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
+  revenueTodayUsd: 0,
+  revenueByRole: {},
   handoffs: [],
   lastActivityAt: 0,
   agentTravel: {},
@@ -136,6 +141,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     if (target) next[roleId] = target; else delete next[roleId];
     return { agentTravel: next, lastActivityAt: Date.now() };
   }),
+  addRevenue: (roleId, usd) => set((s) => ({
+    revenueTodayUsd: s.revenueTodayUsd + usd,
+    revenueByRole: {
+      ...s.revenueByRole,
+      [roleId]: (s.revenueByRole[roleId] ?? 0) + usd,
+    },
+    lastActivityAt: Date.now(),
+  })),
 
   fireHireEvent: (e) => {
     const state = get();
@@ -253,6 +266,15 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         [roleId]: { ...s.agents[roleId], state: "dissolving" },
       },
     }));
+
+    const earned = get().revenueByRole[roleId] ?? 0;
+    if (earned > 0) {
+      get().pushTicker({
+        ts: Date.now(),
+        source: roleId,
+        text: `dissolved · earned $${earned.toFixed(2)}`,
+      });
+    }
 
     setTimeout(() => {
       const cur = get();

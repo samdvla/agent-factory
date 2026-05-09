@@ -70,6 +70,91 @@ const HIRE_SIGNALS: HireSignal[] = [
   },
 ];
 
+// USD earned per completed phase. Tuned so a healthy loop nets positive.
+const REVENUE_PER_PHASE: Record<string, number> = {
+  // Founding
+  "Orchestrator": 0.30,
+  "Iris Vega": 0.25,
+  "Mara Chen": 0.40,
+  "Theo Park": 0.35,
+  "Avery Holt": 0.45,
+  "Lina Okafor": 0.20,
+  "Roman Voss": 0.15,
+  "Sable Wynn": 0.20,
+  // Specialists
+  "Mockup Artist": 0.30,
+  "Dispute Negotiator": 0.25,
+  "Translator": 0.20,
+  "Tax Helper": 0.40,
+  "Trend Hunter": 0.25,
+};
+
+type SpecialistProfile = {
+  parentRoleId: string;
+  parentLabel: string;
+  workMin: number;
+  workMax: number;
+  phases: Array<{ task: string; ticker: string }>;
+};
+
+const SPECIALIST_PROFILES: Record<string, SpecialistProfile> = {
+  "Mockup Artist": {
+    parentRoleId: "designer",
+    parentLabel: "variant",
+    workMin: 6000, workMax: 9500,
+    phases: [
+      { task: "render alt mockup A · sage palette",    ticker: "mockup A · 1200×1800 · sage" },
+      { task: "render alt mockup B · cream palette",   ticker: "mockup B · cream/terracotta" },
+      { task: "render alt mockup C · keyword overlay", ticker: "mockup C · keyword overlay" },
+      { task: "vector cut-file · trace + clean",       ticker: "SVG cut-file · 4 layers" },
+    ],
+  },
+  "Dispute Negotiator": {
+    parentRoleId: "cs",
+    parentLabel: "case file",
+    workMin: 5500, workMax: 8500,
+    phases: [
+      { task: "review case · evidence + tone",         ticker: "dispute #14 · scoring tone" },
+      { task: "draft policy-bound reply",              ticker: "reply: refund declined per policy" },
+      { task: "escalation note → orchestrator",        ticker: "escalation: case #17 → orchestrator" },
+      { task: "post-resolution log + lessons",         ticker: "lesson: bundle FAQ on file format" },
+    ],
+  },
+  "Translator": {
+    parentRoleId: "listing",
+    parentLabel: "i18n",
+    workMin: 4500, workMax: 7000,
+    phases: [
+      { task: "translate description · ES",            ticker: "ES · description ready" },
+      { task: "translate description · FR",            ticker: "FR · description ready" },
+      { task: "translate description · DE",            ticker: "DE · description ready" },
+      { task: "alt-text i18n · all mockups",           ticker: "alt-text · ES/FR/DE done" },
+    ],
+  },
+  "Tax Helper": {
+    parentRoleId: "cfo",
+    parentLabel: "tax bucket",
+    workMin: 6000, workMax: 9000,
+    phases: [
+      { task: "Q-end statement · gross/net",           ticker: "Q-end: gross $X · fees $Y" },
+      { task: "set-aside · 30% of net",                ticker: "tax set-aside +$Z this Q" },
+      { task: "deduction worksheet · digital biz",     ticker: "deductions · 6 categories logged" },
+      { task: "policy delta vs last quarter",          ticker: "policy: 1099-K thresholds noted" },
+    ],
+  },
+  "Trend Hunter": {
+    parentRoleId: "research",
+    parentLabel: "niche hint",
+    workMin: 5000, workMax: 8000,
+    phases: [
+      { task: "scan TikTok · Etsy crossover",          ticker: "trend: 'cottagecore SVG' rising" },
+      { task: "long-tail keyword expansion",           ticker: "long-tail · 14 candidates" },
+      { task: "competitor density check",              ticker: "comp density: low · enter window" },
+      { task: "demand pulse · 7d sample",              ticker: "demand pulse: +12% w/w" },
+    ],
+  },
+};
+
 type Phase = { task: string; ticker: string };
 
 type RoleLoop = {
@@ -305,9 +390,69 @@ export function useDemoFloor(enabled = true) {
           }
         }
 
+        // Award revenue for the completed phase.
+        const earnerRole = ROLES[roleId];
+        if (earnerRole) {
+          const usd = REVENUE_PER_PHASE[earnerRole.name] ?? 0.05;
+          store.getState().addRevenue(roleId, usd);
+        }
+
         // Brief micro-pause — kept very short so visually the agent never
         // looks "idle waiting on someone else".
         await sleep(rand(loop.betweenMin, loop.betweenMax));
+      }
+    }
+
+    async function runSpecialistLoop(roleId: string, profile: SpecialistProfile) {
+      // Wait for materialize→working transition (~600ms in fireHireEvent).
+      await sleep(700);
+      let counter = 0;
+      while (!cancelled) {
+        const live = store.getState().roles[roleId];
+        const agent = store.getState().agents[roleId];
+        if (!live || !agent) return;
+        // Stop running phases once the work-window timeout flips us to idle.
+        if (agent.state !== "working") return;
+
+        const phase = profile.phases[counter % profile.phases.length];
+        counter++;
+        const workMs = rand(profile.workMin, profile.workMax);
+
+        const s = store.getState();
+        s.setAgentTask(roleId, phase.task);
+        s.setAgentJob(roleId, 9000 + counter);
+        s.pushTicker({ ts: Date.now(), source: roleId, text: phase.ticker });
+
+        await sleep(workMs);
+        if (cancelled) return;
+        const after = store.getState().agents[roleId];
+        if (!after || after.state !== "working") return;
+
+        // Chain handoff back to parent role.
+        const parent = ROLES[profile.parentRoleId];
+        const fromRole = store.getState().roles[roleId];
+        if (parent && fromRole) {
+          store.getState().pushHandoff({
+            id: `spec-${roleId}-${counter}-${Date.now()}-${Math.random().toFixed(3)}`,
+            fromRoom: fromRole.room,
+            toRoom: parent.room,
+            color: fromRole.hex,
+            label: profile.parentLabel,
+            startedAt: Date.now(),
+            durationMs: 1700,
+          });
+          store.getState().pushTicker({
+            ts: Date.now(),
+            source: roleId,
+            text: `→ ${parent.name}: ${profile.parentLabel}`,
+          });
+        }
+
+        // Revenue per completed phase.
+        const usd = REVENUE_PER_PHASE[fromRole?.name ?? ""] ?? 0.05;
+        store.getState().addRevenue(roleId, usd);
+
+        await sleep(rand(200, 600));
       }
     }
 
@@ -406,7 +551,6 @@ export function useDemoFloor(enabled = true) {
     }
     orchestratorSiteVisits();
 
-    // TODO: chain-handoff integration with specialists is deferred.
     const hiredSignals = new Set<string>();
     const hireInterval = setInterval(() => {
       if (cancelled) return;
@@ -414,12 +558,20 @@ export function useDemoFloor(enabled = true) {
         if (hiredSignals.has(sig.name)) continue;
         if (!sig.trigger(SIM)) continue;
         hiredSignals.add(sig.name);
+        const beforeIds = new Set(Object.keys(store.getState().roles));
         const e = sig.spec();
         store.getState().fireHireEvent({
           ...e,
           id: `demo-${sig.name}-${Date.now()}`,
           ts: Date.now(),
         });
+        const afterIds = Object.keys(store.getState().roles);
+        const newId = afterIds.find((id) => !beforeIds.has(id));
+        if (newId) {
+          const role = store.getState().roles[newId];
+          const profile = SPECIALIST_PROFILES[role.name];
+          if (profile) runSpecialistLoop(newId, profile);
+        }
         if (sig.name === "designer queue backlog") SIM.designerQueue = 1;
         if (sig.name === "dispute volume")        SIM.openDisputes = 0;
         if (sig.name === "translation demand")    SIM.intlOrdersPending = 0;

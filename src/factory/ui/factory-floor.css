@@ -149,6 +149,30 @@ input, textarea { font: inherit; color: inherit; }
 
 .topbar-spacer { flex: 1; }
 
+.topbar-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.topbar-pill-label {
+  font-size: 10px;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.topbar-pill-value {
+  color: var(--ink-0);
+  font-weight: 500;
+}
+.topbar-net.is-gain .topbar-pill-value { color: #6bd968; }
+.topbar-net.is-loss .topbar-pill-value { color: #ff6b6b; }
+
 .alert-pill, .gate-pill, .topbar-icon {
   height: 32px;
   padding: 0 12px;
