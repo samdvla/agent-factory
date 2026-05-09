@@ -49,13 +49,16 @@ def run(handle) -> None:
                 job_id = params.get("job_id", 0)
                 payload = params.get("payload", {})
                 result = handle(method, {"job_id": job_id, "payload": payload})
-                # Check for handoff before sending response (CFO has none, but keep protocol uniform)
+                # Check for handoff before sending response (protocol uniform across all workers)
                 handoff = result.pop("handoff", None) if isinstance(result, dict) else None
                 if handoff:
-                    p.send_notification("enqueue_handoff", {
+                    notif: dict = {
                         "to_role": handoff["to_role"],
                         "payload": handoff["payload"],
-                    })
+                    }
+                    if "delay_ms" in handoff:
+                        notif["delay_ms"] = handoff["delay_ms"]
+                    p.send_notification("enqueue_handoff", notif)
                 if rid is not None:
                     p.send_response(rid, result)
             elif method == "ping":

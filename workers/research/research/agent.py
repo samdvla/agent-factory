@@ -9,29 +9,41 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
 
-def build_demand_brief_prompt() -> tuple[str, str]:
+JSON_SHAPE = (
+    "{\n"
+    '  "niche": "<short specific niche, e.g. \'minimalist line art prints\'>",\n'
+    '  "keywords": ["<10-15 SEO keywords>"],\n'
+    '  "price_band_usd": [<low>, <high>],\n'
+    '  "competition": "<low|medium|high>",\n'
+    '  "rationale": "<one sentence reasoning>"\n'
+    "}"
+)
+
+
+def build_demand_brief_prompt(niche_seed: str | None = None, rationale: str | None = None) -> tuple[str, str]:
     system = (
         "You are a Market Research Analyst at an AI-run digital products Etsy shop. "
         "Your job is to identify a profitable niche and return a structured JSON Demand Brief. "
         "Be concise and specific. Only return valid JSON, no prose, no markdown."
     )
-    user = (
-        "Generate a Demand Brief for a digital-product Etsy shop. "
-        "Pick a niche that's currently in demand for printables, SVGs, or digital templates. "
-        "Return JSON only with this exact shape:\n"
-        "{\n"
-        '  "niche": "<short specific niche, e.g. \'minimalist line art prints\'>",\n'
-        '  "keywords": ["<10-15 SEO keywords>"],\n'
-        '  "price_band_usd": [<low>, <high>],\n'
-        '  "competition": "<low|medium|high>",\n'
-        '  "rationale": "<one sentence reasoning>"\n'
-        "}"
-    )
+    if niche_seed:
+        seed_text = niche_seed
+        rat_text = rationale or "no rationale provided"
+        user = (
+            f'The strategy lead picked this niche to pursue: "{seed_text}" — rationale: "{rat_text}". '
+            f"Build a Demand Brief for it. Return JSON only with the shape {JSON_SHAPE}"
+        )
+    else:
+        user = (
+            "Generate a Demand Brief for a digital-product Etsy shop. "
+            "Pick a niche that's currently in demand for printables, SVGs, or digital templates. "
+            f"Return JSON only with this exact shape:\n{JSON_SHAPE}"
+        )
     return system, user
 
 
-def call_anthropic(api_key: str) -> dict:
-    system_prompt, user_prompt = build_demand_brief_prompt()
+def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str | None = None) -> dict:
+    system_prompt, user_prompt = build_demand_brief_prompt(niche_seed=niche_seed, rationale=rationale)
 
     body = json.dumps({
         "model": MODEL,
@@ -90,9 +102,14 @@ def process_job(job_id: int, payload: dict) -> dict:
             "ticker_text": f"research failed: {msg}",
         }
 
-    print(f"[research] job_id={job_id} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
+    niche_seed: str | None = payload.get("niche_seed") or None
+    rationale: str | None = payload.get("rationale") or None
+    if niche_seed:
+        print(f"[research] job_id={job_id} seeded niche={niche_seed!r} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
+    else:
+        print(f"[research] job_id={job_id} calling Anthropic model={MODEL} (no seed)", file=sys.stderr, flush=True)
     try:
-        brief, tokens_in, tokens_out = call_anthropic(api_key)
+        brief, tokens_in, tokens_out = call_anthropic(api_key, niche_seed=niche_seed, rationale=rationale)
         ticker_text = (
             f"niche: {brief['niche']} · {brief['competition']} comp "
             f"· ${brief['price_band_usd'][0]}-{brief['price_band_usd'][1]}"

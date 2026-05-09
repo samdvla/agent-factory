@@ -28,6 +28,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   revenueByRole: {},
   handoffs: [],
   lastActivityAt: 0,
+  realActivityAt: {},
   agentTravel: {},
   agentLastIdleAt: {},
 
@@ -71,6 +72,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     if (target) next[roleId] = target; else delete next[roleId];
     return { agentTravel: next, lastActivityAt: Date.now() };
   }),
+  markRealActivity: (roleId) => set((s) => ({
+    realActivityAt: { ...s.realActivityAt, [roleId]: Date.now() },
+  })),
+
   addRevenue: (roleId, usd) => set((s) => ({
     revenueTodayUsd: s.revenueTodayUsd + usd,
     revenueByRole: {

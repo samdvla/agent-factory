@@ -127,6 +127,8 @@ export type FactoryStore = {
   revenueByRole: Record<string, number>;
   handoffs: Handoff[];
   lastActivityAt: number;
+  /** Tracks when a real (supervisor-backed) ticker last fired per role id. */
+  realActivityAt: Record<string, number>;
   agentTravel: Record<string, {
     roomId: string;
     stationIdx: number;
@@ -135,6 +137,8 @@ export type FactoryStore = {
     durationPerSegmentMs?: number;
   } | undefined>;
   agentLastIdleAt: Record<string, number>;
+
+  markRealActivity: (roleId: string) => void;
 
   setAgentState: (role: string, state: AgentVisualState) => void;
   setAgentJob: (role: string, jobId: number | null) => void;

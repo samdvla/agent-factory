@@ -176,7 +176,11 @@ export function useFoundingLoops(
         s.setAgentState(roleId, "working");
         s.setAgentTask(roleId, phase.task);
         s.setAgentJob(roleId, 1000 + counters[roleId]);
-        s.pushTicker({ ts: Date.now(), source: roleId, text: phase.ticker });
+        // Suppress mock ticker when a real pipeline event fired recently (last 30s).
+        const lastReal = s.realActivityAt[roleId] ?? 0;
+        if (Date.now() - lastReal > 30_000) {
+          s.pushTicker({ ts: Date.now(), source: roleId, text: phase.ticker });
+        }
 
         // Patrol darts (boss only) — staggered while working
         if (loop.patrol && loop.patrol.length) {
@@ -226,11 +230,16 @@ export function useFoundingLoops(
           }
         }
 
-        // Award revenue for the completed phase.
+        // Award demo revenue for the completed phase — skip when the real pipeline
+        // fired recently to avoid double-counting with CFO's actual net_usd.
         const earnerRole = ROLES[roleId];
         if (earnerRole) {
-          const usd = REVENUE_PER_PHASE[earnerRole.name] ?? 0.05;
-          store.getState().addRevenue(roleId, usd);
+          const recentReal =
+            Date.now() - (store.getState().realActivityAt[roleId] ?? 0) < 30_000;
+          if (!recentReal) {
+            const usd = REVENUE_PER_PHASE[earnerRole.name] ?? 0.05;
+            store.getState().addRevenue(roleId, usd);
+          }
         }
 
         // Brief micro-pause — kept very short so visually the agent never

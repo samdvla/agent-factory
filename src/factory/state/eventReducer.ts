@@ -88,6 +88,15 @@ export function applySupervisorEvent(
           source: r,
           text: tickerText,
         });
+        // Mark real activity so the demo loop suppresses its mock ticker for this role.
+        store.markRealActivity(r);
+        // CFO net_usd drives the Revenue pill.
+        if (evt.role === "cfo" && result) {
+          const net = result["net_usd"];
+          if (typeof net === "number" && net > 0) {
+            store.addRevenue(r, net);
+          }
+        }
       }
       break;
     }

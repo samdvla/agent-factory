@@ -125,16 +125,27 @@ async fn run_worker_loop(
                         if method == "enqueue_handoff" {
                             let to_role = params.get("to_role")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                                .unwrap_or("")
+                                .to_string();
                             let payload = params.get("payload")
                                 .cloned()
                                 .unwrap_or(serde_json::json!({}));
+                            let delay_ms = params.get("delay_ms")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
                             if !to_role.is_empty() {
-                                if let Err(e) = queue::enqueue(pool, project_id, to_role, payload).await {
-                                    tracing::error!("handoff enqueue failed: {e}");
-                                } else {
-                                    tracing::info!("handoff enqueued: {} → {}", role, to_role);
-                                }
+                                let pool_clone = pool.clone();
+                                let from_role = role.to_string();
+                                tokio::spawn(async move {
+                                    if delay_ms > 0 {
+                                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                                    }
+                                    if let Err(e) = queue::enqueue(&pool_clone, project_id, &to_role, payload).await {
+                                        tracing::error!("delayed handoff enqueue failed: {e}");
+                                    } else {
+                                        tracing::info!("handoff enqueued: {} → {} (delay {}ms)", from_role, to_role, delay_ms);
+                                    }
+                                });
                             }
                         }
                         bus.send(SupervisorEvent::WorkerNotification {

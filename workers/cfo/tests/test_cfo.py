@@ -12,8 +12,10 @@ def test_cfo_closes_pipeline():
     assert "gross_usd" in result
     assert "net_usd" in result
     assert "cfo" in result["ticker_text"]
-    # No handoff — pipeline closes here
-    assert "handoff" not in result
+    # CFO now enqueues the next orchestrator cycle via a delayed handoff
+    assert "handoff" in result
+    assert result["handoff"]["to_role"] == "orchestrator"
+    assert result["handoff"]["delay_ms"] == 60_000
 
 
 def test_cfo_handles_missing_price():

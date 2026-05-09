@@ -112,7 +112,7 @@ impl Worker {
         self.stdin.lock().await.write_all(line.as_bytes()).await?;
         self.stdin.lock().await.flush().await?;
 
-        let value = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
+        let value = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
             .await
             .map_err(|_| anyhow!("worker request timed out"))??;
         Ok(value)

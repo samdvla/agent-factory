@@ -33,5 +33,14 @@ def handle(method: str, params: dict) -> dict:
         "fees_usd": fees,
         "net_usd": net,
         "ticker_text": f"cfo · listing #{listing_id}: {sales} sales · gross ${gross} · net ${net}",
-        # No further handoff — this closes the pipeline.
+        # Kick off the next product cycle after a 60 s cooldown.
+        "handoff": {
+            "to_role": "orchestrator",
+            "payload": {
+                "trigger": "cfo_close",
+                "prev_listing_id": listing_id,
+                "prev_net_usd": net,
+            },
+            "delay_ms": 60_000,
+        },
     }
