@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
 import {
   floorPoly, wallNorthPoly, wallEastPoly, getRoomBounds, iso, ROOM_W, WALL_H,
@@ -90,11 +91,23 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
       fill="#0d141c" stroke="#1a2532" strokeWidth={0.5} />,
   ];
 
-  const opacity = room.dissolving ? 0 : 1;
+  const now = Date.now();
+  const age = room.createdAt ? now - room.createdAt : Infinity;
+  const isSpawning = age < 600 && !room.dissolving && room.createdAt !== 0;
+  const opacity = room.dissolving ? 0 : (isSpawning ? 0 : 1);
+
+  const [, force] = useState({});
+  useEffect(() => {
+    if (isSpawning) {
+      const t = setTimeout(() => force({}), 50);
+      return () => clearTimeout(t);
+    }
+  }, [isSpawning]);
+
   return (
-    <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}`}
+    <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
        data-room={roomId} data-name={room.name} data-occupant={room.occupant}
-       style={{ opacity, transition: "opacity 800ms ease-out" }}>
+       style={{ opacity, transition: room.dissolving ? "opacity 800ms ease-out" : "opacity 500ms ease-in" }}>
       <polygon className="room-glow" points={glowPolyPts} fill={accent} fillOpacity={0.06} />
       <polygon className="room-floor"
         points={floorPoly(b.x0, b.y0, b.x1, b.y1)}

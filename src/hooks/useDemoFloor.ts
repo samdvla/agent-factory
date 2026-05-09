@@ -537,14 +537,14 @@ export function useDemoFloor(enabled = true) {
 
     // Stagger kickoffs so loops don't fire in lockstep at start
     const kickoffs: Array<[string, number]> = [
-      ["research", 200],
-      ["orchestrator", 1100],
-      ["designer", 600],
-      ["listing", 1500],
-      ["publisher", 2400],
-      ["cs", 800],
-      ["cfo", 3200],
-      ["si", 1800],
+      ["orchestrator", 0],
+      ["research", 100],
+      ["designer", 250],
+      ["cs", 400],
+      ["listing", 550],
+      ["publisher", 700],
+      ["cfo", 900],
+      ["si", 1100],
     ];
     for (const [roleId, delay] of kickoffs) {
       runRoleLoop(roleId, delay);

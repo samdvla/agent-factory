@@ -101,9 +101,13 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         <span className="topbar-pill-value">${revenueUsd.toFixed(2)}</span>
       </div>
 
-      <div className={`topbar-pill topbar-net ${netUsd >= 0 ? "is-gain" : "is-loss"}`}>
+      <div className={`topbar-pill topbar-net${budgetUsd > 0 ? (netUsd >= 0 ? " is-gain" : " is-loss") : ""}`}>
         <span className="topbar-pill-label">Net</span>
-        <span className="topbar-pill-value">{netUsd >= 0 ? "+" : ""}${netUsd.toFixed(2)}</span>
+        <span className="topbar-pill-value">
+          {budgetUsd > 0
+            ? `${netUsd >= 0 ? "+" : ""}$${netUsd.toFixed(2)}`
+            : "—"}
+        </span>
       </div>
 
       <div className="topbar-spacer" />
