@@ -1,3 +1,4 @@
+use crate::budget;
 use crate::events::{EventBus, SupervisorEvent};
 use crate::queue;
 use crate::worker::{Worker, WorkerEvent};
@@ -181,6 +182,23 @@ async fn run_worker_loop(
                             Ok(result) => {
                                 if let Err(e) = queue::complete(pool, job_id, result.clone()).await {
                                     tracing::error!("complete failed: {e}");
+                                }
+                                // Emit budget spend if the worker reported token usage.
+                                if let (Some(tin), Some(tout), Some(model)) = (
+                                    result.get("tokens_in").and_then(|v| v.as_u64()),
+                                    result.get("tokens_out").and_then(|v| v.as_u64()),
+                                    result.get("model").and_then(|v| v.as_str()),
+                                ) {
+                                    let cost = budget::cost_usd(model, tin, tout);
+                                    if cost > 0.0 {
+                                        bus.send(SupervisorEvent::BudgetSpent {
+                                            role: role.into(),
+                                            cost_usd: cost,
+                                            tokens_in: tin,
+                                            tokens_out: tout,
+                                            model: model.to_string(),
+                                        });
+                                    }
                                 }
                                 bus.send(SupervisorEvent::JobCompleted {
                                     role: role.into(),

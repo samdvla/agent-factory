@@ -90,6 +90,7 @@ pub fn run() {
                     make_spec("listing", "listing"),
                     make_spec("publisher", "publisher"),
                     make_spec("cfo", "cfo"),
+                    make_spec("cs", "cs"),
                 ];
                 match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job).await {
                     Ok(handle) => {
@@ -98,15 +99,52 @@ pub fn run() {
                         tracing::info!("supervisor auto-started");
 
                         // Auto-enqueue an orchestrator job to kick off the full pipeline.
+                        let pool_boot = pool_for_job.clone();
                         tauri::async_runtime::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             if let Err(e) = queue::enqueue(
-                                &pool_for_job,
+                                &pool_boot,
                                 project_id_for_job,
                                 "orchestrator",
                                 serde_json::json!({"trigger": "boot"}),
                             ).await {
                                 tracing::warn!("auto-enqueue orchestrator failed: {e}");
+                            }
+                        });
+
+                        // Fake buyer message generator — fires a CS job every 90s with a
+                        // random topic. Gives the CS agent something to do until real Etsy
+                        // messages flow in.
+                        let pool_for_cs = pool_for_job.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Wait for first listing to exist before starting CS.
+                            tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+                            let topics = [
+                                "How do I download my purchase?",
+                                "Can I get a refund? I changed my mind.",
+                                "Could you customize this for my wedding?",
+                                "Is this licensed for commercial use?",
+                                "The PDF won't open on my phone.",
+                                "Can you send me higher resolution?",
+                                "Do you offer this in a different color?",
+                                "I love this! Could I get a discount on a bundle?",
+                            ];
+                            let mut interval = tokio::time::interval(std::time::Duration::from_secs(90));
+                            interval.tick().await; // skip the immediate first tick
+                            loop {
+                                interval.tick().await;
+                                // Pick a topic deterministically by time so it varies.
+                                let idx = (std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0) as usize) % topics.len();
+                                let payload = serde_json::json!({
+                                    "buyer_message": topics[idx],
+                                    "trigger": "fake_message",
+                                });
+                                if let Err(e) = queue::enqueue(&pool_for_cs, project_id_for_job, "cs", payload).await {
+                                    tracing::warn!("fake message enqueue failed: {e}");
+                                }
                             }
                         });
                     }

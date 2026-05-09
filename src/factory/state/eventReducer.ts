@@ -132,6 +132,13 @@ export function applySupervisorEvent(
         store.setBudget(evt.usd_today);
       }
       break;
+    case "budget_spent": {
+      const cost = (evt as any).cost_usd as number;
+      if (typeof cost === "number" && cost > 0) {
+        store.setBudget(store.budgetTodayUsd + cost);
+      }
+      break;
+    }
     default:
       console.warn("Unknown supervisor event kind:", evt.kind, evt);
   }

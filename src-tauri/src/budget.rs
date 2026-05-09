@@ -1,5 +1,21 @@
 use sqlx::SqlitePool;
 
+/// Compute USD cost from token counts and model name.
+/// Prices per 1M tokens (Anthropic public pricing, late 2025).
+pub fn cost_usd(model: &str, tokens_in: u64, tokens_out: u64) -> f64 {
+    let (price_in, price_out) = if model.contains("haiku") {
+        (1.0_f64, 5.0_f64)
+    } else if model.contains("sonnet") {
+        (3.0, 15.0)
+    } else if model.contains("opus") {
+        (15.0, 75.0)
+    } else {
+        (3.0, 15.0) // safe default
+    };
+    (tokens_in as f64 / 1_000_000.0) * price_in
+        + (tokens_out as f64 / 1_000_000.0) * price_out
+}
+
 fn price_per_million(model: &str) -> (f64, f64) {
     // (input_usd_per_million, output_usd_per_million)
     // Source: Anthropic public pricing as of 2026-05; update if pricing changes.

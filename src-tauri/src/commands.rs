@@ -71,6 +71,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         make_spec("listing", "listing"),
         make_spec("publisher", "publisher"),
         make_spec("cfo", "cfo"),
+        make_spec("cs", "cs"),
     ];
 
     let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id)

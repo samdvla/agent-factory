@@ -12,6 +12,7 @@ pub enum SupervisorEvent {
     JobFailed { role: String, job_id: i64, error: String },
     WorkerNotification { role: String, method: String, params: Value },
     BudgetTick { project_id: i64, usd_today: f64 },
+    BudgetSpent { role: String, cost_usd: f64, tokens_in: u64, tokens_out: u64, model: String },
 }
 
 #[derive(Clone)]
