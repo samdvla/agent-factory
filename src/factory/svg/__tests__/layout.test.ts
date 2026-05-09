@@ -38,4 +38,26 @@ describe("computeCorridors", () => {
     const single: Room[] = [FOUNDING_ROOMS[0]];
     expect(computeCorridors(single)).toEqual([]);
   });
+
+  it("vertical corridor y1 equals 20 for founding 7-room layout", () => {
+    const strips = computeCorridors(FOUNDING_ROOMS);
+    const verticals = strips.filter((s) => s.x1 - s.x0 < s.y1 - s.y0);
+    for (const v of verticals) expect(v.y1).toBeCloseTo(20, 5);
+  });
+
+  it("horizontal corridor at y=13..14 spans only col 1 (cs↔silab adjacent)", () => {
+    const strips = computeCorridors(FOUNDING_ROOMS);
+    const row12 = strips.find((s) => Math.abs(s.y0 - 13) < 0.01);
+    expect(row12).toBeDefined();
+    expect(row12!.x0).toBeCloseTo(7, 5);   // col 1 left edge
+    expect(row12!.x1).toBeCloseTo(13, 5);  // col 1 right edge
+  });
+
+  it("horizontal corridor at y=6..7 spans full width 0..20 for row 0↔1", () => {
+    const strips = computeCorridors(FOUNDING_ROOMS);
+    const row01 = strips.find((s) => Math.abs(s.y0 - 6) < 0.01);
+    expect(row01).toBeDefined();
+    expect(row01!.x0).toBeCloseTo(0, 5);
+    expect(row01!.x1).toBeCloseTo(20, 5);
+  });
 });

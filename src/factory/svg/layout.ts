@@ -27,7 +27,7 @@ export function computeCorridors(rooms: Room[]): Strip[] {
   const rowMax = Math.max(...rows);
 
   const yTop = rowMin * (ROOM_H + GAP);
-  const yBot = (rowMax + 1) * (ROOM_H + GAP) - GAP + GAP;
+  const yBot = (rowMax + 1) * (ROOM_H + GAP) - GAP;
 
   const strips: Strip[] = [];
 
@@ -46,12 +46,20 @@ export function computeCorridors(rooms: Room[]): Strip[] {
   for (let r = rowMin; r < rowMax; r++) {
     const gapY0 = (r + 1) * (ROOM_H + GAP) - GAP;
     const gapY1 = gapY0 + GAP;
-    const hasTop = rooms.some((rr) => rr.row === r);
-    const hasBot = rooms.some((rr) => rr.row === r + 1);
-    if (!hasTop && !hasBot) continue;
-    const minCellX = Math.min(...rooms.map((rr) => roomCellX(rr.col).x0));
-    const maxCellX = Math.max(...rooms.map((rr) => roomCellX(rr.col).x1));
-    strips.push({ x0: minCellX, x1: maxCellX + GAP, y0: gapY0, y1: gapY1 });
+    const adjacent = rooms.filter((rr) => rr.row === r || rr.row === r + 1);
+    if (!adjacent.length) continue;
+    const hasTop = adjacent.some((rr) => rr.row === r);
+    const hasBot = adjacent.some((rr) => rr.row === r + 1);
+    if (!hasTop || !hasBot) continue;
+    // Span only columns that appear on both sides of the gap so the corridor
+    // doesn't extend into columns that have no room on one of the two rows.
+    const topCols = new Set(rooms.filter((rr) => rr.row === r).map((rr) => rr.col));
+    const botCols = new Set(rooms.filter((rr) => rr.row === r + 1).map((rr) => rr.col));
+    const sharedCols = [...topCols].filter((c) => botCols.has(c));
+    const scopeCols = sharedCols.length ? sharedCols : [...topCols, ...botCols];
+    const minCellX = Math.min(...scopeCols.map((c) => roomCellX(c).x0));
+    const maxCellX = Math.max(...scopeCols.map((c) => roomCellX(c).x1));
+    strips.push({ x0: minCellX, x1: maxCellX, y0: gapY0, y1: gapY1 });
   }
 
   return strips;
