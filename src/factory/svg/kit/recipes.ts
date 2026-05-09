@@ -12,13 +12,13 @@ export const RECIPES: Record<RoomTag, RecipeDefaults> = {
   creative: { wallFeature: "moodboard", stationLayout: "central",   defaultCapacity: 1, features: ["color-rack", "drafting"] },
   copy:     { wallFeature: "kanban",    stationLayout: "row",       defaultCapacity: 2, features: ["printer", "binder-stack"] },
   comms:    { wallFeature: "chatwall",  stationLayout: "perimeter", defaultCapacity: 4, features: ["phone-bank", "headset", "queue-board"] },
-  finance:  { wallFeature: "ledger",    stationLayout: "central",   defaultCapacity: 1, features: ["safe", "file-cabinet"] },
+  finance:  { wallFeature: "ledger",    stationLayout: "central",   defaultCapacity: 1, features: ["safe", "file-cabinet", "token-meter"] },
   rd:       { wallFeature: "logwall",   stationLayout: "central",   defaultCapacity: 1, features: ["server-rack", "lab-bench"] },
-  bridge:   { wallFeature: "warmap",    stationLayout: "cluster",   defaultCapacity: 1, features: ["conference-table"] },
-  legal:    { wallFeature: "docs",      stationLayout: "row",       defaultCapacity: 2, features: ["law-shelf", "file-safe"] },
+  bridge:   { wallFeature: "warmap",    stationLayout: "cluster",   defaultCapacity: 1, features: ["conference-table", "kpi-panel"] },
+  legal:    { wallFeature: "docs",      stationLayout: "row",       defaultCapacity: 2, features: ["law-shelf", "file-safe", "doc-stamp"] },
   ops:      { wallFeature: "datafeed",  stationLayout: "row",       defaultCapacity: 3, features: ["terminal-rack"] },
-  archive:  { wallFeature: "archive",   stationLayout: "perimeter", defaultCapacity: 1, features: ["archive-wall", "binder-stack"] },
-  dev:      { wallFeature: "logwall",   stationLayout: "row",       defaultCapacity: 2, features: ["terminal-rack", "server-rack"] },
+  archive:  { wallFeature: "archive",   stationLayout: "perimeter", defaultCapacity: 1, features: ["archive-wall", "binder-stack", "carousel"] },
+  dev:      { wallFeature: "logwall",   stationLayout: "row",       defaultCapacity: 2, features: ["terminal-rack", "server-rack", "cable-tray"] },
 };
 
 export function kitFromTag(tag: RoomTag, accent: string, capacityOverride?: number): RoomKit {

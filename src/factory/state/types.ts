@@ -21,7 +21,8 @@ export type RoomFeature =
   | "bookshelf" | "binder-stack" | "color-rack" | "drafting" | "printer"
   | "safe" | "file-cabinet" | "conference-table" | "lab-bench" | "law-shelf"
   | "file-safe" | "terminal-rack" | "server-rack" | "phone-bank" | "headset"
-  | "queue-board" | "archive-wall";
+  | "queue-board" | "archive-wall"
+  | "kpi-panel" | "token-meter" | "carousel" | "cable-tray" | "doc-stamp";
 
 export type RoomKit = {
   primaryTag: RoomTag;

@@ -7,6 +7,7 @@ import {
   ColorRack, FilingCabinet, Printer, ServerRack, PhoneBank, Headset,
   CallQueueBoard, TerminalRack, LawBookshelf, FileSafe, ArchiveWall,
   LongCounter, OpenDeskRow,
+  Carousel, TokenMeter, KpiPanel, CableTray, DocStamp,
 } from "../furniture";
 
 export type StationPos = { x: number; y: number; label: string };
@@ -139,6 +140,21 @@ function renderAncillary(kit: RoomKit, ox: number, oy: number): React.ReactNode 
   if (kit.stationLayout === "perimeter" && kit.features.includes("phone-bank")) {
     items.push(<LongCounter key="lc" x={ox + 1.4} y={oy + 4.0} w={3.4} d={1.0} accent="#2a3849" />);
     items.push(<OpenDeskRow key="od" x={ox + 1.4} y={oy + 4.0} count={4} accent="#2a3849" />);
+  }
+  if (kit.features.includes("kpi-panel")) {
+    items.push(<KpiPanel key="kp" x={ox + 1.5} y={oy + 0.7} w={1.4} accent={kit.accent} />);
+  }
+  if (kit.features.includes("token-meter")) {
+    items.push(<TokenMeter key="tm" x={ox + 4.7} y={oy + 4.5} accent={kit.accent} />);
+  }
+  if (kit.features.includes("carousel")) {
+    items.push(<Carousel key="ca" x={ox + 4.5} y={oy + 4.5} />);
+  }
+  if (kit.features.includes("cable-tray")) {
+    items.push(<CableTray key="ct" x={ox + 1.6} y={oy + 4.0} w={3.0} />);
+  }
+  if (kit.features.includes("doc-stamp")) {
+    items.push(<DocStamp key="ds" x={ox + 4.4} y={oy + 4.5} accent={kit.accent} />);
   }
   items.push(<Plant key="pl" x={ox + 5.25} y={oy + 5.0} />);
   return items;
