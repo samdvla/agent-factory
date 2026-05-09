@@ -12,6 +12,8 @@ def handle(method: str, params: dict) -> dict:
     job_id = params.get("job_id", 0)
     payload = params.get("payload", {})
     listing = payload.get("listing", {})
+    brief = payload.get("brief", {})
+    niche = brief.get("niche") if isinstance(brief, dict) else None
     title = listing.get("title", "untitled")
 
     listing_id = int(hashlib.sha256(title.encode()).hexdigest()[:12], 16) % 10_000_000
@@ -20,6 +22,7 @@ def handle(method: str, params: dict) -> dict:
         "title": title,
         "price_usd": listing.get("price_usd"),
         "tags": listing.get("tags"),
+        "niche": niche,
         "published_at": datetime.now(timezone.utc).isoformat(),
         "status": "live",
     }
@@ -45,6 +48,10 @@ def handle(method: str, params: dict) -> dict:
         "ticker_text": f"publisher → cfo: listing #{listing_id} LIVE (sandbox)",
         "handoff": {
             "to_role": "cfo",
-            "payload": {"listing_id": listing_id, "price_usd": record["price_usd"]},
+            "payload": {
+                "listing_id": listing_id,
+                "price_usd": record["price_usd"],
+                "niche": niche,
+            },
         },
     }

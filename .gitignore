@@ -19,6 +19,7 @@ workers/**/*.egg-info/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 
 # OS

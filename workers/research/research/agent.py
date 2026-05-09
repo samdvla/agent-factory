@@ -9,6 +9,20 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
 
+def _load_system_override(role: str) -> str | None:
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    path = os.path.expanduser("~/.agent-factory/prompts.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        ov = data.get(role, {}).get("system_override")
+        if isinstance(ov, str) and ov.strip():
+            return ov
+    except Exception:
+        pass
+    return None
+
+
 JSON_SHAPE = (
     "{\n"
     '  "niche": "<short specific niche, e.g. \'minimalist line art prints\'>",\n'
@@ -44,6 +58,9 @@ def build_demand_brief_prompt(niche_seed: str | None = None, rationale: str | No
 
 def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str | None = None) -> dict:
     system_prompt, user_prompt = build_demand_brief_prompt(niche_seed=niche_seed, rationale=rationale)
+    override = _load_system_override("research")
+    if override:
+        system_prompt = override
 
     body = json.dumps({
         "model": MODEL,

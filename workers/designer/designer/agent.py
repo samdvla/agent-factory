@@ -8,6 +8,20 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
 
+def _load_system_override(role: str) -> str | None:
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    path = os.path.expanduser("~/.agent-factory/prompts.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        ov = data.get(role, {}).get("system_override")
+        if isinstance(ov, str) and ov.strip():
+            return ov
+    except Exception:
+        pass
+    return None
+
+
 def build_designer_prompt(brief: dict) -> tuple[str, str]:
     system = (
         "You are the Designer at an AI-run digital-products Etsy shop. "
@@ -29,6 +43,9 @@ def build_designer_prompt(brief: dict) -> tuple[str, str]:
 
 def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
     system_prompt, user_prompt = build_designer_prompt(brief)
+    override = _load_system_override("designer")
+    if override:
+        system_prompt = override
 
     body = json.dumps({
         "model": MODEL,

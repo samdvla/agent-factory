@@ -1,5 +1,20 @@
+import json
+import os
 import random
 import sys
+import time
+
+
+def _append_outcome(outcome: dict) -> None:
+    """Append one JSON line to ~/.agent-factory/outcomes.jsonl. Failures are non-fatal."""
+    try:
+        data_dir = os.environ.get("AGENT_FACTORY_DATA", os.path.expanduser("~/.agent-factory"))
+        os.makedirs(data_dir, exist_ok=True)
+        path = os.path.join(data_dir, "outcomes.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(outcome) + "\n")
+    except Exception as e:
+        print(f"[cfo] WARN failed to append outcomes.jsonl: {e}", file=sys.stderr, flush=True)
 
 
 def handle(method: str, params: dict) -> dict:
@@ -12,6 +27,7 @@ def handle(method: str, params: dict) -> dict:
     price = payload.get("price_usd", 4.0)
     if price is None:
         price = 4.0
+    niche = payload.get("niche")
 
     # Simulate week 1 sales: 0-3 units typical for a fresh listing.
     sales = max(0, int(random.gauss(1.2, 1.0)))
@@ -24,6 +40,15 @@ def handle(method: str, params: dict) -> dict:
         file=sys.stderr,
         flush=True,
     )
+
+    # Record outcome for the SI loop. Failures must not crash cfo.
+    _append_outcome({
+        "ts": int(time.time()),
+        "listing_id": listing_id,
+        "niche": niche,
+        "sales": sales,
+        "revenue_usd": gross,
+    })
 
     return {
         "ok": True,

@@ -3,6 +3,20 @@ import os
 import urllib.request
 
 
+def _load_system_override(role: str) -> str | None:
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    path = os.path.expanduser("~/.agent-factory/prompts.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        ov = data.get(role, {}).get("system_override")
+        if isinstance(ov, str) and ov.strip():
+            return ov
+    except Exception:
+        pass
+    return None
+
+
 def build_reply_prompt(buyer_message: str, listing_title: str | None = None) -> tuple[str, str]:
     system = (
         "You are the Customer Service agent at an AI-run digital-products Etsy shop. "
@@ -49,6 +63,9 @@ def handle(method, params):
     listing_title = payload.get("listing_title")
     try:
         system, user = build_reply_prompt(buyer_message, listing_title)
+        override = _load_system_override("cs")
+        if override:
+            system = override
         resp = call_claude(system, user)
         text = resp["content"][0]["text"]
         parsed = json.loads(text)

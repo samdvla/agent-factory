@@ -91,6 +91,7 @@ pub fn run() {
                     make_spec("publisher", "publisher"),
                     make_spec("cfo", "cfo"),
                     make_spec("cs", "cs"),
+                    make_spec("si", "si"),
                 ];
                 match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job).await {
                     Ok(handle) => {
@@ -144,6 +145,23 @@ pub fn run() {
                                 });
                                 if let Err(e) = queue::enqueue(&pool_for_cs, project_id_for_job, "cs", payload).await {
                                     tracing::warn!("fake message enqueue failed: {e}");
+                                }
+                            }
+                        });
+
+                        // SI loop — every 5 minutes, ask the SI agent to inspect recent
+                        // outcomes and propose at most one prompt tweak. The agent itself
+                        // skips if there aren't enough outcomes yet.
+                        let pool_for_si = pool_for_job.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                            interval.tick().await; // skip the immediate first tick
+                            loop {
+                                interval.tick().await;
+                                let payload = serde_json::json!({"trigger": "loop_b"});
+                                if let Err(e) = queue::enqueue(&pool_for_si, project_id_for_job, "si", payload).await {
+                                    tracing::warn!("si enqueue failed: {e}");
                                 }
                             }
                         });
