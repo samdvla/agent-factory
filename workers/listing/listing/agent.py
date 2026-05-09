@@ -139,7 +139,7 @@ def handle(method: str, params: dict) -> dict:
             "tokens_out": tokens_out,
             "handoff": {
                 "to_role": "publisher",
-                "payload": {"listing": listing, "brief": brief},
+                "payload": {"listing": listing, "brief": brief, "asset": asset},
             },
         }
     except Exception as e:

@@ -13,6 +13,7 @@ def handle(method: str, params: dict) -> dict:
     payload = params.get("payload", {})
     listing = payload.get("listing", {})
     brief = payload.get("brief", {})
+    asset = payload.get("asset", {})
     niche = brief.get("niche") if isinstance(brief, dict) else None
     title = listing.get("title", "untitled")
 
@@ -52,6 +53,15 @@ def handle(method: str, params: dict) -> dict:
                 "listing_id": listing_id,
                 "price_usd": record["price_usd"],
                 "niche": niche,
+                "title": listing.get("title", ""),
+                "description": listing.get("description", ""),
+                "tags": listing.get("tags", []),
+                "asset_brief": (
+                    asset.get("brief_for_image_gen", "")
+                    if isinstance(asset, dict)
+                    else ""
+                ) or payload.get("asset_brief", ""),
+                "brief": brief if isinstance(brief, dict) else {},
             },
         },
     }
