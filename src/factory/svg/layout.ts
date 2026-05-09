@@ -168,6 +168,28 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
   return best;
 }
 
+export type FacilityLayout = {
+  hash: string;
+  corridors: Strip[];
+  doors: Map<string, DoorSet>;
+};
+
+export function roomsHash(rooms: Room[]): string {
+  return rooms
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((r) => `${r.id}@${r.col},${r.row}`)
+    .join("|");
+}
+
+export function computeFacilityLayout(rooms: Room[]): FacilityLayout {
+  return {
+    hash: roomsHash(rooms),
+    corridors: computeCorridors(rooms),
+    doors: computeDoors(rooms),
+  };
+}
+
 export type Waypoint = { x: number; y: number };
 
 function roomCenterPt(room: Room): Waypoint {

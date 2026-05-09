@@ -147,3 +147,22 @@ describe("findPath", () => {
     expect(findPath(FOUNDING_ROOMS, "nonexistent", "strategy")).toEqual([]);
   });
 });
+
+import { computeFacilityLayout, roomsHash } from "../layout";
+
+describe("computeFacilityLayout", () => {
+  it("returns corridors + doors + an unchanged hash for identical rooms", () => {
+    const a = computeFacilityLayout(FOUNDING_ROOMS);
+    const b = computeFacilityLayout(FOUNDING_ROOMS);
+    expect(a.hash).toBe(b.hash);
+    expect(a.corridors.length).toBe(b.corridors.length);
+    expect(a.doors.size).toBe(b.doors.size);
+  });
+
+  it("hash changes when a room moves", () => {
+    const moved = FOUNDING_ROOMS.map((r) => r.id === "silab" ? { ...r, col: 2 } : r);
+    const a = roomsHash(FOUNDING_ROOMS);
+    const b = roomsHash(moved);
+    expect(a).not.toBe(b);
+  });
+});
