@@ -3,12 +3,101 @@ import os
 import sys
 import urllib.request
 import urllib.error
+from collections import defaultdict
 
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 400
 
+OUTCOMES_TAIL_LIMIT = 30
+NICHE_MIN_OUTCOMES = 5
+NICHE_MIN_SAMPLES_PER_BUCKET = 2
 
-def build_orchestrator_prompt() -> tuple[str, str]:
+
+def _data_dir() -> str:
+    """Resolve the agent-factory data dir at call time so tests can monkey-patch HOME."""
+    return os.path.expanduser("~/.agent-factory")
+
+
+def _outcomes_path() -> str:
+    return os.path.join(_data_dir(), "outcomes.jsonl")
+
+
+def _read_recent_outcomes(limit: int = OUTCOMES_TAIL_LIMIT, path: str | None = None) -> list[dict]:
+    """Read up to `limit` most recent outcomes from outcomes.jsonl. Skip malformed lines."""
+    p = path if path is not None else _outcomes_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    tail = lines[-limit:] if len(lines) > limit else lines
+    out: list[dict] = []
+    for line in tail:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+def _summarize_outcomes(outcomes: list[dict]) -> str | None:
+    """Bucket outcomes by niche, compute avg revenue, render a niche-memory context string.
+
+    Returns None when there are not enough outcomes to be meaningful, or when no
+    niche has at least the minimum samples per bucket.
+    """
+    if not outcomes or len(outcomes) < NICHE_MIN_OUTCOMES:
+        return None
+    buckets: dict[str, dict] = defaultdict(lambda: {"revenue": 0.0, "count": 0})
+    for o in outcomes:
+        niche = str(o.get("niche") or "").strip()
+        if not niche:
+            continue
+        try:
+            rev = float(o.get("revenue_usd") or 0.0)
+        except (TypeError, ValueError):
+            rev = 0.0
+        b = buckets[niche]
+        b["revenue"] += rev
+        b["count"] += 1
+
+    qualified = [
+        (niche, b["revenue"] / b["count"], b["count"])
+        for niche, b in buckets.items()
+        if b["count"] >= NICHE_MIN_SAMPLES_PER_BUCKET
+    ]
+    if not qualified:
+        return None
+
+    qualified.sort(key=lambda t: t[1], reverse=True)
+    top = qualified[:3]
+    # Bottom = up to 3 worst niches, excluding any already shown as top.
+    top_names = {n for n, _, _ in top}
+    bottom_pool = [t for t in reversed(qualified) if t[0] not in top_names]
+    if not bottom_pool and len(qualified) >= 2:
+        # Fewer than 4 niches → bottom would otherwise be empty. Show the single worst.
+        bottom_pool = [qualified[-1]]
+    bottom = bottom_pool[:3]
+
+    top_str = ", ".join(f"{n} (${avg:.2f} avg)" for n, avg, _ in top)
+    lines = ["Recent shop performance:", f"Top performers: {top_str}"]
+    if bottom:
+        bottom_str = ", ".join(f"{n} (${avg:.2f} avg, {cnt} tries)" for n, avg, cnt in bottom)
+        lines.append(f"Underperformers: {bottom_str} — avoid retrying these.")
+    lines.append(
+        "Pick a NEW niche, ideally borrowing patterns from the top performers, NOT in the underperformer list."
+    )
+    return "\n".join(lines)
+
+
+def build_orchestrator_prompt(niche_context: str | None = None) -> tuple[str, str]:
     system = (
         "You are the Strategy Lead at an AI-run digital-products Etsy shop. "
         "Your job is to pick the next niche the shop should pursue. "
@@ -22,11 +111,13 @@ def build_orchestrator_prompt() -> tuple[str, str]:
         "}"
     )
     user = "Pick the next niche to pursue. Be specific."
+    if niche_context:
+        user = f"{niche_context}\n\n{user}"
     return system, user
 
 
-def call_anthropic(api_key: str) -> tuple[dict, int, int]:
-    system_prompt, user_prompt = build_orchestrator_prompt()
+def call_anthropic(api_key: str, niche_context: str | None = None) -> tuple[dict, int, int]:
+    system_prompt, user_prompt = build_orchestrator_prompt(niche_context=niche_context)
 
     body = json.dumps({
         "model": MODEL,
@@ -80,9 +171,16 @@ def handle(method: str, params: dict) -> dict:
             "ticker_text": f"orchestrator failed: {msg}",
         }
 
+    niche_context = _summarize_outcomes(_read_recent_outcomes())
+    if niche_context:
+        print(
+            f"[orchestrator] job_id={job_id} threading niche memory ({len(niche_context)} chars)",
+            file=sys.stderr,
+            flush=True,
+        )
     print(f"[orchestrator] job_id={job_id} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
     try:
-        data, tokens_in, tokens_out = call_anthropic(api_key)
+        data, tokens_in, tokens_out = call_anthropic(api_key, niche_context=niche_context)
         niche_seed = data.get("niche_seed", "unknown niche")
         rationale = data.get("rationale", "")
         target_audience = data.get("target_audience", "")
