@@ -18,6 +18,7 @@ def handle(method: str, params: dict) -> dict:
     title = listing.get("title", "untitled")
 
     listing_id = int(hashlib.sha256(title.encode()).hexdigest()[:12], 16) % 10_000_000
+    asset_path = asset.get("asset_path") if isinstance(asset, dict) else None
     record = {
         "listing_id": listing_id,
         "title": title,
@@ -26,6 +27,7 @@ def handle(method: str, params: dict) -> dict:
         "niche": niche,
         "published_at": datetime.now(timezone.utc).isoformat(),
         "status": "live",
+        "asset_path": asset_path,
     }
 
     # Store in a JSON file (sandbox mode — no real Etsy).
@@ -61,6 +63,7 @@ def handle(method: str, params: dict) -> dict:
                     if isinstance(asset, dict)
                     else ""
                 ) or payload.get("asset_brief", ""),
+                "asset_path": asset_path,
                 "brief": brief if isinstance(brief, dict) else {},
             },
         },

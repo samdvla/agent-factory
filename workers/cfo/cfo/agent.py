@@ -28,6 +28,7 @@ def _build_buyer_prompt(
     description: str,
     tags: list,
     price_usd: float,
+    asset_path: str | None = None,
 ) -> tuple[str, str]:
     system = (
         "You simulate a panel of typical Etsy shoppers browsing digital downloads. "
@@ -37,10 +38,15 @@ def _build_buyer_prompt(
         "weak products should get 0. Output JSON only with shape: "
         '{"sales": <int 0-10>, "rationale": "<one sentence>"}.'
     )
+    if asset_path:
+        asset_line = f"<svg saved at {asset_path}>"
+    else:
+        asset_line = "(no asset attached — text-only)"
     user = (
         f"Niche: {brief.get('niche', 'unknown')}\n"
         f"Competition: {brief.get('competition', 'unknown')}\n"
         f"Asset description: {asset_brief or '(none)'}\n"
+        f"Asset: {asset_line}\n"
         f"Listing title: {title}\n"
         f"Tags: {', '.join(tags or [])}\n"
         f"Price: ${price_usd}\n"
@@ -58,10 +64,13 @@ def _call_buyer_panel(
     description: str,
     tags: list,
     price_usd: float,
+    asset_path: str | None = None,
 ) -> tuple[int, str, int, int] | None:
     """Returns (sales, rationale, tokens_in, tokens_out) on success, None on any failure."""
     try:
-        system, user = _build_buyer_prompt(brief, asset_brief, title, description, tags, price_usd)
+        system, user = _build_buyer_prompt(
+            brief, asset_brief, title, description, tags, price_usd, asset_path
+        )
         body = json.dumps({
             "model": MODEL,
             "max_tokens": MAX_TOKENS,
@@ -111,6 +120,9 @@ def handle(method: str, params: dict) -> dict:
     description = payload.get("description", "") or ""
     tags = payload.get("tags") or []
     asset_brief = payload.get("asset_brief", "") or ""
+    asset_path = payload.get("asset_path")
+    if not isinstance(asset_path, str) or not asset_path:
+        asset_path = None
     brief = payload.get("brief") or {}
     if not isinstance(brief, dict):
         brief = {}
@@ -120,7 +132,7 @@ def handle(method: str, params: dict) -> dict:
     panel_result = None
     if api_key:
         panel_result = _call_buyer_panel(
-            api_key, brief, asset_brief, title, description, tags, price
+            api_key, brief, asset_brief, title, description, tags, price, asset_path
         )
 
     rationale = ""

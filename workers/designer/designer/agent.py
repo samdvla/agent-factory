@@ -7,6 +7,9 @@ import urllib.error
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
+SVG_MODEL = "claude-sonnet-4-6"
+SVG_MAX_TOKENS = 4000
+
 
 def _load_system_override(role: str) -> str | None:
     """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
@@ -84,6 +87,133 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
     return data, tokens_in, tokens_out
 
 
+def _build_svg_prompt(brief: dict, asset: dict) -> tuple[str, str]:
+    """Build the (system, user) prompt pair for the SVG-generation Sonnet call."""
+    system = (
+        "You produce clean, valid SVG markup for digital-product Etsy listings. "
+        "Output ONLY the SVG markup with no preamble, no explanation, no markdown "
+        "fences. The SVG must use viewBox 0 0 800 800, have a transparent or "
+        "palette-aligned background, and use simple shape primitives "
+        "(path, rect, circle, polygon, line, g, text). Keep it under 100 elements. "
+        "Match the requested style, palette, and niche."
+    )
+    niche = ""
+    if isinstance(brief, dict):
+        niche = brief.get("niche", "") or ""
+    style = asset.get("style", "") if isinstance(asset, dict) else ""
+    palette = asset.get("palette", []) if isinstance(asset, dict) else []
+    if isinstance(palette, list):
+        palette_str = ", ".join(str(p) for p in palette)
+    else:
+        palette_str = str(palette)
+    image_brief = asset.get("brief_for_image_gen", "") if isinstance(asset, dict) else ""
+
+    user = (
+        f"Niche: {niche}\n"
+        f"Style: {style}\n"
+        f"Palette: {palette_str}\n"
+        f"Image brief: {image_brief}\n"
+        "Generate the complete SVG markup now."
+    )
+    return system, user
+
+
+def _strip_svg_fences(text: str) -> str:
+    """Strip markdown code fences from a possibly-fenced SVG response.
+
+    Handles ```svg, ```xml, ``` (plain), and trailing ```.
+    """
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.split("\n")
+    # First line is the opening fence (e.g. ``` or ```svg or ```xml). Drop it.
+    lines = lines[1:]
+    # If the last non-empty line is a closing fence, drop it.
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    if lines and lines[-1].strip().startswith("```"):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _validate_svg(text: str) -> bool:
+    """Cheap structural check: starts with <svg, ends with </svg>, has a drawing element."""
+    if not text:
+        return False
+    lower = text.lower().strip()
+    if not lower.startswith("<svg"):
+        return False
+    if not lower.rstrip().endswith("</svg>"):
+        return False
+    drawing_tokens = ("<path", "<rect", "<circle", "<polygon", "<line", "<g ", "<g>", "<text")
+    return any(tok in lower for tok in drawing_tokens)
+
+
+def _call_svg(api_key: str, brief: dict, asset: dict) -> tuple[str, int, int] | None:
+    """Call Sonnet to produce SVG markup matching the asset brief.
+
+    Returns (svg_text, tokens_in, tokens_out) on success. Returns None on any
+    failure — Anthropic error, parse error, validation failure. The pipeline
+    must continue without an asset path on None.
+    """
+    try:
+        system, user = _build_svg_prompt(brief, asset)
+        body = json.dumps({
+            "model": SVG_MODEL,
+            "max_tokens": SVG_MAX_TOKENS,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=body,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            raw = resp.read().decode("utf-8")
+        response = json.loads(raw)
+        text = response["content"][0]["text"]
+        usage = response.get("usage", {})
+        tokens_in = usage.get("input_tokens", 0)
+        tokens_out = usage.get("output_tokens", 0)
+
+        stripped = _strip_svg_fences(text)
+        if not _validate_svg(stripped):
+            print(
+                f"[designer] svg validation failed; first 80 chars={stripped[:80]!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return None
+        return stripped, tokens_in, tokens_out
+    except Exception as e:
+        print(f"[designer] svg call failed: {e}", file=sys.stderr, flush=True)
+        return None
+
+
+def _save_svg(job_id: int, svg: str) -> str | None:
+    """Atomic write to ~/.agent-factory/assets/{job_id}.svg. Returns path or None."""
+    try:
+        data_dir = os.environ.get("AGENT_FACTORY_DATA", os.path.expanduser("~/.agent-factory"))
+        assets_dir = os.path.join(data_dir, "assets")
+        os.makedirs(assets_dir, exist_ok=True)
+        path = os.path.join(assets_dir, f"{job_id}.svg")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(svg)
+        os.replace(tmp, path)
+        return path
+    except Exception as e:
+        print(f"[designer] svg save failed: {e}", file=sys.stderr, flush=True)
+        return None
+
+
 def handle(method: str, params: dict) -> dict:
     if method != "process_job":
         return {"ok": False, "error": f"unknown method {method}"}
@@ -107,12 +237,39 @@ def handle(method: str, params: dict) -> dict:
         asset, tokens_in, tokens_out = call_anthropic(api_key, brief)
         asset_type = asset.get("asset_type", "printable")
         dimensions = asset.get("dimensions", "")
-        print(f"[designer] job_id={job_id} done asset_type={asset_type!r} in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
+
+        # Second call: Sonnet generates real SVG markup we save to disk.
+        # Any failure here is logged and the pipeline continues text-only.
+        svg_result = _call_svg(api_key, brief, asset)
+        if svg_result is not None:
+            svg, svg_in, svg_out = svg_result
+            asset_path = _save_svg(job_id, svg)
+            if asset_path:
+                asset["asset_path"] = asset_path
+                tokens_in += svg_in
+                tokens_out += svg_out
+                model_used = SVG_MODEL  # Sonnet dominates cost
+                svg_glyph = "svg ✓"
+            else:
+                asset["asset_path"] = None
+                model_used = MODEL
+                svg_glyph = "text only"
+        else:
+            asset["asset_path"] = None
+            model_used = MODEL
+            svg_glyph = "text only"
+
+        print(
+            f"[designer] job_id={job_id} done asset_type={asset_type!r} "
+            f"in={tokens_in} out={tokens_out} model={model_used} "
+            f"asset_path={asset.get('asset_path')!r}",
+            file=sys.stderr, flush=True,
+        )
         return {
             "ok": True,
             "asset": asset,
-            "ticker_text": f"designer → listing: {asset_type} · {dimensions}",
-            "model": MODEL,
+            "ticker_text": f"designer → listing: {asset_type} · {dimensions} · {svg_glyph}",
+            "model": model_used,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "handoff": {

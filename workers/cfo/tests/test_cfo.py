@@ -202,3 +202,71 @@ def test_outcomes_includes_rationale_when_sonnet_succeeded(tmp_path, monkeypatch
     record = json.loads(outcomes_path.read_text().strip().splitlines()[0])
     assert "rationale" in record
     assert record["rationale"] == "tags align with niche"
+
+
+# --- Slice G: cfo weighs asset presence in buyer prompt ---
+
+
+def _capturing_urlopen(captured: dict, response_text: str):
+    """Return a fake urlopen that records the request body into `captured["body"]`."""
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *a):
+            return False
+
+        def read(self_inner):
+            return json.dumps({
+                "content": [{"type": "text", "text": response_text}],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }).encode("utf-8")
+
+    def _fake(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _Resp()
+
+    return _fake
+
+
+def test_buyer_prompt_mentions_asset_when_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        _capturing_urlopen(captured, json.dumps({"sales": 4, "rationale": "ok"})),
+    )
+
+    payload = _full_payload(3030)
+    payload["asset_path"] = "/tmp/.agent-factory/assets/3030.svg"
+    result = handle("process_job", {"job_id": 20, "payload": payload})
+
+    assert result["ok"] is True
+    user_msg = captured["body"]["messages"][0]["content"]
+    assert "svg saved" in user_msg
+    assert "/tmp/.agent-factory/assets/3030.svg" in user_msg
+
+
+def test_buyer_prompt_says_text_only_when_no_asset(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        _capturing_urlopen(captured, json.dumps({"sales": 1, "rationale": "weak"})),
+    )
+
+    payload = _full_payload(4040)
+    payload["asset_path"] = None
+    result = handle("process_job", {"job_id": 21, "payload": payload})
+
+    assert result["ok"] is True
+    user_msg = captured["body"]["messages"][0]["content"]
+    assert "text-only" in user_msg
+    assert "no asset attached" in user_msg
