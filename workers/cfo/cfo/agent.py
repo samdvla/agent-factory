@@ -3,10 +3,44 @@ import os
 import random
 import sys
 import time
+import urllib.error
 import urllib.request
 
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 200
+
+
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+    """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
+    Returns the response body as utf-8 string. Raises on final failure.
+
+    _retry_request: see workers/research/tests/test_research.py for behavior coverage.
+    """
+    import time as _time
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            last_exc = e
+            if 500 <= e.code < 600 and attempt < max_attempts - 1:
+                delay = (2 ** attempt)
+                print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                delay = (2 ** attempt)
+                print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("retry: unreachable")
 
 
 def _append_outcome(outcome: dict) -> None:
@@ -87,8 +121,7 @@ def _call_buyer_panel(
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
+        raw = _retry_request(req, timeout=30)
         response = json.loads(raw)
         text = response["content"][0]["text"].strip()
         if text.startswith("```"):

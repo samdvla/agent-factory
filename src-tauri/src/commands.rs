@@ -44,6 +44,11 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         .ok()
         .flatten()
         .unwrap_or_default();
+    let daily_cap_usd: f64 = secrets::get("daily_budget_usd")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.00);
     let api_key_env = ("ANTHROPIC_API_KEY".into(), api_key.clone());
     let make_spec = |role: &str, worker_dir: &str| supervisor::AgentSpec {
         role: role.into(),
@@ -74,7 +79,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         make_spec("cs", "cs"),
     ];
 
-    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id)
+    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id, daily_cap_usd)
         .await
         .map_err(|e| e.to_string())?;
     *guard = Some(handle);

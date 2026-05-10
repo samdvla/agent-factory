@@ -123,6 +123,8 @@ export type FactoryStore = {
   allStop: boolean;
   budgetTodayUsd: number;
   budgetCapUsd: number;
+  /** True once the supervisor has emitted budget_capped for today. */
+  budgetCapped: boolean;
   revenueTodayUsd: number;
   revenueByRole: Record<string, number>;
   handoffs: Handoff[];
@@ -152,6 +154,7 @@ export type FactoryStore = {
   setSandbox: (v: boolean) => void;
   setAllStop: (v: boolean) => void;
   setBudget: (usd: number) => void;
+  setBudgetCapped: (v: boolean) => void;
   pushHandoff: (h: Handoff) => void;
   expireHandoffs: (now: number) => void;
   bumpActivity: () => void;

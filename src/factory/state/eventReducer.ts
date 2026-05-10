@@ -139,6 +139,32 @@ export function applySupervisorEvent(
       }
       break;
     }
+    case "budget_capped": {
+      const spent = (evt as any).spent_usd as number;
+      const cap = (evt as any).cap_usd as number;
+      if (typeof spent === "number") {
+        store.setBudget(spent);
+      }
+      store.setBudgetCapped(true);
+      store.pushAlert({
+        kind: "err",
+        title: "Daily budget cap reached",
+        sub:
+          typeof spent === "number" && typeof cap === "number"
+            ? `$${spent.toFixed(2)} / $${cap.toFixed(2)} — workers paused`
+            : "workers paused until UTC midnight",
+        ts: Date.now(),
+      });
+      store.pushTicker({
+        ts: Date.now(),
+        source: "supervisor",
+        text:
+          typeof spent === "number" && typeof cap === "number"
+            ? `BUDGET CAPPED · $${spent.toFixed(2)} / $${cap.toFixed(2)}`
+            : "BUDGET CAPPED",
+      });
+      break;
+    }
     default:
       console.warn("Unknown supervisor event kind:", evt.kind, evt);
   }

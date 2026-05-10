@@ -34,6 +34,7 @@ pub async fn start(
     bus: EventBus,
     agents: Vec<AgentSpec>,
     project_id: i64,
+    daily_cap_usd: f64,
 ) -> anyhow::Result<SupervisorHandle> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handles = Vec::new();
@@ -68,7 +69,7 @@ pub async fn start(
                 };
 
                 let crashed =
-                    run_worker_loop(&spec.role, worker, &pool, &bus, &mut shutdown_rx, project_id).await;
+                    run_worker_loop(&spec.role, worker, &pool, &bus, &mut shutdown_rx, project_id, daily_cap_usd).await;
 
                 bus.send(SupervisorEvent::AgentExited {
                     role: spec.role.clone(),
@@ -103,10 +104,13 @@ async fn run_worker_loop(
     bus: &EventBus,
     shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
     project_id: i64,
+    daily_cap_usd: f64,
 ) -> bool {
     // Poll interval for claiming the next job when the queue is empty.
     let mut poll_interval = tokio::time::interval(Duration::from_millis(250));
     poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Track which UTC day we last emitted BudgetCapped for, so we don't spam.
+    let mut last_capped_day: Option<String> = None;
 
     loop {
         if *shutdown_rx.borrow() {
@@ -166,6 +170,30 @@ async fn run_worker_loop(
             }
 
             _ = poll_interval.tick() => {
+                // Enforce daily budget cap BEFORE claiming the next job. If
+                // we're capped, leave the job in the queue and try again in 60s.
+                match budget::check_cap(pool, project_id, daily_cap_usd).await {
+                    Ok(false) => {
+                        let spent = budget::today_spend_usd(pool, project_id).await.unwrap_or(0.0);
+                        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                        if last_capped_day.as_deref() != Some(today.as_str()) {
+                            bus.send(SupervisorEvent::BudgetCapped {
+                                spent_usd: spent,
+                                cap_usd: daily_cap_usd,
+                            });
+                            last_capped_day = Some(today);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        continue;
+                    }
+                    Ok(true) => {
+                        // under cap — proceed to claim
+                    }
+                    Err(e) => {
+                        tracing::error!("budget cap check failed: {e}");
+                        // fail-open: keep working rather than wedging the pipeline
+                    }
+                }
                 match queue::claim(pool, role).await {
                     Ok(Some(job)) => {
                         bus.send(SupervisorEvent::JobStarted {
@@ -191,6 +219,11 @@ async fn run_worker_loop(
                                 ) {
                                     let cost = budget::cost_usd(model, tin, tout);
                                     if cost > 0.0 {
+                                        // Persist to the budget_ledger BEFORE emitting so the
+                                        // spend is durable at the moment the event fires.
+                                        if let Err(e) = budget::record(pool, project_id, model, tin, tout).await {
+                                            tracing::error!("budget::record failed: {e}");
+                                        }
                                         bus.send(SupervisorEvent::BudgetSpent {
                                             role: role.into(),
                                             cost_usd: cost,

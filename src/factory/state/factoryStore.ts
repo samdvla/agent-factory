@@ -24,6 +24,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   allStop: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
+  budgetCapped: false,
   revenueTodayUsd: 0,
   revenueByRole: {},
   handoffs: [],
@@ -61,6 +62,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   setSandbox: (v) => set({ sandbox: v }),
   setAllStop: (v) => set({ allStop: v }),
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
+  setBudgetCapped: (v) => set({ budgetCapped: v }),
   pushHandoff: (h) => set((s) => ({ handoffs: [...s.handoffs, h], lastActivityAt: Date.now() })),
   expireHandoffs: (now) => set((s) => {
     const live = s.handoffs.filter((h) => now - h.startedAt < h.durationMs + 200);

@@ -59,6 +59,13 @@ pub fn run() {
                 .flatten()
                 .unwrap_or_default();
 
+            // Read the daily USD budget cap from the secret store; default $1.00.
+            let daily_cap_usd: f64 = secrets::get("daily_budget_usd")
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(1.00);
+
             let auto_state = state.clone();
             let pool_for_job = pool.clone();
             let project_id_for_job = project_id;
@@ -93,7 +100,7 @@ pub fn run() {
                     make_spec("cs", "cs"),
                     make_spec("si", "si"),
                 ];
-                match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job).await {
+                match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job, daily_cap_usd).await {
                     Ok(handle) => {
                         let mut guard = auto_state.supervisor_handle.lock().await;
                         *guard = Some(handle);

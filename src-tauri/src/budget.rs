@@ -66,3 +66,60 @@ pub async fn check_cap(pool: &SqlitePool, project_id: i64, daily_cap_usd: f64) -
     let spent = today_spend_usd(pool, project_id).await?;
     Ok(spent < daily_cap_usd)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    /// Build an in-memory sqlite pool with the bare-minimum schema this module
+    /// touches. Avoids running the full migrations against ":memory:".
+    async fn setup_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1) // a shared :memory: db must use a single conn
+            .connect_with(opts)
+            .await
+            .expect("open in-memory sqlite");
+        sqlx::query(
+            "CREATE TABLE budget_ledger (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                project_id INTEGER NOT NULL,\
+                day TEXT NOT NULL,\
+                model TEXT NOT NULL,\
+                tokens_in INTEGER NOT NULL DEFAULT 0,\
+                tokens_out INTEGER NOT NULL DEFAULT 0,\
+                usd_cost REAL NOT NULL DEFAULT 0.0,\
+                ts TEXT NOT NULL DEFAULT (datetime('now'))\
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create budget_ledger");
+        pool
+    }
+
+    #[tokio::test]
+    async fn check_cap_returns_false_when_spend_exceeds_cap() {
+        let pool = setup_pool().await;
+        // Sonnet at $3/M in + $15/M out. 1M in = $3.00, 0 out → $3.00.
+        record(&pool, 1, "claude-sonnet-4-6", 1_000_000, 0).await.unwrap();
+        // Cap of $1 → over.
+        let under_cap = check_cap(&pool, 1, 1.00).await.unwrap();
+        assert!(!under_cap, "expected check_cap=false when spend ($3) > cap ($1)");
+        let spent = today_spend_usd(&pool, 1).await.unwrap();
+        assert!(spent > 1.00, "today spend should exceed cap, got {spent}");
+    }
+
+    #[tokio::test]
+    async fn check_cap_returns_true_when_spend_below_cap() {
+        let pool = setup_pool().await;
+        // 1k tokens in @ $3/M → $0.003
+        record(&pool, 1, "claude-sonnet-4-6", 1_000, 0).await.unwrap();
+        let under_cap = check_cap(&pool, 1, 1.00).await.unwrap();
+        assert!(under_cap, "expected check_cap=true when spend < cap");
+    }
+}

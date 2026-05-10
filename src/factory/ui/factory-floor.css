@@ -147,6 +147,22 @@ input, textarea { font: inherit; color: inherit; }
 .budget-numbers .spent { color: var(--ink-0); }
 .budget-numbers .cap   { color: var(--ink-2); }
 
+.budget.is-capped {
+  border-color: var(--accent-bad);
+  background: rgba(255, 95, 109, 0.12);
+  animation: budget-cap-pulse 2.4s ease-in-out infinite;
+}
+.budget.is-capped .budget-label {
+  color: var(--accent-bad);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.budget.is-capped .budget-numbers .spent { color: var(--accent-bad); }
+@keyframes budget-cap-pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(255, 95, 109, 0); }
+  50%      { box-shadow: 0 0 14px rgba(255, 95, 109, 0.45); }
+}
+
 .topbar-spacer { flex: 1; }
 
 .topbar-pill {

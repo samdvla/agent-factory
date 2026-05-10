@@ -13,6 +13,7 @@ pub enum SupervisorEvent {
     WorkerNotification { role: String, method: String, params: Value },
     BudgetTick { project_id: i64, usd_today: f64 },
     BudgetSpent { role: String, cost_usd: f64, tokens_in: u64, tokens_out: u64, model: String },
+    BudgetCapped { spent_usd: f64, cap_usd: f64 },
 }
 
 #[derive(Clone)]

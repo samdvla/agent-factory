@@ -9,6 +9,37 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
 
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+    """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
+    Returns the response body as utf-8 string. Raises on final failure."""
+    import time as _time
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            last_exc = e
+            # Retry only 5xx; 4xx is persistent.
+            if 500 <= e.code < 600 and attempt < max_attempts - 1:
+                delay = (2 ** attempt)  # 1s, 2s, 4s
+                print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                delay = (2 ** attempt)
+                print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("retry: unreachable")
+
+
 def _load_system_override(role: str) -> str | None:
     """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
     path = os.path.expanduser("~/.agent-factory/prompts.json")
@@ -80,8 +111,7 @@ def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str |
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode("utf-8")
+    raw = _retry_request(req, timeout=60)
 
     response = json.loads(raw)
     text = response["content"][0]["text"]

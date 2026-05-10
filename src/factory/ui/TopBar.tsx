@@ -8,6 +8,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
   const budgetCap = useFactoryStore((s) => s.budgetCapUsd);
+  const budgetCapped = useFactoryStore((s) => s.budgetCapped);
   const revenueUsd = useFactoryStore((s) => s.revenueTodayUsd);
   const alerts = useFactoryStore((s) => s.alerts);
   const setAllStop = useFactoryStore((s) => s.setAllStop);
@@ -21,8 +22,9 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
 
   const netUsd = revenueUsd - budgetUsd;
   const pct = Math.min(100, (budgetUsd / budgetCap) * 100);
-  const fillClass =
-    pct > 90
+  const fillClass = budgetCapped
+    ? "budget-bar-fill bad"
+    : pct > 90
       ? "budget-bar-fill bad"
       : pct > 70
         ? "budget-bar-fill warn"
@@ -85,8 +87,10 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
       {/* Center: budget bar */}
       <div className="topbar-spacer" />
 
-      <div className="budget">
-        <span className="budget-label">Daily Budget</span>
+      <div className={`budget${budgetCapped ? " is-capped" : ""}`}>
+        <span className="budget-label">
+          {budgetCapped ? "Capped" : "Daily Budget"}
+        </span>
         <div className="budget-bar">
           <div className={fillClass} style={{ width: `${pct}%` }} />
         </div>
