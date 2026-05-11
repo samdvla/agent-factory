@@ -5,6 +5,7 @@ pub mod events;
 pub mod heartbeat;
 pub mod llm;
 pub mod queue;
+pub mod raster;
 pub mod secrets;
 pub mod supervisor;
 pub mod worker;

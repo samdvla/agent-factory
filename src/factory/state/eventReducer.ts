@@ -139,6 +139,20 @@ export function applySupervisorEvent(
       }
       break;
     }
+    case "asset_rasterized": {
+      const pngPath = (evt as any).png_path as string | undefined;
+      const bytes = (evt as any).bytes as number | undefined;
+      if (typeof pngPath === "string") {
+        const filename = pngPath.split("/").pop() ?? pngPath;
+        const kb = typeof bytes === "number" ? Math.round(bytes / 1024) : 0;
+        store.pushTicker({
+          ts: Date.now(),
+          source: "designer",
+          text: `rasterized: ${filename} (${kb} KB)`,
+        });
+      }
+      break;
+    }
     case "budget_capped": {
       const spent = (evt as any).spent_usd as number;
       const cap = (evt as any).cap_usd as number;

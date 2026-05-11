@@ -236,8 +236,61 @@ async fn run_worker_loop(
                                 bus.send(SupervisorEvent::JobCompleted {
                                     role: role.into(),
                                     job_id,
-                                    result,
+                                    result: result.clone(),
                                 });
+
+                                // If a designer job produced an SVG asset, kick
+                                // off a background rasterization to a sibling
+                                // .png at 2048px (Etsy requires raster ≥2000px).
+                                if role == "designer" {
+                                    if let Some(asset_path_str) = result
+                                        .get("asset")
+                                        .and_then(|a| a.get("asset_path"))
+                                        .and_then(|p| p.as_str())
+                                    {
+                                        if asset_path_str.ends_with(".svg") {
+                                            let path = std::path::PathBuf::from(asset_path_str);
+                                            let bus_for_raster = bus.clone();
+                                            let raster_job_id = job_id;
+                                            tokio::spawn(async move {
+                                                // Run on blocking pool — resvg is CPU-bound.
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    crate::raster::rasterize_to_sibling(&path)
+                                                })
+                                                .await;
+                                                match result {
+                                                    Ok(Ok(Some(png_path))) => {
+                                                        let bytes = std::fs::metadata(&png_path)
+                                                            .map(|m| m.len())
+                                                            .unwrap_or(0);
+                                                        bus_for_raster.send(
+                                                            SupervisorEvent::AssetRasterized {
+                                                                job_id: raster_job_id,
+                                                                png_path: png_path
+                                                                    .display()
+                                                                    .to_string(),
+                                                                bytes,
+                                                            },
+                                                        );
+                                                    }
+                                                    Ok(Ok(None)) => {
+                                                        // already rasterized — silent
+                                                    }
+                                                    Ok(Err(e)) => {
+                                                        tracing::warn!(
+                                                            "rasterize failed for job {raster_job_id}: {e:#}"
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            "rasterize task panicked for job {raster_job_id}: {e}"
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let err_str = e.to_string();

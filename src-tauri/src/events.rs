@@ -14,6 +14,7 @@ pub enum SupervisorEvent {
     BudgetTick { project_id: i64, usd_today: f64 },
     BudgetSpent { role: String, cost_usd: f64, tokens_in: u64, tokens_out: u64, model: String },
     BudgetCapped { spent_usd: f64, cap_usd: f64 },
+    AssetRasterized { job_id: i64, png_path: String, bytes: u64 },
 }
 
 #[derive(Clone)]
