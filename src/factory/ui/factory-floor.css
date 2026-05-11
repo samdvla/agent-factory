@@ -2787,3 +2787,20 @@ button.etsy-pill {
 .review-btn.is-skip {
   color: var(--ink-1);
 }
+
+/* ── BudgetPill ──────────────────────────────────────────────────────────── */
+.budget-pill-wrap { position: relative; display: inline-block; }
+.budget-pill { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px;
+  background: #1a1c20; color: #dfe; border: 1px solid #2a2d33; cursor: default; font: 600 12px/1 system-ui; }
+.budget-pill.ok     { border-color: #244a30; color: #9be0b3; }
+.budget-pill.warn   { border-color: #5a4f1a; color: #e8d77b; }
+.budget-pill.danger { border-color: #5a1f23; color: #ff8a93; }
+.budget-pill-label  { opacity: .7; }
+.budget-pill-card   { position: absolute; right: 0; top: calc(100% + 6px); width: 280px; background: #13151a;
+  border: 1px solid #2a2d33; border-radius: 10px; padding: 10px 12px; z-index: 50; }
+.budget-pill-row    { display: grid; grid-template-columns: 48px 1fr 110px; gap: 8px; align-items: center; padding: 4px 0; }
+.budget-pill-row-bar { background: #222428; height: 6px; border-radius: 3px; overflow: hidden; }
+.budget-pill-row-fill { height: 100%; background: #9be0b3; }
+.budget-pill-row.warn   .budget-pill-row-fill { background: #e8d77b; }
+.budget-pill-row.danger .budget-pill-row-fill { background: #ff8a93; }
+.budget-pill-burn { opacity: .6; font-size: 11px; margin-top: 6px; }

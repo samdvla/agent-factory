@@ -3,6 +3,7 @@ import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
 import EtsyPanel from "./EtsyPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
+import BudgetPill from "./BudgetPill";
 import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
 
@@ -118,6 +119,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         </span>
       </div>
 
+      <BudgetPill />
       <AnalyticsPanel />
       <PromptsPanel />
       <WealthLeaderboard />
