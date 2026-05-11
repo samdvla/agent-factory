@@ -634,9 +634,10 @@ pub async fn cmd_budget_status(state: State<'_, Arc<AppState>>) -> Result<Budget
 }
 
 /// Start a smoke-test cycle: stamps a cycle id + start timestamp into secrets,
-/// sets the smoke_pause_until flag so enforce_caps blocks real spend after the
-/// cycle, then enqueues one research job tagged with the cycle id. The
+/// then enqueues one research job tagged with the cycle id. The
 /// downstream listing / publisher agents follow the normal pipeline.
+/// NOTE: smoke_pause_until is NOT set here — it is set by the publisher's
+/// completion hook (Task 11) after the cycle has actually produced a draft.
 #[tauri::command]
 pub async fn cmd_start_smoke_test(
     state: State<'_, Arc<AppState>>,
@@ -646,9 +647,6 @@ pub async fn cmd_start_smoke_test(
     secrets::set("smoke_cycle_id", &cycle_id).map_err(|e| e.to_string())?;
     let now_ts = Utc::now().timestamp().to_string();
     secrets::set("smoke_started_at", &now_ts).map_err(|e| e.to_string())?;
-    // Set the pause flag so that once the cycle finishes, any further
-    // enforce_caps calls block until cmd_resume_from_smoke_test is called.
-    secrets::set("smoke_pause_until", "1").map_err(|e| e.to_string())?;
     // Enqueue one research job; downstream listing/publisher follow the normal pipeline.
     let payload = serde_json::json!({ "smoke": true, "cycle_id": cycle_id });
     queue::enqueue(&state.pool, state.project_id, "research", payload)
