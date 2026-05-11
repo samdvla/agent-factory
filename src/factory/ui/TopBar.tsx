@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { api, StatusReport } from "../../api";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { api, StatusReport, EtsyStatus } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
 
 export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const [status, setStatus] = useState<StatusReport | null>(null);
+  const [etsy, setEtsy] = useState<EtsyStatus | null>(null);
+  const [etsyBusy, setEtsyBusy] = useState(false);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
@@ -17,6 +21,38 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      api.etsyStatus().then((s) => { if (!cancelled) setEtsy(s); }).catch(() => {});
+    refresh();
+    const id = setInterval(refresh, 5000);
+    let unC: UnlistenFn | undefined;
+    let unE: UnlistenFn | undefined;
+    (async () => {
+      unC = await listen("etsy_connected", () => refresh());
+      unE = await listen("etsy_oauth_error", () => refresh());
+    })();
+    return () => { cancelled = true; clearInterval(id); unC?.(); unE?.(); };
+  }, []);
+
+  const onEtsyClick = async () => {
+    if (etsy?.connected && etsy.shop_name) {
+      await openUrl(`https://www.etsy.com/shop/${encodeURIComponent(etsy.shop_name)}`);
+      return;
+    }
+    if (etsyBusy) return;
+    setEtsyBusy(true);
+    try {
+      const { authorize_url } = await api.etsyStartOAuth();
+      await openUrl(authorize_url);
+    } catch {
+      // error surfaces via etsy_oauth_error event listener
+    } finally {
+      setEtsyBusy(false);
+    }
+  };
 
   const netUsd = revenueUsd - budgetUsd;
 
@@ -73,6 +109,29 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
           <path d="M9 12l2 2 4-4" />
         </svg>
       </div>
+
+      <button
+        type="button"
+        className={`etsy-status ${etsy?.connected ? "is-connected" : "is-disconnected"}${etsyBusy ? " is-busy" : ""}`}
+        onClick={onEtsyClick}
+        title={
+          etsy?.connected
+            ? `Connected to ${etsy.shop_name ?? "Etsy"} — click to open shop`
+            : "Etsy not connected — click to start OAuth"
+        }
+      >
+        <span className="etsy-status-dot" />
+        <span className="etsy-status-text">
+          <span className="etsy-status-label">Etsy</span>
+          <span className="etsy-status-sub">
+            {etsyBusy
+              ? "Opening browser…"
+              : etsy?.connected
+                ? (etsy.shop_name ?? "Connected")
+                : "Not connected"}
+          </span>
+        </span>
+      </button>
 
       <div className="topbar-spacer" />
 
