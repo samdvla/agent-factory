@@ -57,6 +57,45 @@ pub async fn check_cap(pool: &SqlitePool, project_id: i64, daily_cap_usd: f64) -
     Ok(spent < daily_cap_usd)
 }
 
+/// Sum of usd_cost for ledger rows with `ts >= now() - <hours> hours`.
+/// Note: ledger rows store ts via `datetime('now')` default — UTC by sqlite convention.
+pub async fn spend_window(
+    pool: &SqlitePool,
+    project_id: i64,
+    hours: i64,
+) -> anyhow::Result<f64> {
+    let usd: Option<f64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(usd_cost), 0.0) FROM budget_ledger \
+         WHERE project_id = ? AND ts >= datetime('now', ?)"
+    )
+    .bind(project_id)
+    .bind(format!("-{hours} hours"))
+    .fetch_one(pool)
+    .await?;
+    Ok(usd.unwrap_or(0.0))
+}
+
+/// Sum of usd_cost for ledger rows in the current calendar month (UTC).
+pub async fn month_spend_usd(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> anyhow::Result<f64> {
+    let usd: Option<f64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(usd_cost), 0.0) FROM budget_ledger \
+         WHERE project_id = ? AND day >= date('now', 'start of month')"
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(usd.unwrap_or(0.0))
+}
+
+/// Pure cost estimate for pre-flight cap checks. No DB access.
+/// Use this with conservative input counts (e.g. char/4 heuristic).
+pub fn estimate_cost(model: &str, est_tokens_in: u64, est_tokens_out: u64) -> f64 {
+    cost_usd(model, est_tokens_in, est_tokens_out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,3 +36,28 @@ async fn cap_check_blocks_when_over_limit() {
     let allowed = budget::check_cap(&pool, project_id, 100.0).await.unwrap();
     assert!(allowed);
 }
+
+#[tokio::test]
+async fn spend_window_returns_only_recent_rows() {
+    let (_tmp, pool, project_id) = setup().await;
+    // 1M haiku input @ $0.80/M = $0.80
+    budget::record(&pool, project_id, "claude-haiku-4-5-20251001", 1_000_000, 0).await.unwrap();
+    let w = budget::spend_window(&pool, project_id, 1).await.unwrap();
+    assert!((w - 0.80).abs() < 1e-9, "1h window got {w}");
+}
+
+#[tokio::test]
+async fn month_spend_returns_calendar_month_total() {
+    let (_tmp, pool, project_id) = setup().await;
+    // 1M sonnet input @ $3/M = $3.00
+    budget::record(&pool, project_id, "claude-sonnet-4-6", 1_000_000, 0).await.unwrap();
+    let m = budget::month_spend_usd(&pool, project_id).await.unwrap();
+    assert!((m - 3.00).abs() < 1e-9, "month got {m}");
+}
+
+#[test]
+fn estimate_cost_is_monotonic_in_input_length() {
+    let small = budget::estimate_cost("claude-sonnet-4-6", 100, 100);
+    let big   = budget::estimate_cost("claude-sonnet-4-6", 10_000, 100);
+    assert!(big > small, "expected monotonic in tokens_in");
+}
