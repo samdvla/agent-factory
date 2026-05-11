@@ -55,7 +55,7 @@ Three layers of cost enforcement (hourly / daily / monthly), one pricing source 
 | `src-tauri/src/supervisor.rs` | Replace single-cap check at line 175 with `enforce_caps()` returning `Ok \| Capped { scope }`. Add pre-flight: estimate input tokens from `payload_json.len() / 4 + system_prompt_chars / 4`, compare `today_spent + estimate` to cap. On `Capped`, emit `BudgetCapped { spent, cap, scope }` and skip. Remove duplicate cost logic at line 220 — call `budget::cost_usd` instead. |
 | `src-tauri/src/events.rs` | Extend `BudgetCapped` with `scope: "hour" \| "day" \| "month" \| "db_error" \| "smoke_pause"`. Add `BudgetUnreported { role, job_id }`. Add `SmokeTestCycleComplete { cycle_id, listing_id, spend_usd, duration_ms, status }`. |
 | `src-tauri/src/commands.rs` | New `cmd_budget_status()` → `{today, hour, month, hourly_cap, daily_cap, monthly_cap, burn_per_hour}`. New `cmd_start_smoke_test()` — enqueues ONE research job tagged `smoke=true`. New `cmd_resume_from_smoke_test()` — clears the pause flag. |
-| `workers/cs/cs/agent.py` | Sum tokens from BOTH Anthropic calls (line 70 + line 120) and return their sum. Add unit test asserting both call sites are summed. |
+| `workers/*/*/agent.py` | All four workers (research, listing, orchestrator, cs) already report `tokens_in`/`tokens_out`/`model` correctly. No worker code changes required — verified by inspection. (Earlier draft of this spec asserted cs made two API calls; that was a misread of the result dict.) |
 | `src-tauri/src/lib.rs` | Add defaults at startup: `hourly_budget_usd` = $0.50, `monthly_budget_usd` = $20.00. Keep `daily_budget_usd` default $1.00. Each readable from secrets with fallback to defaults. |
 | `src-tauri/src/pnl.rs` | After cycle close, reconcile ledger-sum-for-cycle vs `PnlCycleClosed.total_cost_usd`. `tracing::warn!` on mismatch > $0.01. |
 | `src/factory/ui/BudgetPill.tsx` (new) | Top-bar pill + hover card. Polls `cmd_budget_status` every 5s. Green < 60%, amber 60–90%, red > 90%. |
@@ -99,7 +99,7 @@ Three layers of cost enforcement (hourly / daily / monthly), one pricing source 
 - `budget::cost_usd` matches `budget::record`'s computation for haiku/sonnet/opus models.
 - `enforce_caps` returns Capped for each scope (hour/day/month) independently.
 - `estimate_cost` is monotonic in input length.
-- `cs/agent.py` sums tokens from both call sites.
+- (No cs/agent.py change — single call per job verified by inspection.)
 
 ### Integration
 
