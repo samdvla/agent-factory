@@ -797,9 +797,10 @@ pub async fn cmd_budget_status(state: State<'_, Arc<AppState>>) -> Result<Budget
     })
 }
 
-/// Start a smoke-test cycle: stamps a cycle id + start timestamp into secrets,
-/// then enqueues one research job tagged with the cycle id. The
-/// downstream listing / publisher agents follow the normal pipeline.
+/// Start a smoke-test cycle: ensures the supervisor is running, stamps a
+/// cycle id + start timestamp into secrets, then enqueues one research job
+/// tagged with the cycle id. The downstream listing / publisher agents
+/// follow the normal pipeline.
 /// NOTE: smoke_pause_until is NOT set here — it is set by the publisher's
 /// completion hook (Task 11) after the cycle has actually produced a draft.
 #[tauri::command]
@@ -807,6 +808,15 @@ pub async fn cmd_start_smoke_test(
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     use chrono::Utc;
+    // Ensure supervisor is running so workers exist to claim the job.
+    {
+        let running = state.supervisor_handle.lock().await.is_some();
+        if !running {
+            cmd_start_supervisor(state.clone()).await?;
+            // Give the workers a moment to come up and start polling.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
     let cycle_id = format!("smoke-{}", Utc::now().format("%Y%m%d%H%M%S"));
     secrets::set("smoke_cycle_id", &cycle_id).map_err(|e| e.to_string())?;
     let now_ts = Utc::now().timestamp().to_string();
