@@ -7,6 +7,7 @@ vi.mock("../../../api", () => ({
   api: {
     listRecentCycles: vi.fn(async () => []),
     listWealth: vi.fn(async () => []),
+    readAssetSvg: vi.fn(async () => null),
   },
 }));
 
@@ -64,5 +65,26 @@ describe("AnalyticsPanel", () => {
     // The niche, net (signed), and a numeric cell appear
     expect(screen.getByText("boho-svg")).toBeTruthy();
     expect(screen.getByText("+$1.50")).toBeTruthy();
+  });
+
+  it("renders an SVG thumbnail placeholder for each cycle row", () => {
+    useFactoryStore.setState({
+      recentCycles: [
+        {
+          cycle_id: "abc12345xyz",
+          niche: "wall art",
+          local_listing_id: 12,
+          revenue_usd: 1.0,
+          total_cost_usd: 0.5,
+          net_usd: 0.5,
+          contributor_count: 1,
+        },
+      ],
+    });
+    const { container } = render(<AnalyticsPanel />);
+    fireEvent.click(screen.getByTitle(/recent cycle/));
+    // The thumbnail container is present even before the async SVG resolves.
+    const thumbs = container.querySelectorAll(".analytics-thumb");
+    expect(thumbs.length).toBe(1);
   });
 });

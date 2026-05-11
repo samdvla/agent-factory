@@ -23,6 +23,7 @@ def handle(method: str, params: dict) -> dict:
     record = {
         "listing_id": listing_id,
         "title": title,
+        "description": listing.get("description", ""),
         "price_usd": listing.get("price_usd"),
         "tags": listing.get("tags"),
         "niche": niche,

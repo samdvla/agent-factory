@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type EtsyPublishRow, type EtsyStatus } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+import ListingReviewModal from "./ListingReviewModal";
 
 /**
  * HUD pill for Etsy connectivity. When disconnected, shows a "Connect Etsy"
@@ -24,6 +25,7 @@ export default function EtsyPanel() {
   const [activating, setActivating] = useState<number | null>(null);
   const [showReceipts, setShowReceipts] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
+  const [reviewing, setReviewing] = useState<EtsyPublishRow | null>(null);
   const etsyPublishesRev = useFactoryStore((s) => s.etsyPublishesRev);
   const recentReceipts = useFactoryStore((s) => s.etsyRecentReceipts);
   const recentMessages = useFactoryStore((s) => s.etsyRecentMessages);
@@ -173,6 +175,10 @@ export default function EtsyPanel() {
     } finally {
       setActivating(null);
     }
+  };
+
+  const onReviewClick = (row: EtsyPublishRow) => {
+    setReviewing(row);
   };
 
   if (!status) {
@@ -352,10 +358,11 @@ export default function EtsyPanel() {
                     <button
                       type="button"
                       className="etsy-publish-activate"
-                      onClick={() => onActivate(p.local_listing_id)}
+                      onClick={() => onReviewClick(p)}
                       disabled={activating === p.local_listing_id}
+                      title="Review listing before activating"
                     >
-                      {activating === p.local_listing_id ? "…" : "Activate"}
+                      {activating === p.local_listing_id ? "…" : "Review"}
                     </button>
                   )}
                 </div>
@@ -373,6 +380,16 @@ export default function EtsyPanel() {
             </button>
           </div>
         </div>
+      )}
+      {reviewing && (
+        <ListingReviewModal
+          localListingId={reviewing.local_listing_id}
+          fallbackTitle={reviewing.title}
+          onClose={() => setReviewing(null)}
+          onActivate={async (id) => {
+            await onActivate(id);
+          }}
+        />
       )}
     </div>
   );

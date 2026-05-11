@@ -1,7 +1,69 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { api } from "../../api";
+import { api, type CycleSummary } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+
+/**
+ * Lazy SVG thumbnail for a cycle. Uses IntersectionObserver so we don't
+ * fan out 20 IPC calls on mount — assets fetch only when the row scrolls
+ * into view. Falls back to a placeholder div when the listing has no
+ * recorded asset (early cycles, fallback runs).
+ */
+function CycleThumb({ listingId }: { listingId: number | null }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [svg, setSvg] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!listingId) return;
+    const node = ref.current;
+    if (!node) return;
+    // Bail if IntersectionObserver isn't available (older jsdom / non-browser).
+    if (typeof IntersectionObserver === "undefined") {
+      (async () => {
+        try {
+          const s = await api.readAssetSvg(listingId);
+          setSvg(s);
+        } catch {
+          setSvg(null);
+        }
+      })();
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            (async () => {
+              try {
+                const s = await api.readAssetSvg(listingId);
+                setSvg(s);
+              } catch {
+                setSvg(null);
+              }
+            })();
+            io.disconnect();
+          }
+        }
+      },
+      { rootMargin: "100px" }
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [listingId]);
+
+  if (!listingId) {
+    return <div ref={ref} className="analytics-thumb is-empty">—</div>;
+  }
+  if (svg == null) {
+    return <div ref={ref} className="analytics-thumb is-empty">—</div>;
+  }
+  const src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  return (
+    <div ref={ref} className="analytics-thumb">
+      <img src={src} alt="" width={48} height={48} />
+    </div>
+  );
+}
 
 /**
  * Collapsible HUD pill that surfaces the last N closed P&L cycles. Mount
@@ -65,7 +127,7 @@ function AnalyticsPanelImpl() {
             {count === 0 ? (
               <div className="analytics-panel-empty">no cycles yet</div>
             ) : (
-              recentCycles.map((c) => {
+              recentCycles.map((c: CycleSummary) => {
                 const net = c.net_usd;
                 const netCls = net >= 0 ? "is-gain" : "is-loss";
                 const nicheRaw = c.niche ?? "—";
@@ -73,6 +135,7 @@ function AnalyticsPanelImpl() {
                   nicheRaw.length > 28 ? nicheRaw.slice(0, 27) + "…" : nicheRaw;
                 return (
                   <div key={c.cycle_id} className="analytics-row">
+                    <CycleThumb listingId={c.local_listing_id} />
                     <span className="analytics-cid" title={c.cycle_id}>
                       {c.cycle_id.slice(0, 8)}
                     </span>

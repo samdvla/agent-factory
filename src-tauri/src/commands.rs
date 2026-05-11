@@ -1,8 +1,9 @@
-use crate::{etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, queue, secrets, supervisor};
+use crate::{etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, prompts, queue, secrets, supervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{Emitter, State};
@@ -387,5 +388,242 @@ pub async fn cmd_list_wealth(
 pub async fn cmd_etsy_kill_switch(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     secrets::set("real_etsy_enabled", "false").map_err(|e| e.to_string())?;
     state.bus.send(SupervisorEvent::EtsyKillSwitchTriggered);
+    Ok(())
+}
+
+// ---------- Prompt customization ----------
+
+/// Return defaults + active overrides + last-tweak metadata for the four
+/// editable roles. Powers the PromptsPanel.
+#[tauri::command]
+pub async fn cmd_list_prompts() -> Result<HashMap<String, prompts::PromptRow>, String> {
+    Ok(prompts::list_prompts())
+}
+
+#[derive(Deserialize)]
+pub struct SetPromptOverrideArgs {
+    pub role: String,
+    pub system: String,
+}
+
+#[tauri::command]
+pub async fn cmd_set_prompt_override(args: SetPromptOverrideArgs) -> Result<(), String> {
+    prompts::set_override(&args.role, &args.system).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_clear_prompt_override(role: String) -> Result<(), String> {
+    prompts::clear_override(&role).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_prompt_history(
+    role: String,
+    limit: Option<usize>,
+) -> Result<Vec<prompts::PromptHistoryEntry>, String> {
+    Ok(prompts::history_for(&role, limit.unwrap_or(5)))
+}
+
+// ---------- SVG asset reader ----------
+
+/// Resolve `local_listing_id` to its SVG asset on disk and return the raw
+/// SVG markup. The publisher records `(listing_id, asset_path)` pairs in
+/// `~/.agent-factory/mock_etsy.json` — we walk that file to find the
+/// asset_path. Returns `None` when the listing has no recorded asset.
+#[tauri::command]
+pub async fn cmd_read_asset_svg(listing_id: i64) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = PathBuf::from(home)
+        .join(".agent-factory")
+        .join("mock_etsy.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Ok(None),
+    };
+    let records: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let asset_path = records.as_array().and_then(|arr| {
+        arr.iter().rev().find_map(|r| {
+            let lid = r.get("listing_id").and_then(|v| v.as_i64())?;
+            if lid != listing_id {
+                return None;
+            }
+            r.get("asset_path")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+    });
+    let Some(asset_path) = asset_path else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&asset_path) {
+        Ok(svg) => Ok(Some(svg)),
+        Err(_) => Ok(None),
+    }
+}
+
+// ---------- First-listing review helpers ----------
+
+#[derive(Serialize, Default)]
+pub struct ListingReviewInfo {
+    /// Etsy publish row state ('draft' | 'active' | ...).
+    pub state: String,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub niche: Option<String>,
+    pub price_usd: Option<f64>,
+    pub url: Option<String>,
+    /// Joined from pipeline_cycles when local_listing_id matches.
+    pub cycle_id: Option<String>,
+    pub estimated_revenue_usd: Option<f64>,
+    pub total_cost_usd: Option<f64>,
+    pub net_usd: Option<f64>,
+    /// CFO rationale stored on the cfo agent_contributions row (if any).
+    pub cfo_rationale: Option<String>,
+    /// Count of currently-active publishes — used to decide if first-listing
+    /// gating still applies.
+    pub active_publish_count: i64,
+    /// Configured first-listing review cap (default 3).
+    pub first_listing_review_count: i64,
+}
+
+/// One-shot fetch for the review modal: pulls publish row, mock_etsy
+/// metadata, optional cycle financials, and the current active-publish
+/// count + configured first-listing-review cap.
+#[tauri::command]
+pub async fn cmd_etsy_listing_review_info(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<ListingReviewInfo, String> {
+    let mut info = ListingReviewInfo::default();
+
+    // 1) etsy_publishes row (state, title, url).
+    let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT state, title, url FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some((st, title, url)) = row {
+        info.state = st;
+        info.title = title;
+        info.url = url;
+    }
+
+    // 2) mock_etsy.json — description, tags, niche, price_usd.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mock_path = PathBuf::from(&home).join(".agent-factory").join("mock_etsy.json");
+    if let Ok(text) = std::fs::read_to_string(&mock_path) {
+        if let Ok(records) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(arr) = records.as_array() {
+                if let Some(rec) = arr.iter().rev().find(|r| {
+                    r.get("listing_id").and_then(|v| v.as_i64()) == Some(local_listing_id)
+                }) {
+                    if info.title.is_empty() {
+                        info.title = rec
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                    }
+                    info.description = rec
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    info.tags = rec
+                        .get("tags")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|t| t.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    info.niche = rec.get("niche").and_then(|v| v.as_str()).map(String::from);
+                    info.price_usd = rec.get("price_usd").and_then(|v| v.as_f64());
+                }
+            }
+        }
+    }
+
+    // 3) pipeline_cycles join.
+    let cycle: Option<(String, Option<f64>, f64, Option<f64>)> = sqlx::query_as(
+        "SELECT cycle_id, estimated_revenue_usd, total_cost_usd, net_usd \
+         FROM pipeline_cycles \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some((cid, rev, cost, net)) = cycle {
+        info.cycle_id = Some(cid);
+        info.estimated_revenue_usd = rev;
+        info.total_cost_usd = Some(cost);
+        info.net_usd = net;
+    }
+
+    // 4) active publish count.
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM etsy_publishes WHERE project_id = ? AND state = 'active'",
+    )
+    .bind(state.project_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    info.active_publish_count = active_count;
+
+    // 5) configured review cap (default 3).
+    info.first_listing_review_count = secrets::get("first_listing_review_count")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(3);
+
+    Ok(info)
+}
+
+/// Phase-2 stub for the Regenerate button: drops the local etsy_publishes
+/// row for this listing and enqueues a fresh orchestrator cycle. We do NOT
+/// touch the real Etsy listing (it stays as a draft on Etsy's side) — the
+/// user can clean it up manually.
+#[tauri::command]
+pub async fn cmd_etsy_discard_draft(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "DELETE FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'draft'",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    queue::enqueue(
+        &state.pool,
+        state.project_id,
+        "orchestrator",
+        serde_json::json!({"trigger": "regenerate", "discarded_listing_id": local_listing_id}),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    state
+        .bus
+        .send(SupervisorEvent::EtsyListingPublishFailed {
+            local_listing_id,
+            reason: "discarded by user (regenerate requested)".into(),
+        });
     Ok(())
 }

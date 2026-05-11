@@ -10,6 +10,7 @@ pub mod heartbeat;
 pub mod llm;
 pub mod oauth_server;
 pub mod pnl;
+pub mod prompts;
 pub mod queue;
 pub mod raster;
 pub mod secrets;
@@ -231,6 +232,13 @@ pub fn run() {
             commands::cmd_etsy_kill_switch,
             commands::cmd_list_recent_cycles,
             commands::cmd_list_wealth,
+            commands::cmd_list_prompts,
+            commands::cmd_set_prompt_override,
+            commands::cmd_clear_prompt_override,
+            commands::cmd_prompt_history,
+            commands::cmd_read_asset_svg,
+            commands::cmd_etsy_listing_review_info,
+            commands::cmd_etsy_discard_draft,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

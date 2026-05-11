@@ -46,6 +46,39 @@ export type AgentWealth = {
   cycles_count: number;
 };
 
+export type PromptRow = {
+  default: string;
+  override: string | null;
+  last_tweak_ts: number | null;
+  last_tweak_source: string | null;
+  last_tweak_rationale: string | null;
+};
+
+export type PromptHistoryEntry = {
+  ts: number;
+  role_tweaked: string;
+  prior_overrides?: unknown;
+  rationale?: string | null;
+  source?: string | null;
+};
+
+export type ListingReviewInfo = {
+  state: string;
+  title: string;
+  description: string;
+  tags: string[];
+  niche: string | null;
+  price_usd: number | null;
+  url: string | null;
+  cycle_id: string | null;
+  estimated_revenue_usd: number | null;
+  total_cost_usd: number | null;
+  net_usd: number | null;
+  cfo_rationale: string | null;
+  active_publish_count: number;
+  first_listing_review_count: number;
+};
+
 export const api = {
   status: () => invoke<StatusReport>("cmd_status"),
   start: () => invoke<void>("cmd_start_supervisor"),
@@ -74,4 +107,19 @@ export const api = {
   listRecentCycles: (limit?: number) =>
     invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit }),
   listWealth: () => invoke<AgentWealth[]>("cmd_list_wealth"),
+  listPrompts: () => invoke<Record<string, PromptRow>>("cmd_list_prompts"),
+  setPromptOverride: (role: string, system: string) =>
+    invoke<void>("cmd_set_prompt_override", { args: { role, system } }),
+  clearPromptOverride: (role: string) =>
+    invoke<void>("cmd_clear_prompt_override", { role }),
+  promptHistory: (role: string, limit?: number) =>
+    invoke<PromptHistoryEntry[]>("cmd_prompt_history", { role, limit }),
+  readAssetSvg: (listingId: number) =>
+    invoke<string | null>("cmd_read_asset_svg", { listingId }),
+  etsyListingReviewInfo: (localListingId: number) =>
+    invoke<ListingReviewInfo>("cmd_etsy_listing_review_info", {
+      localListingId,
+    }),
+  etsyDiscardDraft: (localListingId: number) =>
+    invoke<void>("cmd_etsy_discard_draft", { localListingId }),
 };

@@ -2211,13 +2211,34 @@ button.etsy-pill {
 
 .analytics-row {
   display: grid;
-  grid-template-columns: 64px 1fr auto auto auto 28px;
+  grid-template-columns: 48px 64px 1fr auto auto auto 28px;
   gap: 8px;
   align-items: center;
   padding: 4px 6px;
   border-radius: 3px;
   background: var(--bg-1);
   font-size: 11px;
+}
+.analytics-thumb {
+  width: 48px;
+  height: 48px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.analytics-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.analytics-thumb.is-empty {
+  color: var(--ink-3);
+  font-size: 14px;
 }
 .analytics-row:hover {
   background: var(--bg-3);
@@ -2299,4 +2320,470 @@ button.etsy-pill {
 }
 .wealth-net.is-loss {
   color: var(--accent-bad);
+}
+
+/* ========================================================================
+   Prompts panel — collapsible drawer with per-role override editors.
+   ======================================================================== */
+.prompts-panel-wrap {
+  position: relative;
+}
+.prompts-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-2);
+  color: var(--ink-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.prompts-pill:hover {
+  background: var(--bg-3);
+  color: var(--ink-0);
+}
+.prompts-pill-label {
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.prompts-pill-value {
+  color: var(--accent);
+  font-weight: 600;
+}
+.prompts-pill-caret {
+  color: var(--ink-2);
+}
+.prompts-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 440px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 10px;
+  z-index: 80;
+}
+.prompts-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.prompts-panel-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-1);
+}
+.prompts-panel-sub {
+  font-size: 10px;
+  color: var(--ink-2);
+}
+.prompts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prompts-row {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.prompts-row-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 16px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  color: var(--ink-0);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.prompts-row-header:hover {
+  background: var(--bg-3);
+}
+.prompts-row-caret {
+  color: var(--ink-2);
+}
+.prompts-row-label {
+  font-weight: 500;
+}
+.prompts-row-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+}
+.prompts-row-tag.is-override {
+  color: var(--accent);
+  border-color: rgba(95, 212, 240, 0.4);
+}
+.prompts-row-ts {
+  font-size: 10px;
+  color: var(--ink-2);
+}
+.prompts-row-body {
+  padding: 6px 8px 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prompts-section-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.prompts-tiny-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+.prompts-default {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+}
+.prompts-override-input {
+  width: 100%;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-0);
+  resize: vertical;
+  min-height: 80px;
+}
+.prompts-override-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.prompts-row-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.prompts-btn {
+  background: var(--bg-1);
+  color: var(--ink-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+.prompts-btn:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--ink-0);
+}
+.prompts-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.prompts-btn.is-primary {
+  background: var(--accent);
+  color: var(--bg-0);
+  border-color: var(--accent);
+}
+.prompts-btn.is-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.prompts-charcount {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+}
+.prompts-error {
+  color: var(--accent-bad);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.prompts-empty {
+  color: var(--ink-2);
+  font-size: 11px;
+  padding: 8px;
+  text-align: center;
+}
+.prompts-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompts-history-item {
+  display: grid;
+  grid-template-columns: 60px 50px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 6px;
+  background: var(--bg-1);
+  border-radius: 3px;
+  font-size: 10px;
+}
+.prompts-history-ts {
+  color: var(--ink-2);
+}
+.prompts-history-source {
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 9px;
+}
+.prompts-history-rationale {
+  color: var(--ink-1);
+}
+
+/* ========================================================================
+   Listing review modal — first-N gate and pre-publish review.
+   ======================================================================== */
+.review-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 9, 12, 0.78);
+  backdrop-filter: blur(2px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.review-modal {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  width: min(820px, 100%);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+.review-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.review-modal-title {
+  font-size: 14px;
+  color: var(--ink-0);
+  font-weight: 600;
+}
+.review-modal-sub {
+  font-size: 11px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.review-modal-close {
+  background: transparent;
+  color: var(--ink-1);
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.review-modal-close:hover {
+  color: var(--ink-0);
+}
+.review-modal-body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.review-modal-left,
+.review-modal-right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.review-modal-asset {
+  width: 320px;
+  height: 320px;
+  max-width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  object-fit: contain;
+}
+.review-modal-asset-empty {
+  width: 320px;
+  height: 320px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line-2);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.review-modal-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.review-meta-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.review-meta-label {
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.review-meta-value {
+  color: var(--ink-0);
+  font-family: var(--font-mono);
+}
+.review-meta-value.is-gain {
+  color: var(--accent-ok);
+}
+.review-meta-value.is-loss {
+  color: var(--accent-bad);
+}
+.review-cfo {
+  margin-top: 6px;
+}
+.review-cfo-text {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ink-1);
+  line-height: 1.4;
+}
+.review-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.review-field-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+.review-field-title {
+  font-size: 13px;
+  color: var(--ink-0);
+  font-weight: 500;
+  padding: 6px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.review-field-desc {
+  width: 100%;
+  height: 180px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-1);
+  resize: vertical;
+  line-height: 1.5;
+}
+.review-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.review-tag {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 3px 9px;
+  font-size: 10px;
+  color: var(--ink-1);
+}
+.review-tag-empty {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.review-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.review-btn {
+  background: var(--bg-2);
+  color: var(--ink-0);
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.review-btn:hover:not(:disabled) {
+  background: var(--bg-3);
+}
+.review-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.review-btn.is-activate {
+  background: var(--accent-ok);
+  color: var(--bg-0);
+  border-color: var(--accent-ok);
+  font-weight: 600;
+}
+.review-btn.is-activate:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.review-btn.is-regen {
+  color: var(--accent-warm);
+  border-color: rgba(245, 166, 35, 0.4);
+}
+.review-btn.is-skip {
+  color: var(--ink-1);
 }
