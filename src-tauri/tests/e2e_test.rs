@@ -35,7 +35,7 @@ async fn end_to_end_hello_agent_completes_a_job() {
             env: vec![],
         }],
         project_id,
-        f64::INFINITY,
+        agent_factory_lib::budget::BudgetCaps { hourly_usd: f64::INFINITY, daily_usd: f64::INFINITY, monthly_usd: f64::INFINITY },
     )
     .await
     .unwrap();

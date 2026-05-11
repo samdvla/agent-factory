@@ -109,6 +109,53 @@ impl BudgetCaps {
     }
 }
 
+use crate::events::BudgetCapScope;
+
+#[derive(Debug)]
+pub enum CapOutcome {
+    Ok,
+    Capped { scope: BudgetCapScope, spent_usd: f64, cap_usd: f64 },
+}
+
+/// Multi-tier cap check. Returns Capped on the FIRST scope that would be
+/// breached by `today_spent + estimate`. Order: hour, day, month.
+/// On DB error returns Capped { scope: DbError, .. } (fail closed).
+pub async fn enforce_caps(
+    pool: &SqlitePool,
+    project_id: i64,
+    caps: BudgetCaps,
+    estimate_usd: f64,
+) -> anyhow::Result<CapOutcome> {
+    let hour = match spend_window(pool, project_id, 1).await {
+        Ok(v) => v,
+        Err(_) => return Ok(CapOutcome::Capped {
+            scope: BudgetCapScope::DbError, spent_usd: 0.0, cap_usd: caps.hourly_usd,
+        }),
+    };
+    if hour + estimate_usd >= caps.hourly_usd {
+        return Ok(CapOutcome::Capped { scope: BudgetCapScope::Hour, spent_usd: hour, cap_usd: caps.hourly_usd });
+    }
+    let day = match today_spend_usd(pool, project_id).await {
+        Ok(v) => v,
+        Err(_) => return Ok(CapOutcome::Capped {
+            scope: BudgetCapScope::DbError, spent_usd: 0.0, cap_usd: caps.daily_usd,
+        }),
+    };
+    if day + estimate_usd >= caps.daily_usd {
+        return Ok(CapOutcome::Capped { scope: BudgetCapScope::Day, spent_usd: day, cap_usd: caps.daily_usd });
+    }
+    let month = match month_spend_usd(pool, project_id).await {
+        Ok(v) => v,
+        Err(_) => return Ok(CapOutcome::Capped {
+            scope: BudgetCapScope::DbError, spent_usd: 0.0, cap_usd: caps.monthly_usd,
+        }),
+    };
+    if month + estimate_usd >= caps.monthly_usd {
+        return Ok(CapOutcome::Capped { scope: BudgetCapScope::Month, spent_usd: month, cap_usd: caps.monthly_usd });
+    }
+    Ok(CapOutcome::Ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

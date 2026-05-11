@@ -76,12 +76,11 @@ pub fn run() {
                     .and_then(|v| v.parse::<f64>().ok())
                     .unwrap_or(default)
             };
-            let _caps = budget::BudgetCaps {
+            let caps = budget::BudgetCaps {
                 hourly_usd:  read_cap("hourly_budget_usd",  0.50),
                 daily_usd:   read_cap("daily_budget_usd",   1.00),
                 monthly_usd: read_cap("monthly_budget_usd", 20.00),
             };
-            let daily_cap_usd: f64 = _caps.daily_usd; // keep existing var alive for next tasks
 
             let auto_state = state.clone();
             let pool_for_job = pool.clone();
@@ -117,7 +116,7 @@ pub fn run() {
                     make_spec("cs", "cs"),
                     make_spec("si", "si"),
                 ];
-                match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job, daily_cap_usd).await {
+                match supervisor::start(pool_for_job.clone(), bus, agents, project_id_for_job, caps).await {
                     Ok(handle) => {
                         let mut guard = auto_state.supervisor_handle.lock().await;
                         *guard = Some(handle);

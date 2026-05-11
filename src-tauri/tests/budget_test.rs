@@ -61,3 +61,37 @@ fn estimate_cost_is_monotonic_in_input_length() {
     let big   = budget::estimate_cost("claude-sonnet-4-6", 10_000, 100);
     assert!(big > small, "expected monotonic in tokens_in");
 }
+
+#[tokio::test]
+async fn enforce_caps_returns_hour_when_hourly_exceeded() {
+    let (_tmp, pool, project_id) = setup().await;
+    // 1M sonnet input = $3.00 — over an hourly cap of $1
+    budget::record(&pool, project_id, "claude-sonnet-4-6", 1_000_000, 0).await.unwrap();
+    let caps = budget::BudgetCaps { hourly_usd: 1.0, daily_usd: 100.0, monthly_usd: 1000.0 };
+    let outcome = budget::enforce_caps(&pool, project_id, caps, 0.0).await.unwrap();
+    match outcome {
+        budget::CapOutcome::Capped { scope, .. } => {
+            assert!(matches!(scope, agent_factory_lib::events::BudgetCapScope::Hour));
+        }
+        _ => panic!("expected Capped(Hour)"),
+    }
+}
+
+#[tokio::test]
+async fn enforce_caps_returns_ok_when_under_all_caps() {
+    let (_tmp, pool, project_id) = setup().await;
+    let caps = budget::BudgetCaps::defaults();
+    let outcome = budget::enforce_caps(&pool, project_id, caps, 0.0).await.unwrap();
+    assert!(matches!(outcome, budget::CapOutcome::Ok));
+}
+
+#[tokio::test]
+async fn enforce_caps_preflight_blocks_when_estimate_pushes_over() {
+    let (_tmp, pool, project_id) = setup().await;
+    // current spend: $0.40 (just under $0.50 hourly default)
+    budget::record(&pool, project_id, "claude-haiku-4-5-20251001", 500_000, 0).await.unwrap();
+    let caps = budget::BudgetCaps { hourly_usd: 0.50, daily_usd: 100.0, monthly_usd: 1000.0 };
+    // estimate of $0.20 pushes total to $0.60, over $0.50 hourly
+    let outcome = budget::enforce_caps(&pool, project_id, caps, 0.20).await.unwrap();
+    assert!(matches!(outcome, budget::CapOutcome::Capped { .. }));
+}

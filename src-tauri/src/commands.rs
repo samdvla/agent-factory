@@ -57,12 +57,11 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(default)
     };
-    let _caps = budget::BudgetCaps {
+    let caps = budget::BudgetCaps {
         hourly_usd:  read_cap("hourly_budget_usd",  0.50),
         daily_usd:   read_cap("daily_budget_usd",   1.00),
         monthly_usd: read_cap("monthly_budget_usd", 20.00),
     };
-    let daily_cap_usd: f64 = _caps.daily_usd; // keep existing var alive for next tasks
     let api_key_env = ("ANTHROPIC_API_KEY".into(), api_key.clone());
     let make_spec = |role: &str, worker_dir: &str| supervisor::AgentSpec {
         role: role.into(),
@@ -93,7 +92,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         make_spec("cs", "cs"),
     ];
 
-    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id, daily_cap_usd)
+    let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id, caps)
         .await
         .map_err(|e| e.to_string())?;
     *guard = Some(handle);
