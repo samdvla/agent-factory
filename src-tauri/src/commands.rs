@@ -16,6 +16,8 @@ pub struct AppState {
     pub supervisor_handle: Mutex<Option<supervisor::SupervisorHandle>>,
     /// Map of `state` nonce -> PKCE code_verifier for in-flight OAuth flows.
     pub pending_oauth: Mutex<HashMap<String, String>>,
+    /// Handle to the in-flight OAuth task, if any. Aborted on new start.
+    pub oauth_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Serialize)]
@@ -162,14 +164,26 @@ pub async fn cmd_etsy_start_oauth(
     }
     let authorize_url = etsy::build_authorize_url(&keystring, &oauth_state, &challenge);
 
-    // Spawn the callback waiter + exchange. We hold the AppState so we can
-    // pop the verifier on success.
+    // Cancel any in-flight OAuth task so we can rebind the callback port.
+    {
+        let mut guard = state.oauth_task.lock().await;
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
+    }
+    // Give the previous listener a moment to fully drop before we bind.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
     let app_state = state.inner().clone();
     let keystring_for_task = keystring;
     let app_for_task = app.clone();
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         run_oauth_flow(app_for_task, app_state, keystring_for_task, oauth_state).await;
     });
+    {
+        let mut guard = state.oauth_task.lock().await;
+        *guard = Some(handle);
+    }
 
     Ok(OAuthInit { authorize_url })
 }
@@ -181,7 +195,7 @@ async fn run_oauth_flow(
     oauth_state: String,
 ) {
     let result: anyhow::Result<etsy::ShopInfo> = async {
-        let cb = oauth_server::await_callback(Duration::from_secs(600)).await?;
+        let cb = oauth_server::await_callback(Duration::from_secs(180)).await?;
         if cb.state != oauth_state {
             return Err(anyhow::anyhow!(
                 "state mismatch — got `{}`, expected `{}`",

@@ -56,6 +56,7 @@ pub fn run() {
                 project_id,
                 supervisor_handle: tokio::sync::Mutex::new(None),
                 pending_oauth: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                oauth_task: tokio::sync::Mutex::new(None),
             });
 
             commands::forward_events_to_window(app.handle().clone(), bus.clone());
