@@ -10,6 +10,8 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const [etsyBusy, setEtsyBusy] = useState(false);
   const [etsyError, setEtsyError] = useState<string | null>(null);
   const [etsyDetailsOpen, setEtsyDetailsOpen] = useState(false);
+  const [etsyAuthUrl, setEtsyAuthUrl] = useState<string | null>(null);
+  const [etsyCopied, setEtsyCopied] = useState(false);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
@@ -44,7 +46,12 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
     let unC: UnlistenFn | undefined;
     let unE: UnlistenFn | undefined;
     (async () => {
-      unC = await listen("etsy_connected", () => { setEtsyError(null); refresh(); });
+      unC = await listen("etsy_connected", () => {
+        setEtsyError(null);
+        setEtsyAuthUrl(null);
+        setEtsyDetailsOpen(false);
+        refresh();
+      });
       unE = await listen<string>("etsy_oauth_error", (evt) => {
         setEtsyError(evt.payload || "OAuth failed");
         setEtsyBusy(false);
@@ -71,10 +78,12 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
     if (etsyBusy) return;
     setEtsyBusy(true);
     setEtsyError(null);
-    setEtsyDetailsOpen(false);
+    setEtsyCopied(false);
     try {
       await api.etsyClearLastError().catch(() => {});
       const { authorize_url } = await api.etsyStartOAuth();
+      setEtsyAuthUrl(authorize_url);
+      setEtsyDetailsOpen(true);
       await openUrl(authorize_url);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -83,6 +92,15 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
     } finally {
       setEtsyBusy(false);
     }
+  };
+
+  const copyAuthUrl = async () => {
+    if (!etsyAuthUrl) return;
+    try {
+      await navigator.clipboard.writeText(etsyAuthUrl);
+      setEtsyCopied(true);
+      setTimeout(() => setEtsyCopied(false), 1800);
+    } catch {}
   };
 
   const netUsd = revenueUsd - budgetUsd;
@@ -172,7 +190,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         {etsyDetailsOpen && !etsy?.connected && (
           <div className="etsy-status-popover" role="dialog">
             <div className="etsy-popover-header">
-              <span>Last OAuth error</span>
+              <span>{etsyAuthUrl ? "Complete Etsy authorization" : "Last OAuth error"}</span>
               <button
                 type="button"
                 className="etsy-popover-close"
@@ -182,28 +200,67 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
                 ×
               </button>
             </div>
-            <pre className="etsy-popover-body">{etsyError ?? "no error recorded"}</pre>
-            <div className="etsy-popover-actions">
-              <button
-                type="button"
-                className="modal-btn"
-                onClick={async () => {
-                  await api.etsyClearLastError().catch(() => {});
-                  setEtsyError(null);
-                  setEtsyDetailsOpen(false);
-                }}
-              >
-                Dismiss
-              </button>
-              <button
-                type="button"
-                className="modal-btn approve"
-                onClick={startEtsyOAuth}
-                disabled={etsyBusy}
-              >
-                {etsyBusy ? "Retrying…" : "Retry"}
-              </button>
-            </div>
+
+            {etsyAuthUrl && (
+              <>
+                <p className="etsy-popover-hint">
+                  Authorization page opened in your browser. If you didn't see a tab, copy or open the URL below.
+                </p>
+                <div className="etsy-popover-url">
+                  <span className="etsy-popover-url-text" title={etsyAuthUrl}>{etsyAuthUrl}</span>
+                </div>
+                <div className="etsy-popover-actions">
+                  <button type="button" className="modal-btn" onClick={copyAuthUrl}>
+                    {etsyCopied ? "Copied ✓" : "Copy URL"}
+                  </button>
+                  <button
+                    type="button"
+                    className="modal-btn approve"
+                    onClick={() => etsyAuthUrl && openUrl(etsyAuthUrl)}
+                  >
+                    Open in browser
+                  </button>
+                </div>
+                <p className="etsy-popover-hint" style={{ marginTop: 10 }}>
+                  After you click <strong>Allow</strong> on Etsy, you should land on{" "}
+                  <code>http://localhost:7330/callback</code>. If you land somewhere else, your Etsy app's Callback URL is misconfigured —
+                  it must be exactly that, no <code>https</code>, no trailing slash.
+                </p>
+              </>
+            )}
+
+            {etsyError && (
+              <>
+                <div className="etsy-popover-section-label">Last error</div>
+                <pre className="etsy-popover-body">{etsyError}</pre>
+                <div className="etsy-popover-actions">
+                  <button
+                    type="button"
+                    className="modal-btn"
+                    onClick={async () => {
+                      await api.etsyClearLastError().catch(() => {});
+                      setEtsyError(null);
+                      setEtsyAuthUrl(null);
+                      setEtsyDetailsOpen(false);
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    type="button"
+                    className="modal-btn approve"
+                    onClick={startEtsyOAuth}
+                    disabled={etsyBusy}
+                  >
+                    {etsyBusy ? "Retrying…" : "Retry"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {!etsyAuthUrl && !etsyError && (
+              <p className="etsy-popover-hint">No active OAuth session.</p>
+            )}
           </div>
         )}
       </div>

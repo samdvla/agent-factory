@@ -3407,3 +3407,46 @@ button.etsy-pill {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Etsy popover — auth URL section */
+.etsy-popover-hint {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.etsy-popover-hint code {
+  font-family: var(--font-mono);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--ink-0);
+}
+.etsy-popover-url {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.etsy-popover-url-text {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.etsy-popover-section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  opacity: 0.6;
+  margin: 12px 0 6px;
+}
