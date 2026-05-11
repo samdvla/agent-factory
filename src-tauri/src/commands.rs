@@ -243,6 +243,20 @@ pub async fn cmd_etsy_status() -> Result<etsy::EtsyStatus, String> {
     Ok(etsy::load_status())
 }
 
+/// Read the most recent OAuth failure stored by `run_oauth_flow`.
+/// Returns `None` if no error is recorded (cleared on successful connect).
+#[tauri::command]
+pub async fn cmd_etsy_last_error() -> Result<Option<String>, String> {
+    secrets::get("etsy_last_error").map_err(|e| e.to_string())
+}
+
+/// Manually clear the stored OAuth error (used by the UI "Dismiss" affordance).
+#[tauri::command]
+pub async fn cmd_etsy_clear_last_error() -> Result<(), String> {
+    let _ = secrets::delete("etsy_last_error");
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn cmd_etsy_disconnect() -> Result<(), String> {
     etsy::disconnect().map_err(|e| e.to_string())

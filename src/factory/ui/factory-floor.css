@@ -3345,3 +3345,65 @@ button.etsy-pill {
   0%, 100% { opacity: 0.7; }
   50%      { opacity: 1; }
 }
+
+/* ── Etsy status — error state + popover ────────────────────────────────── */
+.etsy-status-wrap { position: relative; }
+.etsy-status.is-error {
+  border-color: rgba(255, 138, 147, 0.55);
+}
+.etsy-status.is-error .etsy-status-dot {
+  background: #ff8a93;
+  box-shadow: 0 0 8px rgba(255, 138, 147, 0.7);
+  animation: etsy-status-pulse 1.6s ease-in-out infinite;
+}
+.etsy-status.is-error .etsy-status-sub { color: #ff8a93; }
+
+.etsy-status-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 380px;
+  background: #13151a;
+  border: 1px solid rgba(255, 138, 147, 0.4);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  z-index: 100;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+.etsy-popover-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff8a93;
+  margin-bottom: 8px;
+}
+.etsy-popover-close {
+  width: 20px; height: 20px;
+  display: grid; place-items: center;
+  border-radius: 4px;
+  color: var(--ink-2);
+  font-size: 16px; line-height: 1;
+}
+.etsy-popover-close:hover { background: var(--bg-3); color: var(--ink-0); }
+.etsy-popover-body {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-0);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.etsy-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

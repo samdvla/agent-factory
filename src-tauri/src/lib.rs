@@ -230,6 +230,8 @@ pub fn run() {
             commands::cmd_enqueue,
             commands::cmd_etsy_start_oauth,
             commands::cmd_etsy_status,
+            commands::cmd_etsy_last_error,
+            commands::cmd_etsy_clear_last_error,
             commands::cmd_etsy_disconnect,
             commands::cmd_etsy_set_enabled,
             commands::cmd_etsy_get_enabled,

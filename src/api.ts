@@ -101,6 +101,8 @@ export const api = {
     invoke<number>("cmd_enqueue", { args: { agent_role: agentRole, payload } }),
   etsyStartOAuth: () => invoke<OAuthInit>("cmd_etsy_start_oauth"),
   etsyStatus: () => invoke<EtsyStatus>("cmd_etsy_status"),
+  etsyLastError: () => invoke<string | null>("cmd_etsy_last_error"),
+  etsyClearLastError: () => invoke<void>("cmd_etsy_clear_last_error"),
   etsyDisconnect: () => invoke<void>("cmd_etsy_disconnect"),
   etsySetEnabled: (enabled: boolean) =>
     invoke<void>("cmd_etsy_set_enabled", { enabled }),

@@ -8,6 +8,8 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [etsy, setEtsy] = useState<EtsyStatus | null>(null);
   const [etsyBusy, setEtsyBusy] = useState(false);
+  const [etsyError, setEtsyError] = useState<string | null>(null);
+  const [etsyDetailsOpen, setEtsyDetailsOpen] = useState(false);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
@@ -24,31 +26,60 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
-    const refresh = () =>
-      api.etsyStatus().then((s) => { if (!cancelled) setEtsy(s); }).catch(() => {});
+    const refresh = async () => {
+      try {
+        const s = await api.etsyStatus();
+        if (cancelled) return;
+        setEtsy(s);
+        if (s.connected) {
+          setEtsyError(null);
+        } else {
+          const err = await api.etsyLastError().catch(() => null);
+          if (!cancelled) setEtsyError(err && err.length > 0 ? err : null);
+        }
+      } catch {}
+    };
     refresh();
     const id = setInterval(refresh, 5000);
     let unC: UnlistenFn | undefined;
     let unE: UnlistenFn | undefined;
     (async () => {
-      unC = await listen("etsy_connected", () => refresh());
-      unE = await listen("etsy_oauth_error", () => refresh());
+      unC = await listen("etsy_connected", () => { setEtsyError(null); refresh(); });
+      unE = await listen<string>("etsy_oauth_error", (evt) => {
+        setEtsyError(evt.payload || "OAuth failed");
+        setEtsyBusy(false);
+        refresh();
+      });
     })();
     return () => { cancelled = true; clearInterval(id); unC?.(); unE?.(); };
   }, []);
 
   const onEtsyClick = async () => {
+    // If there's a stored error and not connected, expand the details popover.
+    if (!etsy?.connected && etsyError) {
+      setEtsyDetailsOpen((v) => !v);
+      return;
+    }
     if (etsy?.connected && etsy.shop_name) {
       await openUrl(`https://www.etsy.com/shop/${encodeURIComponent(etsy.shop_name)}`);
       return;
     }
+    await startEtsyOAuth();
+  };
+
+  const startEtsyOAuth = async () => {
     if (etsyBusy) return;
     setEtsyBusy(true);
+    setEtsyError(null);
+    setEtsyDetailsOpen(false);
     try {
+      await api.etsyClearLastError().catch(() => {});
       const { authorize_url } = await api.etsyStartOAuth();
       await openUrl(authorize_url);
-    } catch {
-      // error surfaces via etsy_oauth_error event listener
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setEtsyError(msg);
+      setEtsyDetailsOpen(true);
     } finally {
       setEtsyBusy(false);
     }
@@ -111,28 +142,71 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         </svg>
       </div>
 
-      <button
-        type="button"
-        className={`etsy-status ${etsy?.connected ? "is-connected" : "is-disconnected"}${etsyBusy ? " is-busy" : ""}`}
-        onClick={onEtsyClick}
-        title={
-          etsy?.connected
-            ? `Connected to ${etsy.shop_name ?? "Etsy"} — click to open shop`
-            : "Etsy not connected — click to start OAuth"
-        }
-      >
-        <span className="etsy-status-dot" />
-        <span className="etsy-status-text">
-          <span className="etsy-status-label">Etsy</span>
-          <span className="etsy-status-sub">
-            {etsyBusy
-              ? "Opening browser…"
-              : etsy?.connected
-                ? (etsy.shop_name ?? "Connected")
-                : "Not connected"}
+      <div className="etsy-status-wrap">
+        <button
+          type="button"
+          className={`etsy-status ${etsy?.connected ? "is-connected" : etsyError ? "is-error" : "is-disconnected"}${etsyBusy ? " is-busy" : ""}`}
+          onClick={onEtsyClick}
+          title={
+            etsy?.connected
+              ? `Connected to ${etsy.shop_name ?? "Etsy"} — click to open shop`
+              : etsyError
+                ? "OAuth error — click for details"
+                : "Etsy not connected — click to start OAuth"
+          }
+        >
+          <span className="etsy-status-dot" />
+          <span className="etsy-status-text">
+            <span className="etsy-status-label">Etsy</span>
+            <span className="etsy-status-sub">
+              {etsyBusy
+                ? "Opening browser…"
+                : etsy?.connected
+                  ? (etsy.shop_name ?? "Connected")
+                  : etsyError
+                    ? "Error — click for details"
+                    : "Not connected"}
+            </span>
           </span>
-        </span>
-      </button>
+        </button>
+        {etsyDetailsOpen && !etsy?.connected && (
+          <div className="etsy-status-popover" role="dialog">
+            <div className="etsy-popover-header">
+              <span>Last OAuth error</span>
+              <button
+                type="button"
+                className="etsy-popover-close"
+                onClick={() => setEtsyDetailsOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <pre className="etsy-popover-body">{etsyError ?? "no error recorded"}</pre>
+            <div className="etsy-popover-actions">
+              <button
+                type="button"
+                className="modal-btn"
+                onClick={async () => {
+                  await api.etsyClearLastError().catch(() => {});
+                  setEtsyError(null);
+                  setEtsyDetailsOpen(false);
+                }}
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                className="modal-btn approve"
+                onClick={startEtsyOAuth}
+                disabled={etsyBusy}
+              >
+                {etsyBusy ? "Retrying…" : "Retry"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="topbar-spacer" />
 
