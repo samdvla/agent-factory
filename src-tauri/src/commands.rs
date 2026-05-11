@@ -808,15 +808,14 @@ pub async fn cmd_start_smoke_test(
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     use chrono::Utc;
-    // Ensure supervisor is running so workers exist to claim the job.
-    {
-        let running = state.supervisor_handle.lock().await.is_some();
-        if !running {
-            cmd_start_supervisor(state.clone()).await?;
-            // Give the workers a moment to come up and start polling.
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    }
+    // Force a clean supervisor restart so workers are guaranteed alive.
+    // The stored handle can be stale (workers crashed but handle wasn't
+    // cleared) — short-circuiting on is_some() in cmd_start_supervisor
+    // would leave us with no live workers. Stop-then-start fixes both.
+    cmd_stop_supervisor(state.clone()).await?;
+    cmd_start_supervisor(state.clone()).await?;
+    // Give the workers a moment to come up and start polling.
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let cycle_id = format!("smoke-{}", Utc::now().format("%Y%m%d%H%M%S"));
     secrets::set("smoke_cycle_id", &cycle_id).map_err(|e| e.to_string())?;
     let now_ts = Utc::now().timestamp().to_string();
