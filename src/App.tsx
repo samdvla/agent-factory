@@ -46,10 +46,17 @@ export default function App() {
   };
 
   return (
-    <div className={`app${railCollapsed ? " rail-collapsed" : ""}`}>
+    <div className={`app${railCollapsed ? " rail-collapsed" : ""}${sandbox ? " has-sandbox" : ""}`}>
       <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
       <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
       <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
+        {sandbox && (
+          <div className="sandbox-banner" role="status" aria-label="Sandbox mode">
+            <span className="glyph">◇</span>
+            <span>Sandbox mode — synthetic floor activity, no live publishing</span>
+            <span className="glyph">◇</span>
+          </div>
+        )}
         <SvgFactoryFloor />
       </div>
       <Ticker />

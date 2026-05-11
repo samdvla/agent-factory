@@ -82,16 +82,17 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         </div>
       </div>
 
-      <div
-        className="project-select"
+      <button
+        type="button"
+        className={`project-select mode-toggle ${sandbox ? "is-sandbox" : "is-live"}`}
         onClick={() => setSandbox(!sandbox)}
-        title="Sandbox mode (toggle)"
+        title={sandbox ? "Sandbox mode — click to switch to Live" : "Live mode — click to switch to Sandbox"}
       >
         <span className="dot" />
         <span className="name">{sandbox ? "Sandbox" : "Live"}</span>
         <span className="sub">mode</span>
         <span className="caret">▾</span>
-      </div>
+      </button>
 
       <div
         className="guardian"

@@ -11,6 +11,16 @@ import {
 
 export type { FactoryStore };
 
+const SANDBOX_STORAGE_KEY = "agentFactory.mode.sandbox";
+function readSandboxDefault(): boolean {
+  try {
+    const v = localStorage.getItem(SANDBOX_STORAGE_KEY);
+    if (v === "true") return true;
+    if (v === "false") return false;
+  } catch {}
+  return false; // default: Live mode
+}
+
 export const useFactoryStore = create<FactoryStore>((set, get) => ({
   roles: { ...FOUNDING_ROLES },
   rooms: { ...FOUNDING_ROOMS },
@@ -20,7 +30,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   pendingGate: null,
   selectedAgent: null,
   drawerOpen: false,
-  sandbox: true,
+  sandbox: readSandboxDefault(),
   allStop: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
@@ -66,7 +76,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   dismissAlert: (idx) => set((s) => ({ alerts: s.alerts.filter((_, i) => i !== idx) })),
   setPendingGate: (g) => set({ pendingGate: g }),
   selectAgent: (role) => set({ selectedAgent: role, drawerOpen: role !== null }),
-  setSandbox: (v) => set({ sandbox: v }),
+  setSandbox: (v) => {
+    try { localStorage.setItem(SANDBOX_STORAGE_KEY, String(v)); } catch {}
+    set({ sandbox: v });
+  },
   setAllStop: (v) => set({ allStop: v }),
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
   setBudgetCapped: (v) => set({ budgetCapped: v }),

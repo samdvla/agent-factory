@@ -1138,7 +1138,7 @@ button.etsy-pill {
 
 .sandbox-banner {
   position: absolute;
-  top: var(--topbar-h);
+  top: 0;
   left: 0; right: 0;
   height: 24px;
   background:
@@ -3328,3 +3328,20 @@ button.etsy-pill {
 }
 .etsy-status.is-connected .etsy-status-sub { color: #9be0b3; }
 .etsy-status.is-disconnected .etsy-status-sub { color: var(--ink-2); }
+
+/* ── Mode toggle (Live vs Sandbox) ──────────────────────────────────────── */
+.mode-toggle { cursor: pointer; }
+.mode-toggle.is-live .dot {
+  background: #9be0b3;
+  box-shadow: 0 0 8px #9be0b3aa;
+}
+.mode-toggle.is-sandbox .dot {
+  background: var(--accent-warm, #f5a623);
+  box-shadow: 0 0 8px rgba(245, 166, 35, 0.7);
+  animation: mode-sandbox-pulse 2.4s ease-in-out infinite;
+}
+.mode-toggle.is-sandbox .name { color: var(--accent-warm, #f5a623); }
+@keyframes mode-sandbox-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
