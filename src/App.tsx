@@ -6,6 +6,7 @@ import SideDrawer from "./factory/ui/SideDrawer";
 import AlertTray from "./factory/ui/AlertTray";
 import GateModal from "./factory/ui/GateModal";
 import OnboardingWizard from "./factory/ui/OnboardingWizard";
+import SettingsModal from "./factory/ui/SettingsModal";
 import CommandRail from "./factory/ui/CommandRail";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { useDemoFloor } from "./hooks/useDemoFloor";
@@ -23,6 +24,7 @@ export default function App() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [alertTrayOpen, setAlertTrayOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(RAIL_STORAGE_KEY) === "true";
@@ -48,7 +50,10 @@ export default function App() {
   return (
     <div className={`app${railCollapsed ? " rail-collapsed" : ""}${sandbox ? " has-sandbox" : ""}`}>
       <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
-      <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
+      <TopBar
+        onAlertClick={() => setAlertTrayOpen((v) => !v)}
+        onSettingsClick={() => setSettingsOpen(true)}
+      />
       <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
         {sandbox && (
           <div className="sandbox-banner" role="status" aria-label="Sandbox mode">
@@ -64,6 +69,7 @@ export default function App() {
       <AlertTray open={alertTrayOpen} onClose={() => setAlertTrayOpen(false)} />
       <GateModal />
       <OnboardingWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

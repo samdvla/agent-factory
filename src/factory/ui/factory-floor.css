@@ -3486,3 +3486,487 @@ button.etsy-pill {
 .analytics-pill-caret.is-open, .etsy-section-caret.is-open {
   transform: rotate(90deg);
 }
+
+/* ============== Settings modal ============== */
+
+.settings-back {
+  position: fixed; inset: 0;
+  z-index: 70;
+  background: rgba(7, 9, 12, 0.65);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: settings-fade-in 0.2s ease;
+}
+
+@keyframes settings-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.settings-modal {
+  width: 560px;
+  max-width: 94vw;
+  max-height: 88vh;
+  background: #13151a;
+  border: 1px solid #2a2d33;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: settings-slide-in 0.2s ease;
+}
+
+@keyframes settings-slide-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+
+.settings-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid #2a2d33;
+  background: #0f1115;
+  flex-shrink: 0;
+}
+
+.settings-modal-head-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-modal-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  background: rgba(95, 212, 240, 0.08);
+  border: 1px solid rgba(95, 212, 240, 0.25);
+  padding: 1px 7px;
+  border-radius: 10px;
+  align-self: flex-start;
+}
+
+.settings-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--ink-0);
+}
+
+.settings-close-btn {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border: 1px solid #2a2d33;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.settings-close-btn:hover { background: var(--bg-3); color: var(--ink-0); }
+
+.settings-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* ---- Section ---- */
+
+.settings-section {
+  padding: 18px 22px;
+  border-bottom: 1px solid #2a2d33;
+}
+.settings-section:last-child { border-bottom: none; }
+
+.settings-section-title {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-2);
+  opacity: 0.55;
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+
+/* ---- Credential rows ---- */
+
+.settings-cred-row {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed #1f2630;
+}
+.settings-cred-row:last-child { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+
+.settings-cred-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-cred-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-0);
+  flex: 1;
+  min-width: 120px;
+}
+
+.settings-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid;
+}
+.settings-badge.is-set {
+  color: #9be0b3;
+  background: rgba(155, 224, 179, 0.1);
+  border-color: rgba(155, 224, 179, 0.35);
+}
+.settings-badge.is-unset {
+  color: #e8d77b;
+  background: rgba(232, 215, 123, 0.08);
+  border-color: rgba(232, 215, 123, 0.3);
+}
+
+.settings-link {
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  opacity: 0.8;
+  transition: opacity 0.12s;
+}
+.settings-link:hover { opacity: 1; }
+
+.settings-cred-preview {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  background: #0f1115;
+  border: 1px solid #2a2d33;
+  border-radius: var(--radius);
+  display: inline-block;
+}
+
+.settings-cred-edit {
+  margin-top: 8px;
+}
+
+.settings-cred-edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- Shared input ---- */
+
+.settings-input {
+  width: 100%;
+  background: #0a0d10;
+  border: 1px solid #2a2d33;
+  border-radius: var(--radius);
+  color: var(--ink-0);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s;
+}
+.settings-input:focus { border-color: var(--accent); }
+
+.settings-input-number {
+  width: auto;
+  text-align: right;
+  max-width: 90px;
+}
+.settings-input-sm { max-width: 64px; font-size: 12px; padding: 4px 6px; }
+
+/* ---- Budget rows ---- */
+
+.settings-budget-row {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed #1f2630;
+}
+.settings-budget-row:last-child { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+
+.settings-budget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-budget-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-0);
+}
+
+.settings-budget-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-budget-prefix {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+/* ---- Inline save button ---- */
+
+.settings-inline-save {
+  padding: 4px 12px !important;
+  height: 28px;
+  font-size: 11px !important;
+}
+
+/* ---- Field rows (toggle, cap, status) ---- */
+
+.settings-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #1f2630;
+}
+.settings-field-row:last-child { border-bottom: none; }
+
+.settings-field-label-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.settings-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-0);
+}
+
+/* ---- Toggle ---- */
+
+.settings-toggle {
+  padding: 2px 12px;
+  height: 26px;
+  border: 1px solid #2a2d33;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.settings-toggle.is-on {
+  border-color: rgba(245, 166, 35, 0.55);
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--accent-warm);
+}
+.settings-toggle:disabled { opacity: 0.5; cursor: progress; }
+
+/* ---- Status / connection badge ---- */
+
+.settings-conn-badge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid;
+}
+.settings-conn-badge.is-connected {
+  color: #9be0b3;
+  background: rgba(155, 224, 179, 0.08);
+  border-color: rgba(155, 224, 179, 0.3);
+}
+.settings-conn-badge.is-disconnected {
+  color: var(--ink-2);
+  background: transparent;
+  border-color: #2a2d33;
+}
+
+.settings-status-row { padding: 10px 0; }
+
+/* ---- Disconnect confirmation ---- */
+
+.settings-disconnect-row { padding-top: 6px; }
+
+.settings-danger-btn {
+  padding: 5px 14px;
+  border: 1px solid rgba(239, 79, 90, 0.4);
+  border-radius: var(--radius);
+  background: transparent;
+  color: #ff8a93;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.settings-danger-btn:hover { background: rgba(239, 79, 90, 0.1); }
+
+.settings-confirm-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-confirm-question {
+  font-size: 12px;
+  color: var(--ink-1);
+  flex: 1;
+}
+
+/* ---- Etsy error panel ---- */
+
+.settings-etsy-error-panel {
+  margin-top: 10px;
+  border: 1px solid rgba(239, 79, 90, 0.35);
+  border-radius: var(--radius);
+  background: rgba(239, 79, 90, 0.06);
+  overflow: hidden;
+}
+
+.settings-etsy-error-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(239, 79, 90, 0.2);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ff8a93;
+}
+
+.settings-etsy-error-body {
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-1);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* ---- Diagnostics section ---- */
+
+.settings-section-diagnostics { opacity: 0.75; }
+
+.settings-diag-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #1f2630;
+}
+.settings-diag-row:last-child { border-bottom: none; }
+
+.settings-diag-label {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  min-width: 90px;
+}
+
+.settings-diag-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-1);
+}
+
+/* ---- Inline feedback ---- */
+
+.settings-helper {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 3px;
+}
+
+.settings-inline-error {
+  font-size: 11px;
+  color: #ff8a93;
+  margin-top: 4px;
+}
+
+.settings-unsaved-note {
+  font-size: 10px;
+  color: var(--accent-warm);
+  opacity: 0.7;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  margin-left: 2px;
+}
+
+.settings-inline-number-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-feedback {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid;
+  animation: settings-feedback-in 0.15s ease;
+}
+@keyframes settings-feedback-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.settings-feedback.is-saving {
+  color: var(--ink-2);
+  border-color: #2a2d33;
+  background: transparent;
+}
+.settings-feedback.is-saved {
+  color: #9be0b3;
+  background: rgba(155, 224, 179, 0.1);
+  border-color: rgba(155, 224, 179, 0.35);
+}
+.settings-feedback.is-error {
+  color: #ff8a93;
+  background: rgba(239, 79, 90, 0.08);
+  border-color: rgba(239, 79, 90, 0.35);
+}
