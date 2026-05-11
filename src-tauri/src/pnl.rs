@@ -237,6 +237,25 @@ pub async fn close_cycle(
 
     tx.commit().await?;
 
+    // Reconcile: ledger-sum for this cycle should match total_cost_usd.
+    let ledger_sum: Option<f64> = sqlx::query_scalar(
+        "SELECT SUM(cost_usd) FROM agent_contributions WHERE cycle_id = ?",
+    )
+    .bind(cycle_id)
+    .fetch_one(pool)
+    .await
+    .ok();
+    if let Some(sum) = ledger_sum {
+        if (sum - total_cost).abs() > 0.01 {
+            tracing::warn!(
+                cycle_id = %cycle_id,
+                ledger_sum = sum,
+                pnl_sum = total_cost,
+                "pnl/ledger reconciliation mismatch > $0.01"
+            );
+        }
+    }
+
     Ok(CycleSummary {
         cycle_id: cycle_id.to_string(),
         niche,
