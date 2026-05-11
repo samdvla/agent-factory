@@ -208,71 +208,79 @@ async fn run_worker_loop(
                                 if let Err(e) = queue::complete(pool, job_id, result.clone()).await {
                                     tracing::error!("complete failed: {e}");
                                 }
-                                // Emit budget spend if the worker reported token usage.
-                                if let (Some(tin), Some(tout), Some(model)) = (
-                                    result.get("tokens_in").and_then(|v| v.as_u64()),
-                                    result.get("tokens_out").and_then(|v| v.as_u64()),
-                                    result.get("model").and_then(|v| v.as_str()),
-                                ) {
-                                    let cost = budget::cost_usd(model, tin, tout);
-                                    if cost > 0.0 {
-                                        // Persist to the budget_ledger BEFORE emitting so the
-                                        // spend is durable at the moment the event fires.
-                                        if let Err(e) = budget::record(pool, project_id, model, tin, tout).await {
-                                            tracing::error!("budget::record failed: {e}");
-                                        }
-                                        bus.send(SupervisorEvent::BudgetSpent {
-                                            role: role.into(),
-                                            cost_usd: cost,
-                                            tokens_in: tin,
-                                            tokens_out: tout,
-                                            model: model.to_string(),
-                                        });
-
-                                        // Per-cycle P&L: attribute this job's
-                                        // cost to its pipeline cycle. Fire-and-
-                                        // forget on a tokio task so the worker
-                                        // loop never blocks on a DB write.
-                                        if let Some(cycle_id_str) = result.get("cycle_id").and_then(|v| v.as_str()) {
-                                            let pool_for_pnl = pool.clone();
-                                            let project_id_for_pnl = project_id;
-                                            let role_for_pnl = role.to_string();
-                                            let cycle_for_pnl = cycle_id_str.to_string();
-                                            let tin_i = tin as i64;
-                                            let tout_i = tout as i64;
-                                            let cost_for_pnl = cost;
-                                            let model_for_pnl = model.to_string();
-                                            let niche_for_pnl: Option<String> = result
-                                                .get("niche_seed")
-                                                .or_else(|| result.get("brief").and_then(|b| b.get("niche")))
-                                                .or_else(|| result.get("niche"))
-                                                .and_then(|v| v.as_str())
-                                                .map(String::from);
-                                            tokio::spawn(async move {
-                                                let _ = crate::pnl::ensure_cycle(
-                                                    &pool_for_pnl,
-                                                    project_id_for_pnl,
-                                                    &cycle_for_pnl,
-                                                    niche_for_pnl.as_deref(),
-                                                )
-                                                .await;
-                                                if let Err(e) = crate::pnl::record_contribution(
-                                                    &pool_for_pnl,
-                                                    project_id_for_pnl,
-                                                    &cycle_for_pnl,
-                                                    &role_for_pnl,
-                                                    job_id,
-                                                    cost_for_pnl,
-                                                    tin_i,
-                                                    tout_i,
-                                                    Some(&model_for_pnl),
-                                                )
-                                                .await
-                                                {
-                                                    tracing::warn!("pnl record_contribution failed: {e}");
-                                                }
+                                // Persist + emit spend; emit Unreported if the worker
+                                // succeeded but didn't return token usage.
+                                let tin = result.get("tokens_in").and_then(|v| v.as_u64());
+                                let tout = result.get("tokens_out").and_then(|v| v.as_u64());
+                                let model = result.get("model").and_then(|v| v.as_str());
+                                match (tin, tout, model) {
+                                    (Some(tin), Some(tout), Some(model)) => {
+                                        let cost = budget::cost_usd(model, tin, tout);
+                                        if cost > 0.0 {
+                                            // Persist to the budget_ledger BEFORE emitting so the
+                                            // spend is durable at the moment the event fires.
+                                            if let Err(e) = budget::record(pool, project_id, model, tin, tout).await {
+                                                tracing::error!("budget::record failed: {e}");
+                                            }
+                                            bus.send(SupervisorEvent::BudgetSpent {
+                                                role: role.into(),
+                                                cost_usd: cost,
+                                                tokens_in: tin,
+                                                tokens_out: tout,
+                                                model: model.to_string(),
                                             });
+
+                                            // Per-cycle P&L: attribute this job's
+                                            // cost to its pipeline cycle. Fire-and-
+                                            // forget on a tokio task so the worker
+                                            // loop never blocks on a DB write.
+                                            if let Some(cycle_id_str) = result.get("cycle_id").and_then(|v| v.as_str()) {
+                                                let pool_for_pnl = pool.clone();
+                                                let project_id_for_pnl = project_id;
+                                                let role_for_pnl = role.to_string();
+                                                let cycle_for_pnl = cycle_id_str.to_string();
+                                                let tin_i = tin as i64;
+                                                let tout_i = tout as i64;
+                                                let cost_for_pnl = cost;
+                                                let model_for_pnl = model.to_string();
+                                                let niche_for_pnl: Option<String> = result
+                                                    .get("niche_seed")
+                                                    .or_else(|| result.get("brief").and_then(|b| b.get("niche")))
+                                                    .or_else(|| result.get("niche"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                tokio::spawn(async move {
+                                                    let _ = crate::pnl::ensure_cycle(
+                                                        &pool_for_pnl,
+                                                        project_id_for_pnl,
+                                                        &cycle_for_pnl,
+                                                        niche_for_pnl.as_deref(),
+                                                    )
+                                                    .await;
+                                                    if let Err(e) = crate::pnl::record_contribution(
+                                                        &pool_for_pnl,
+                                                        project_id_for_pnl,
+                                                        &cycle_for_pnl,
+                                                        &role_for_pnl,
+                                                        job_id,
+                                                        cost_for_pnl,
+                                                        tin_i,
+                                                        tout_i,
+                                                        Some(&model_for_pnl),
+                                                    )
+                                                    .await
+                                                    {
+                                                        tracing::warn!("pnl record_contribution failed: {e}");
+                                                    }
+                                                });
+                                            }
                                         }
+                                    }
+                                    _ => {
+                                        bus.send(SupervisorEvent::BudgetUnreported {
+                                            role: role.into(),
+                                            job_id,
+                                        });
                                     }
                                 }
                                 bus.send(SupervisorEvent::JobCompleted {
