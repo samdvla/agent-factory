@@ -3,7 +3,8 @@ import { computeCorridors } from "../layout";
 import { computeDoors } from "../layout";
 import { placeNewRoom } from "../layout";
 import { findPath } from "../layout";
-import type { Room, RoomKit } from "../../state/types";
+import { MAX_COLS, MAX_ROWS } from "../layout";
+import type { Room, RoomKit, RoomTag } from "../../state/types";
 
 const FOUNDING_ROOMS: Room[] = [
   { id: "strategy", name: "Strategy", col: 0, row: 0 },
@@ -168,5 +169,130 @@ describe("computeFacilityLayout", () => {
     const a = roomsHash(FOUNDING_ROOMS);
     const b = roomsHash(moved);
     expect(a).not.toBe(b);
+  });
+});
+
+// ---------- 10x10 grid cap tests ----------
+
+const TAGS: RoomTag[] = [
+  "bridge", "analyst", "creative", "copy", "comms",
+  "finance", "rd", "ops", "legal", "archive", "dev",
+];
+
+function dummyRoom(id: string, col: number, row: number, tag: RoomTag = "analyst"): Room {
+  return {
+    id,
+    name: id,
+    col,
+    row,
+    kit: {
+      primaryTag: tag,
+      capacity: 1,
+      accent: "#5fd4f0",
+      stationLayout: "row",
+      wallFeature: "trends",
+      features: [],
+    },
+  };
+}
+
+describe("placeNewRoom respects 10x10 grid bounds", () => {
+  it("never returns a column >= MAX_COLS or row >= MAX_ROWS even when forced to extend the grid", () => {
+    // Saturate the full grid except one cell, then place again.
+    const rooms: Room[] = [];
+    for (let c = 0; c < MAX_COLS; c++) {
+      for (let r = 0; r < MAX_ROWS; r++) {
+        if (c === MAX_COLS - 1 && r === MAX_ROWS - 1) continue;
+        rooms.push(dummyRoom(`r-${c}-${r}`, c, r));
+      }
+    }
+    const pos = placeNewRoom(rooms, "analyst");
+    expect(pos.col).toBeLessThan(MAX_COLS);
+    expect(pos.row).toBeLessThan(MAX_ROWS);
+    expect(pos.col).toBeGreaterThanOrEqual(0);
+    expect(pos.row).toBeGreaterThanOrEqual(0);
+    // With one open cell at (9, 9), the placer must land there.
+    expect(pos).toEqual({ col: MAX_COLS - 1, row: MAX_ROWS - 1 });
+  });
+
+  it("falls back gracefully when no in-bounds candidate is adjacent to existing rooms", () => {
+    // A single room jammed against the far corner — its only neighbours are
+    // (9, 8) and (8, 9) and (10, 9)/(9, 10) which both exceed bounds.
+    // Place a room with that tag and confirm the result is in-bounds.
+    const rooms: Room[] = [dummyRoom("corner", MAX_COLS - 1, MAX_ROWS - 1)];
+    const pos = placeNewRoom(rooms, "analyst");
+    expect(pos.col).toBeGreaterThanOrEqual(0);
+    expect(pos.row).toBeGreaterThanOrEqual(0);
+    expect(pos.col).toBeLessThan(MAX_COLS);
+    expect(pos.row).toBeLessThan(MAX_ROWS);
+  });
+
+  it("never returns negative coords for clusters of tags scattered across the grid", () => {
+    // Fuzz with a few seed layouts that use different tags.
+    const seeds: Room[][] = [
+      [dummyRoom("a", 0, 0), dummyRoom("b", 5, 5, "creative")],
+      [dummyRoom("a", 9, 9), dummyRoom("b", 0, 0, "dev")],
+      [dummyRoom("a", 4, 0), dummyRoom("b", 4, 9, "ops"), dummyRoom("c", 0, 4, "comms")],
+    ];
+    for (const rooms of seeds) {
+      for (const tag of TAGS) {
+        const pos = placeNewRoom(rooms, tag);
+        expect(pos.col).toBeGreaterThanOrEqual(0);
+        expect(pos.row).toBeGreaterThanOrEqual(0);
+        expect(pos.col).toBeLessThan(MAX_COLS);
+        expect(pos.row).toBeLessThan(MAX_ROWS);
+      }
+    }
+  });
+
+  it("is deterministic — same input yields same output", () => {
+    const rooms: Room[] = [
+      dummyRoom("strategy", 0, 0, "bridge"),
+      dummyRoom("research", 1, 0, "analyst"),
+      dummyRoom("design", 2, 0, "creative"),
+      dummyRoom("listing", 0, 1, "copy"),
+    ];
+    const a = placeNewRoom(rooms, "analyst");
+    const b = placeNewRoom(rooms, "analyst");
+    expect(a).toEqual(b);
+  });
+});
+
+describe("computeCorridors handles a 10x10 grid", () => {
+  it("returns sane strips with finite coordinates for a sparse 10x10 setup", () => {
+    // Place rooms at every other cell of the 10x10 grid.
+    const rooms: Room[] = [];
+    for (let c = 0; c < MAX_COLS; c++) {
+      for (let r = 0; r < MAX_ROWS; r++) {
+        if ((c + r) % 2 === 0) rooms.push(dummyRoom(`r-${c}-${r}`, c, r));
+      }
+    }
+    const strips = computeCorridors(rooms);
+    expect(strips.length).toBeGreaterThan(0);
+    for (const s of strips) {
+      expect(Number.isFinite(s.x0)).toBe(true);
+      expect(Number.isFinite(s.x1)).toBe(true);
+      expect(Number.isFinite(s.y0)).toBe(true);
+      expect(Number.isFinite(s.y1)).toBe(true);
+      expect(s.x1).toBeGreaterThan(s.x0);
+      expect(s.y1).toBeGreaterThan(s.y0);
+    }
+  });
+
+  it("returns the expected number of vertical strips for a full 10x10 grid", () => {
+    const rooms: Room[] = [];
+    for (let c = 0; c < MAX_COLS; c++) {
+      for (let r = 0; r < MAX_ROWS; r++) {
+        rooms.push(dummyRoom(`r-${c}-${r}`, c, r));
+      }
+    }
+    const strips = computeCorridors(rooms);
+    // Vertical strips: one between every pair of adjacent occupied columns.
+    // With 10 columns, that's 9 vertical strips.
+    const verticals = strips.filter((s) => s.x1 - s.x0 < s.y1 - s.y0);
+    expect(verticals.length).toBe(MAX_COLS - 1);
+    // Horizontal strips: one between every pair of adjacent occupied rows.
+    const horizontals = strips.filter((s) => s.x1 - s.x0 >= s.y1 - s.y0);
+    expect(horizontals.length).toBe(MAX_ROWS - 1);
   });
 });

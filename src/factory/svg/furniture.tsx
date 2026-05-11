@@ -2,6 +2,7 @@
 // should compose from these primitives so the room library stays
 // consistent and we can swap art uniformly.
 
+import { memo } from "react";
 import { iso } from "./geometry";
 
 // ---------- Core box primitive ----------
@@ -51,7 +52,7 @@ export const SURFACE = {
 
 // ---------- Office chair (high-back, leather) ----------
 
-export function OfficeChair({
+function OfficeChair__base({
   x, y, accent = "#2a3849",
 }: { x: number; y: number; accent?: string }) {
   // Chair faces south (toward the viewer). Back is at smaller y so it
@@ -68,7 +69,7 @@ export function OfficeChair({
 
 // ---------- Meeting / visitor chair (lower back) ----------
 
-export function MeetingChair({
+function MeetingChair__base({
   x, y, accent = "#2a3849",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -83,7 +84,7 @@ export function MeetingChair({
 
 // ---------- Executive desk with monitor + keyboard + mug ----------
 
-export function ExecutiveDesk({
+function ExecutiveDesk__base({
   x, y, w = 1.6, d = 1.0, accent = "rgba(245, 166, 35, 0.7)",
   withNameplate = true,
 }: {
@@ -120,7 +121,7 @@ export function ExecutiveDesk({
 
 // ---------- Sofa (3-seater with arms + cushions) ----------
 
-export function Sofa({
+function Sofa__base({
   x, y, w = 1.8, accent = "rgba(245, 166, 35, 0.5)",
 }: { x: number; y: number; w?: number; accent?: string }) {
   // Drawing order matters for iso depth: back panel first (smallest y),
@@ -156,7 +157,7 @@ export function Sofa({
 
 // ---------- Coffee table ----------
 
-export function CoffeeTable({
+function CoffeeTable__base({
   x, y, w = 0.9, d = 0.45,
 }: { x: number; y: number; w?: number; d?: number }) {
   return (
@@ -171,7 +172,7 @@ export function CoffeeTable({
 
 // ---------- Filing cabinet ----------
 
-export function FilingCabinet({
+function FilingCabinet__base({
   x, y, accent = "rgba(245, 166, 35, 0.45)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -191,7 +192,7 @@ export function FilingCabinet({
 
 // ---------- Bookshelf ----------
 
-export function Bookshelf({
+function Bookshelf__base({
   x, y, w = 0.55, depth = 1.6, h = 14,
   spineColors = ["#5fd4f0", "#f5a623", "#ff6b9d", "#c4d943", "#b393f5", "#6bd968"],
 }: {
@@ -221,7 +222,7 @@ export function Bookshelf({
 
 // ---------- Potted plant ----------
 
-export function Plant({
+function Plant__base({
   x, y, leafColor = "rgba(94, 208, 168, 0.65)",
 }: { x: number; y: number; leafColor?: string }) {
   const center = iso(x + 0.2, y + 0.2);
@@ -244,7 +245,7 @@ export function Plant({
 
 // ---------- Floor rug ----------
 
-export function FloorRug({
+function FloorRug__base({
   x0, y0, x1, y1, color = "rgba(245, 166, 35, 0.06)", border = "rgba(245, 166, 35, 0.25)",
 }: {
   x0: number; y0: number; x1: number; y1: number;
@@ -257,7 +258,7 @@ export function FloorRug({
 
 // ---------- Conference / strategy table ----------
 
-export function ConferenceTable({
+function ConferenceTable__base({
   x, y, w = 2.4, d = 1.4, glowColor = "rgba(245, 166, 35, 0.45)",
 }: { x: number; y: number; w?: number; d?: number; glowColor?: string }) {
   return (
@@ -279,7 +280,7 @@ export function ConferenceTable({
 
 // ---------- Holo command table (kept for war-room style use) ----------
 
-export function HoloTable({
+function HoloTable__base({
   x, y, accent = "rgba(245,166,35,0.55)",
 }: { x: number; y: number; accent?: string }) {
   const ce = iso(x + 1, y + 1);
@@ -300,7 +301,7 @@ export function HoloTable({
 
 // ---------- Workstation (compact desk + monitor + keyboard) ----------
 
-export function Workstation({
+function Workstation__base({
   x, y, w = 1.2, d = 0.9, accent = "rgba(95, 212, 240, 0.7)",
 }: { x: number; y: number; w?: number; d?: number; accent?: string }) {
   return (
@@ -321,7 +322,7 @@ export function Workstation({
 
 // ---------- Server rack (multi-tier with row indicators) ----------
 
-export function ServerRack({
+function ServerRack__base({
   x, y, w = 1.0, d = 1.0, h = 16,
   accent = "rgba(179, 147, 245, 0.85)",
 }: { x: number; y: number; w?: number; d?: number; h?: number; accent?: string }) {
@@ -342,7 +343,7 @@ export function ServerRack({
 
 // ---------- Lab bench (long worktop with experimental gear) ----------
 
-export function LabBench({
+function LabBench__base({
   x, y, w = 1.6, d = 0.7,
   flaskColor = "rgba(179, 147, 245, 0.85)",
   scopeColor = "rgba(95, 212, 240, 0.85)",
@@ -374,7 +375,7 @@ export function LabBench({
 
 // ---------- Drafting table ----------
 
-export function DraftingTable({
+function DraftingTable__base({
   x, y, w = 1.0, d = 0.7, paperColor = "#e6edf3",
   doodleColor = "rgba(255, 107, 157, 0.7)",
 }: { x: number; y: number; w?: number; d?: number;
@@ -394,7 +395,7 @@ export function DraftingTable({
 
 // ---------- Printer / multi-function unit ----------
 
-export function Printer({
+function Printer__base({
   x, y, accent = "rgba(94, 208, 168, 0.85)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -415,7 +416,7 @@ export function Printer({
 
 // ---------- Whiteboard / pinboard (free-standing, faces south) ----------
 
-export function Whiteboard({
+function Whiteboard__base({
   x, y, w = 1.6, accent = "rgba(95, 212, 240, 0.55)",
 }: { x: number; y: number; w?: number; accent?: string }) {
   return (
@@ -441,7 +442,7 @@ export function Whiteboard({
 
 // ---------- Stack of papers / report pile ----------
 
-export function PaperStack({
+function PaperStack__base({
   x, y, w = 0.4, d = 0.3, h = 1.4,
   topAccent = "rgba(245, 166, 35, 0.5)",
 }: { x: number; y: number; w?: number; d?: number; h?: number; topAccent?: string }) {
@@ -458,7 +459,7 @@ export function PaperStack({
 
 // ---------- Shipping boxes (cardboard pile) ----------
 
-export function ShippingBoxes({
+function ShippingBoxes__base({
   x, y,
 }: { x: number; y: number }) {
   return (
@@ -478,7 +479,7 @@ export function ShippingBoxes({
 
 // ---------- Globe on a stand ----------
 
-export function Globe({
+function Globe__base({
   x, y, accent = "rgba(95, 212, 240, 0.7)",
 }: { x: number; y: number; accent?: string }) {
   const c = iso(x + 0.2, y + 0.2);
@@ -502,7 +503,7 @@ export function Globe({
 
 // ---------- Telephone (multi-line desk phone) ----------
 
-export function Telephone({
+function Telephone__base({
   x, y, accent = "rgba(106, 169, 255, 0.85)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -520,7 +521,7 @@ export function Telephone({
 
 // ---------- Binder stack (colored office binders) ----------
 
-export function BinderStack({
+function BinderStack__base({
   x, y, w = 0.4, d = 0.5,
   colors = ["#5fd4f0", "#f5a623", "#ff6b9d", "#c4d943"],
 }: {
@@ -540,7 +541,7 @@ export function BinderStack({
 
 // ---------- Test tube rack ----------
 
-export function TestTubes({
+function TestTubes__base({
   x, y,
   colors = [
     "rgba(95, 212, 240, 0.85)",
@@ -566,7 +567,7 @@ export function TestTubes({
 
 // ---------- Control panel (lab / server side panel) ----------
 
-export function ControlPanel({
+function ControlPanel__base({
   x, y, w = 0.6, d = 0.3, h = 4.5,
   accent = "rgba(179, 147, 245, 0.85)",
 }: {
@@ -592,7 +593,7 @@ export function ControlPanel({
 
 // ---------- Pen / brush jar ----------
 
-export function PenJar({
+function PenJar__base({
   x, y, accent = "rgba(255, 107, 157, 0.7)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -612,7 +613,7 @@ export function PenJar({
 
 // ---------- Wall clock (mounted on the back wall) ----------
 
-export function WallClock({
+function WallClock__base({
   x, y0, accent = "rgba(245, 166, 35, 0.85)",
 }: { x: number; y0: number; accent?: string }) {
   // Position the face on the south face of the back wall
@@ -632,7 +633,7 @@ export function WallClock({
 
 // ---------- Color sample rack (creative supply tower) ----------
 
-export function ColorRack({
+function ColorRack__base({
   x, y, palette = ["#ff6b9d", "#5fd4f0", "#f5a623", "#c4d943", "#b393f5"],
 }: { x: number; y: number; palette?: string[] }) {
   return (
@@ -653,7 +654,7 @@ export function ColorRack({
 
 // Long counter: one continuous worktop spanning N grid units. Used for
 // call-center / triage rooms where many agents share a desk.
-export function LongCounter({
+function LongCounter__base({
   x, y, w = 5, d = 1.2, accent = "#2a3849",
 }: { x: number; y: number; w?: number; d?: number; accent?: string }) {
   return (
@@ -667,7 +668,7 @@ export function LongCounter({
 }
 
 // Open desk row: N workstations placed end-to-end at a single y.
-export function OpenDeskRow({
+function OpenDeskRow__base({
   x, y, count = 4, gap = 0.05, accent = "#2a3849",
 }: { x: number; y: number; count?: number; gap?: number; accent?: string }) {
   const each = 1.0;
@@ -684,7 +685,7 @@ export function OpenDeskRow({
 
 // Phone bank: vertical bank of phones on the back wall — each is a small
 // rectangle with a colored handset accent.
-export function PhoneBank({
+function PhoneBank__base({
   x, y, count = 4, accent = "rgba(106, 169, 255, 0.85)",
 }: { x: number; y: number; count?: number; accent?: string }) {
   const items: React.ReactNode[] = [];
@@ -701,7 +702,7 @@ export function PhoneBank({
   return <>{items}</>;
 }
 
-export function Headset({
+function Headset__base({
   x, y, accent = "rgba(106, 169, 255, 0.95)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -716,7 +717,7 @@ export function Headset({
   );
 }
 
-export function CallQueueBoard({
+function CallQueueBoard__base({
   x, y, accent = "rgba(106, 169, 255, 0.9)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -731,7 +732,7 @@ export function CallQueueBoard({
 
 // ---------- Dev / automation ----------
 
-export function TerminalRack({
+function TerminalRack__base({
   x, y, w = 1.6, accent = "rgba(95, 212, 240, 0.85)",
 }: { x: number; y: number; w?: number; accent?: string }) {
   return (
@@ -744,7 +745,7 @@ export function TerminalRack({
   );
 }
 
-export function CableTray({
+function CableTray__base({
   x, y, w = 2,
 }: { x: number; y: number; w?: number }) {
   return (
@@ -755,7 +756,7 @@ export function CableTray({
 
 // ---------- Legal / compliance ----------
 
-export function LawBookshelf({
+function LawBookshelf__base({
   x, y, h = 14,
 }: { x: number; y: number; h?: number }) {
   return (
@@ -768,7 +769,7 @@ export function LawBookshelf({
   );
 }
 
-export function FileSafe({
+function FileSafe__base({
   x, y, accent = "rgba(196, 217, 67, 0.85)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -783,7 +784,7 @@ export function FileSafe({
   );
 }
 
-export function DocStamp({
+function DocStamp__base({
   x, y, accent = "rgba(245, 166, 35, 0.9)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -800,7 +801,7 @@ export function DocStamp({
 
 // ---------- Archive ----------
 
-export function ArchiveWall({
+function ArchiveWall__base({
   x, y, w = 4, h = 12,
 }: { x: number; y: number; w?: number; h?: number }) {
   const cells: React.ReactNode[] = [];
@@ -836,7 +837,7 @@ export function ArchiveWall({
   );
 }
 
-export function Carousel({
+function Carousel__base({
   x, y,
 }: { x: number; y: number }) {
   return (
@@ -853,7 +854,7 @@ export function Carousel({
 
 // ---------- Strategic / financial dashboards ----------
 
-export function WarMap({
+function WarMap__base({
   x, y, w = 3.2, accent = "rgba(245, 166, 35, 0.7)",
 }: { x: number; y: number; w?: number; accent?: string }) {
   return (
@@ -866,7 +867,7 @@ export function WarMap({
   );
 }
 
-export function TokenMeter({
+function TokenMeter__base({
   x, y, accent = "rgba(196, 217, 67, 0.85)",
 }: { x: number; y: number; accent?: string }) {
   return (
@@ -879,7 +880,7 @@ export function TokenMeter({
   );
 }
 
-export function KpiPanel({
+function KpiPanel__base({
   x, y, w = 1.4, accent = "rgba(95, 212, 240, 0.85)",
 }: { x: number; y: number; w?: number; accent?: string }) {
   return (
@@ -891,3 +892,50 @@ export function KpiPanel({
     </>
   );
 }
+
+
+// React.memo wrappers around every furniture primitive. Props are primitives
+// (x, y, w, d, h, accent strings), so the default shallow comparator skips
+// re-renders cleanly when a memoized RoomShell passes the same coords twice.
+export const OfficeChair = /*@__PURE__*/ memo(OfficeChair__base);
+export const MeetingChair = /*@__PURE__*/ memo(MeetingChair__base);
+export const ExecutiveDesk = /*@__PURE__*/ memo(ExecutiveDesk__base);
+export const Sofa = /*@__PURE__*/ memo(Sofa__base);
+export const CoffeeTable = /*@__PURE__*/ memo(CoffeeTable__base);
+export const FilingCabinet = /*@__PURE__*/ memo(FilingCabinet__base);
+export const Bookshelf = /*@__PURE__*/ memo(Bookshelf__base);
+export const Plant = /*@__PURE__*/ memo(Plant__base);
+export const FloorRug = /*@__PURE__*/ memo(FloorRug__base);
+export const ConferenceTable = /*@__PURE__*/ memo(ConferenceTable__base);
+export const HoloTable = /*@__PURE__*/ memo(HoloTable__base);
+export const Workstation = /*@__PURE__*/ memo(Workstation__base);
+export const ServerRack = /*@__PURE__*/ memo(ServerRack__base);
+export const LabBench = /*@__PURE__*/ memo(LabBench__base);
+export const DraftingTable = /*@__PURE__*/ memo(DraftingTable__base);
+export const Printer = /*@__PURE__*/ memo(Printer__base);
+export const Whiteboard = /*@__PURE__*/ memo(Whiteboard__base);
+export const PaperStack = /*@__PURE__*/ memo(PaperStack__base);
+export const ShippingBoxes = /*@__PURE__*/ memo(ShippingBoxes__base);
+export const Globe = /*@__PURE__*/ memo(Globe__base);
+export const Telephone = /*@__PURE__*/ memo(Telephone__base);
+export const BinderStack = /*@__PURE__*/ memo(BinderStack__base);
+export const TestTubes = /*@__PURE__*/ memo(TestTubes__base);
+export const ControlPanel = /*@__PURE__*/ memo(ControlPanel__base);
+export const PenJar = /*@__PURE__*/ memo(PenJar__base);
+export const WallClock = /*@__PURE__*/ memo(WallClock__base);
+export const ColorRack = /*@__PURE__*/ memo(ColorRack__base);
+export const LongCounter = /*@__PURE__*/ memo(LongCounter__base);
+export const OpenDeskRow = /*@__PURE__*/ memo(OpenDeskRow__base);
+export const PhoneBank = /*@__PURE__*/ memo(PhoneBank__base);
+export const Headset = /*@__PURE__*/ memo(Headset__base);
+export const CallQueueBoard = /*@__PURE__*/ memo(CallQueueBoard__base);
+export const TerminalRack = /*@__PURE__*/ memo(TerminalRack__base);
+export const CableTray = /*@__PURE__*/ memo(CableTray__base);
+export const LawBookshelf = /*@__PURE__*/ memo(LawBookshelf__base);
+export const FileSafe = /*@__PURE__*/ memo(FileSafe__base);
+export const DocStamp = /*@__PURE__*/ memo(DocStamp__base);
+export const ArchiveWall = /*@__PURE__*/ memo(ArchiveWall__base);
+export const Carousel = /*@__PURE__*/ memo(Carousel__base);
+export const WarMap = /*@__PURE__*/ memo(WarMap__base);
+export const TokenMeter = /*@__PURE__*/ memo(TokenMeter__base);
+export const KpiPanel = /*@__PURE__*/ memo(KpiPanel__base);

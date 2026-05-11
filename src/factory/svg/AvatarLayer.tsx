@@ -5,6 +5,7 @@ import { homeStationFor, stationCount, stationWorld } from "./stations";
 import Avatar from "./Avatar";
 import SpawnFx from "./kit/SpawnFx";
 import DissolveFx from "./kit/DissolveFx";
+import { DetailLevel } from "./viewport";
 
 const STATION_DWELL_MIN_MS = 2400;
 const STATION_DWELL_JITTER_MS = 2200;
@@ -20,10 +21,18 @@ export default function AvatarLayer({
   svgRef,
   zoom,
   pan,
+  detailLevels,
 }: {
   svgRef: React.RefObject<SVGSVGElement | null>;
   zoom: number;
   pan: { x: number; y: number };
+  /**
+   * Optional per-room detail map. Avatars whose room is "hidden" skip
+   * projection + DOM mounting entirely; "shell" avatars still mount but
+   * forgo expensive transitions (their room is off-screen so the user
+   * can't see motion anyway).
+   */
+  detailLevels?: Map<string, DetailLevel>;
 }) {
   const agents = useFactoryStore((s) => s.agents);
   const agentTravel = useFactoryStore((s) => s.agentTravel);
@@ -236,12 +245,22 @@ export default function AvatarLayer({
       {Object.values(roles).map((role) => {
         const agent = agents[role.id];
         if (!agent) return null;
+        // Viewport cull: don't mount avatars whose room is off-screen. Also
+        // covers the in-flight travel case via the travel.roomId destination
+        // since we project against `role.room` here.
+        const travel = agentTravel[role.id];
+        const visRoom = travel?.roomId ?? role.room;
+        const tier = detailLevels?.get(visRoom);
+        if (tier === "hidden") return null;
         const pos = project(role.id, role.room);
         if (!pos) return null;
         const moving = movingRoles.has(role.id);
-        const travel = agentTravel[role.id];
         const isTraveling = !!(travel?.waypoints && travel.waypoints.length > 1);
-        const perAgentTransition = isTraveling ? "none" : transitionStyle;
+        // "shell" tier: avatar is off-screen but might be entering soon;
+        // skip the smooth left/top transition so we don't waste compositor
+        // time animating something the user can't see.
+        const perAgentTransition =
+          tier === "shell" || isTraveling ? "none" : transitionStyle;
         return (
           <div
             key={role.id}

@@ -7,6 +7,7 @@ import RoomShell from "./RoomShell";
 import AvatarLayer from "./AvatarLayer";
 import HandoffLayer from "./HandoffLayer";
 import Corridors from "./Corridors";
+import { detailLevelsFor } from "./viewport";
 
 type ViewBox = { minX: number; minY: number; w: number; h: number };
 
@@ -37,6 +38,29 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 1.25;
 
+// Dev utility — to stress-test 10×10 culling/memoization, paste this into a
+// browser console while the app is running. The store does not expose an
+// `upsertRoom` action, so we mutate `rooms` directly via Zustand's setState.
+// Expected result with culling enabled: smooth pan at 30+ fps, < 300 MB heap.
+//
+//   const { rooms } = useFactoryStore.getState();
+//   const next = { ...rooms };
+//   for (let c = 0; c < 10; c++) {
+//     for (let r = 0; r < 10; r++) {
+//       const id = `stress-${c}-${r}`;
+//       if (next[id]) continue;
+//       next[id] = {
+//         id, name: `R${c}${r}`, col: c, row: r,
+//         kit: {
+//           primaryTag: "analyst", capacity: 2, accent: "#5fd4f0",
+//           stationLayout: "row", wallFeature: "trends", features: [],
+//         },
+//         occupants: [], createdAt: 0,
+//       };
+//     }
+//   }
+//   useFactoryStore.setState({ rooms: next });
+
 export default function SvgFactoryFloor() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -65,7 +89,25 @@ export default function SvgFactoryFloor() {
   const zoomedH = base.h / zoom;
   const cx = base.minX + base.w / 2 + pan.x;
   const cy = base.minY + base.h / 2 + pan.y;
-  const vb = `${cx - zoomedW / 2} ${cy - zoomedH / 2} ${zoomedW} ${zoomedH}`;
+  const vbMinX = cx - zoomedW / 2;
+  const vbMinY = cy - zoomedH / 2;
+  const vb = `${vbMinX} ${vbMinY} ${zoomedW} ${zoomedH}`;
+
+  // Viewport culling: re-derive detail levels only when the visible rectangle
+  // or the rooms list changes. Off-viewport rooms drop down to "shell" or get
+  // skipped entirely. The "shell" tier gets a 1-cell margin in iso units so
+  // panning doesn't reveal blank cells before they upgrade.
+  const detailLevels = useMemo(
+    () => detailLevelsFor(
+      Object.values(rooms),
+      { minX: vbMinX, minY: vbMinY, maxX: vbMinX + zoomedW, maxY: vbMinY + zoomedH },
+      0,
+      // ROOM_W * TW/2 ≈ 192px per room horizontally in iso; one-cell margin
+      // is comfortably covered by 220 world units.
+      220,
+    ),
+    [rooms, vbMinX, vbMinY, zoomedW, zoomedH],
+  );
 
   const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 
@@ -149,10 +191,15 @@ export default function SvgFactoryFloor() {
         </defs>
         <Corridors strips={layout.corridors} />
         {ordered.map((id) => (
-          <RoomShell key={id} roomId={id} doors={layout.doors.get(id)} />
+          <RoomShell
+            key={id}
+            roomId={id}
+            doors={layout.doors.get(id)}
+            detailLevel={detailLevels.get(id) ?? "full"}
+          />
         ))}
       </svg>
-      <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} />
+      <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} detailLevels={detailLevels} />
       <HandoffLayer svgRef={svgRef} zoom={zoom} />
       <ZoomControls
         zoom={zoom}

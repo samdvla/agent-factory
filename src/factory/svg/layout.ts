@@ -4,6 +4,11 @@ export const ROOM_W = 6;
 export const ROOM_H = 6;
 export const GAP = 1;
 
+// Hard upper bound on the grid extent. The factory floor is a 10x10 grid of
+// rooms; placeNewRoom will refuse to produce coordinates outside this range.
+export const MAX_COLS = 10;
+export const MAX_ROWS = 10;
+
 export type Strip = { x0: number; y0: number; x1: number; y1: number };
 
 function uniqueSorted(values: number[]): number[] {
@@ -148,7 +153,9 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
     for (const [dc, dr] of deltas) {
       const c = r.col + dc;
       const rr = r.row + dr;
+      // Reject negative coords and any cell outside the 10x10 grid envelope.
       if (c < 0 || rr < 0) continue;
+      if (c >= MAX_COLS || rr >= MAX_ROWS) continue;
       const key = `${c},${rr}`;
       if (occupied.has(key)) continue;
       if (seen.has(key)) continue;
@@ -157,7 +164,20 @@ export function placeNewRoom(rooms: Room[], tag: RoomTag): { col: number; row: n
     }
   }
 
-  if (!candidates.length) return { col: 0, row: rooms.length };
+  if (!candidates.length) {
+    // Graceful fallback: scan col=0 for the lowest open row inside the bound.
+    // If every cell on col=0 is taken, scan the whole grid in row-major order.
+    for (let rr = 0; rr < MAX_ROWS; rr++) {
+      if (!occupied.has(`0,${rr}`)) return { col: 0, row: rr };
+    }
+    for (let rr = 0; rr < MAX_ROWS; rr++) {
+      for (let cc = 0; cc < MAX_COLS; cc++) {
+        if (!occupied.has(`${cc},${rr}`)) return { col: cc, row: rr };
+      }
+    }
+    // Grid fully saturated (100 rooms): clamp to last cell instead of crashing.
+    return { col: MAX_COLS - 1, row: MAX_ROWS - 1 };
+  }
 
   const W_TAG = 4.0, W_GLOBAL = 1.0, W_ADJ = 0.5, W_ISOLATE = 100.0, W_NORTH = 100.0;
 

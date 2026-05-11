@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
 import {
   floorPoly, wallNorthPoly, wallEastPoly, getRoomBounds, iso, ROOM_W, WALL_H,
 } from "./geometry";
 import { DoorSet } from "./layout";
 import { composeRoom } from "./kit/composer";
+import { DetailLevel } from "./viewport";
 
 const DOOR_W = 1.0;
 const DOOR_H = WALL_H * 0.66;
 
-export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string; doors?: DoorSet }) {
+type RoomShellProps = {
+  roomId: string;
+  doors?: DoorSet;
+  /** Visibility tier from the viewport-culling pass. Defaults to "full". */
+  detailLevel?: DetailLevel;
+};
+
+function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: RoomShellProps) {
   const room = useFactoryStore((s) => s.rooms[roomId]);
   const roles = useFactoryStore((s) => s.roles);
   const roomState = useFactoryStore((s) => {
@@ -23,6 +31,9 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
     return "idle";
   });
   if (!room) return null;
+  // Off-viewport rooms render as nothing — saves all SVG paint for the cell.
+  if (detailLevel === "hidden") return null;
+  const showFurniture = detailLevel === "full";
   const accent = room.kit?.accent ?? "#5fd4f0";
   const subtitleText = (() => {
     const ids = room.occupants ?? [];
@@ -37,13 +48,15 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
   const doors = doorsProp ?? { north: false, east: false, south: false, west: false };
 
   const gridLines: React.ReactNode[] = [];
-  for (let i = 1; i < ROOM_W; i++) {
-    const a = iso(b.x0 + i, b.y0), c = iso(b.x0 + i, b.y1);
-    gridLines.push(<line key={`v${i}`} x1={a.x} y1={a.y} x2={c.x} y2={c.y}
-      stroke="#1f2a37" strokeWidth={0.5} strokeOpacity={0.6} />);
-    const e = iso(b.x0, b.y0 + i), f = iso(b.x1, b.y0 + i);
-    gridLines.push(<line key={`h${i}`} x1={e.x} y1={e.y} x2={f.x} y2={f.y}
-      stroke="#1f2a37" strokeWidth={0.5} strokeOpacity={0.6} />);
+  if (showFurniture) {
+    for (let i = 1; i < ROOM_W; i++) {
+      const a = iso(b.x0 + i, b.y0), c = iso(b.x0 + i, b.y1);
+      gridLines.push(<line key={`v${i}`} x1={a.x} y1={a.y} x2={c.x} y2={c.y}
+        stroke="#1f2a37" strokeWidth={0.5} strokeOpacity={0.6} />);
+      const e = iso(b.x0, b.y0 + i), f = iso(b.x1, b.y0 + i);
+      gridLines.push(<line key={`h${i}`} x1={e.x} y1={e.y} x2={f.x} y2={f.y}
+        stroke="#1f2a37" strokeWidth={0.5} strokeOpacity={0.6} />);
+    }
   }
 
   const stripA = iso(b.x0 + 0.05, b.y1 - 0.05);
@@ -126,9 +139,11 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
       {gridLines}
       <line x1={stripA.x} y1={stripA.y} x2={stripB.x} y2={stripB.y}
         stroke={accent} strokeOpacity={0.55} strokeWidth={1.2} />
-      <g className="room-props">
-        {room.kit && composeRoom(room.kit, b.x0, b.y0)}
-      </g>
+      {showFurniture && (
+        <g className="room-props">
+          {room.kit && composeRoom(room.kit, b.x0, b.y0)}
+        </g>
+      )}
       {eastDoorAccents}
       {eastFloorThreshold}
       <polygon
@@ -153,3 +168,24 @@ export default function RoomShell({ roomId, doors: doorsProp }: { roomId: string
     </g>
   );
 }
+
+// Shallow comparator that only re-renders when the inputs the caller actually
+// controls (roomId, the precomputed door set, and the detail tier) change.
+// Internal store subscriptions inside RoomShellInner handle their own
+// re-renders via useFactoryStore selectors.
+function propsEqual(a: RoomShellProps, b: RoomShellProps): boolean {
+  if (a.roomId !== b.roomId) return false;
+  if (a.detailLevel !== b.detailLevel) return false;
+  const da = a.doors, db = b.doors;
+  if (da === db) return true;
+  if (!da || !db) return false;
+  return (
+    da.north === db.north &&
+    da.east === db.east &&
+    da.south === db.south &&
+    da.west === db.west
+  );
+}
+
+const RoomShell = memo(RoomShellInner, propsEqual);
+export default RoomShell;
