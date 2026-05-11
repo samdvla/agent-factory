@@ -32,10 +32,10 @@ def handle(method: str, params: dict) -> dict:
         "asset_path": asset_path,
     }
 
-    # Store in a JSON file (sandbox mode — no real Etsy).
+    # Write a local audit record. The Rust supervisor handles real Etsy publishing.
     data_dir = os.environ.get("AGENT_FACTORY_DATA", os.path.expanduser("~/.agent-factory"))
     os.makedirs(data_dir, exist_ok=True)
-    path = os.path.join(data_dir, "mock_etsy.json")
+    path = os.path.join(data_dir, "publisher_output.json")
     try:
         with open(path) as f:
             current = json.load(f)
@@ -67,7 +67,7 @@ def handle(method: str, params: dict) -> dict:
     result: dict = {
         "ok": True,
         "listing_id": listing_id,
-        "ticker_text": f"publisher → cfo: listing #{listing_id} LIVE (sandbox)",
+        "ticker_text": f"publisher → cfo: listing #{listing_id} prepared",
         # Etsy publish hook (Rust supervisor reads these when real_etsy_enabled).
         # These are flat top-level fields so the Rust hook doesn't have to
         # reach into the cfo handoff payload.

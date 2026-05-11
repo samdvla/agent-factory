@@ -257,6 +257,20 @@ pub async fn cmd_enqueue(
     state: State<'_, Arc<AppState>>,
     args: EnqueueArgs,
 ) -> Result<i64, String> {
+    // Safety check: refuse pipeline jobs when Live UI mode is on but real
+    // Etsy publishing is off. This prevents silent dry-runs where the user
+    // believes they are publishing but nothing reaches Etsy.
+    let ui_sandbox = secrets::get("ui_sandbox_mode").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let real_etsy = secrets::get("real_etsy_enabled").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let smoke_active = secrets::get("smoke_cycle_id").ok().flatten()
+        .filter(|s| !s.is_empty()).is_some();
+    let role = args.agent_role.as_str();
+    let is_pipeline_role = matches!(role, "research" | "orchestrator" | "designer" | "listing" | "publisher");
+    if is_pipeline_role && !ui_sandbox && !real_etsy && !smoke_active {
+        return Err("Pipeline jobs are blocked: Live mode is on but Real Etsy publishing is off. Either enable Real publishing in Settings (Etsy section) or switch to Sandbox mode.".to_string());
+    }
     queue::enqueue(&state.pool, state.project_id, &args.agent_role, args.payload)
         .await
         .map_err(|e| e.to_string())
@@ -600,14 +614,14 @@ pub async fn cmd_prompt_history(
 
 /// Resolve `local_listing_id` to its SVG asset on disk and return the raw
 /// SVG markup. The publisher records `(listing_id, asset_path)` pairs in
-/// `~/.agent-factory/mock_etsy.json` — we walk that file to find the
+/// `~/.agent-factory/publisher_output.json` — we walk that file to find the
 /// asset_path. Returns `None` when the listing has no recorded asset.
 #[tauri::command]
 pub async fn cmd_read_asset_svg(listing_id: i64) -> Result<Option<String>, String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = PathBuf::from(home)
         .join(".agent-factory")
-        .join("mock_etsy.json");
+        .join("publisher_output.json");
     let text = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(_) => return Ok(None),
@@ -662,7 +676,7 @@ pub struct ListingReviewInfo {
     pub first_listing_review_count: i64,
 }
 
-/// One-shot fetch for the review modal: pulls publish row, mock_etsy
+/// One-shot fetch for the review modal: pulls publish row, publisher_output
 /// metadata, optional cycle financials, and the current active-publish
 /// count + configured first-listing-review cap.
 #[tauri::command]
@@ -689,9 +703,9 @@ pub async fn cmd_etsy_listing_review_info(
         info.url = url;
     }
 
-    // 2) mock_etsy.json — description, tags, niche, price_usd.
+    // 2) publisher_output.json — description, tags, niche, price_usd.
     let home = std::env::var("HOME").unwrap_or_default();
-    let mock_path = PathBuf::from(&home).join(".agent-factory").join("mock_etsy.json");
+    let mock_path = PathBuf::from(&home).join(".agent-factory").join("publisher_output.json");
     if let Ok(text) = std::fs::read_to_string(&mock_path) {
         if let Ok(records) = serde_json::from_str::<serde_json::Value>(&text) {
             if let Some(arr) = records.as_array() {

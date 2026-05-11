@@ -61,6 +61,24 @@ pub fn run() {
 
             commands::forward_events_to_window(app.handle().clone(), bus.clone());
 
+            // Migrate legacy mock_etsy.json → publisher_output.json once on
+            // startup. Silently ignored if the old file does not exist or the
+            // rename fails (e.g. new file already present).
+            {
+                let data_dir = std::env::var("AGENT_FACTORY_DATA")
+                    .unwrap_or_else(|_| {
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        format!("{home}/.agent-factory")
+                    });
+                let old_path = std::path::PathBuf::from(&data_dir).join("mock_etsy.json");
+                let new_path = std::path::PathBuf::from(&data_dir).join("publisher_output.json");
+                if old_path.exists() && !new_path.exists() {
+                    if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                        tracing::warn!("mock_etsy.json migration failed: {e}");
+                    }
+                }
+            }
+
             // Supervisor does NOT auto-start. The user must click Start in the
             // top bar, which calls cmd_start_supervisor. This keeps idle spend
             // at zero — no jobs are enqueued until the user explicitly acts.

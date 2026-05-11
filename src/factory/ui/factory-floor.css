@@ -3970,3 +3970,21 @@ button.etsy-pill {
   background: rgba(239, 79, 90, 0.08);
   border-color: rgba(239, 79, 90, 0.35);
 }
+
+/* ---- Mode badge (TopBar) ---- */
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+}
+.mode-badge.live    { border-color: #244a30; color: #9be0b3; background: rgba(155, 224, 179, 0.07); }
+.mode-badge.dry-run { border-color: #5a4f1a; color: #e8d77b; background: rgba(232, 215, 123, 0.07); }
+.mode-badge.sandbox { border-color: #1a3e5a; color: #7bc6e8; background: rgba(123, 198, 232, 0.07); }
+.mode-badge-label { white-space: nowrap; }

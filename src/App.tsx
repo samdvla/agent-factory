@@ -33,6 +33,14 @@ export default function App() {
     }
   });
 
+  // Sync the current sandbox mode to backend secrets once on mount so the
+  // supervisor safety check always has the correct ui_sandbox_mode value at
+  // startup, even before the user toggles the mode toggle.
+  useEffect(() => {
+    api.setSecret("ui_sandbox_mode", String(sandbox)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Open onboarding on cold start if no Anthropic key set
   useEffect(() => {
     api.getSecret("anthropic_api_key").then((v) => {

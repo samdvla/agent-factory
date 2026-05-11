@@ -78,6 +78,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   selectAgent: (role) => set({ selectedAgent: role, drawerOpen: role !== null }),
   setSandbox: (v) => {
     try { localStorage.setItem(SANDBOX_STORAGE_KEY, String(v)); } catch {}
+    // Mirror to backend secrets so the supervisor can apply safety checks.
+    import("../../api").then(({ api }) => {
+      api.setSecret("ui_sandbox_mode", String(v)).catch(() => {});
+    });
     set({ sandbox: v });
   },
   setAllStop: (v) => set({ allStop: v }),

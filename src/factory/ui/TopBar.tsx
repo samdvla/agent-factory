@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, StatusReport, EtsyStatus } from "../../api";
@@ -18,6 +18,8 @@ export default function TopBar({
   const [etsyDetailsOpen, setEtsyDetailsOpen] = useState(false);
   const [etsyAuthUrl, setEtsyAuthUrl] = useState<string | null>(null);
   const [etsyCopied, setEtsyCopied] = useState(false);
+  const [realEtsyEnabled, setRealEtsyEnabled] = useState(false);
+  const realEtsyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
@@ -66,6 +68,40 @@ export default function TopBar({
     })();
     return () => { cancelled = true; clearInterval(id); unC?.(); unE?.(); };
   }, []);
+
+  // Poll real_etsy_enabled every 5s so the mode badge stays in sync with
+  // any changes made in Settings without requiring a full reload.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const enabled = await api.etsyGetEnabled();
+        if (!cancelled) setRealEtsyEnabled(enabled);
+      } catch {}
+    };
+    refresh();
+    realEtsyIntervalRef.current = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      if (realEtsyIntervalRef.current !== null) {
+        clearInterval(realEtsyIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Derive mode badge properties.
+  const modeKey: "live" | "dry-run" | "sandbox" = sandbox
+    ? "sandbox"
+    : realEtsyEnabled
+      ? "live"
+      : "dry-run";
+  const modeText = modeKey === "live" ? "LIVE" : modeKey === "dry-run" ? "DRY-RUN" : "SANDBOX";
+  const modeTooltip =
+    modeKey === "live"
+      ? "LIVE: real Etsy publishing enabled"
+      : modeKey === "dry-run"
+        ? "DRY-RUN: Live UI mode but real Etsy publishing is off"
+        : "SANDBOX: synthetic floor activity, no live publishing";
 
   const onEtsyClick = async () => {
     // If there's a stored error and not connected, expand the details popover.
@@ -349,6 +385,10 @@ export default function TopBar({
         <span>Alerts</span>
         {alerts.length > 0 && <span className="badge">{alerts.length}</span>}
       </button>
+
+      <div className={`mode-badge ${modeKey}`} title={modeTooltip}>
+        <span className="mode-badge-label">{modeText}</span>
+      </div>
 
       <button
         className="all-stop"
