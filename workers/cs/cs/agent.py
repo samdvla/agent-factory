@@ -96,6 +96,10 @@ def handle(method, params):
     payload = params.get("payload", {})
     buyer_message = payload.get("buyer_message", "Hi! How do I download my purchase?")
     listing_title = payload.get("listing_title")
+    # `conversation_id` is set when the message came from real Etsy ingest; the
+    # supervisor reads it back from the result and POSTs the reply to that
+    # conversation. Echo it through verbatim (default None).
+    conversation_id = payload.get("conversation_id")
     try:
         system, user = build_reply_prompt(buyer_message, listing_title)
         override = _load_system_override("cs")
@@ -109,10 +113,16 @@ def handle(method, params):
             "reply": parsed.get("reply", ""),
             "escalate": parsed.get("escalate", False),
             "category": parsed.get("category", "other"),
+            "conversation_id": conversation_id,
             "ticker_text": f"cs · {parsed.get('category','other')} · {'escalated' if parsed.get('escalate') else 'replied'}",
             "tokens_in": resp.get("usage", {}).get("input_tokens", 0),
             "tokens_out": resp.get("usage", {}).get("output_tokens", 0),
             "model": "claude-haiku-4-5-20251001",
         }
     except Exception as e:
-        return {"ok": False, "error": str(e), "ticker_text": f"cs failed: {e}"}
+        return {
+            "ok": False,
+            "error": str(e),
+            "conversation_id": conversation_id,
+            "ticker_text": f"cs failed: {e}",
+        }

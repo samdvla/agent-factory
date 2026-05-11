@@ -68,3 +68,24 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     assert result["ok"] is True
     default_system, _ = build_reply_prompt("hi")
     assert captured["body"]["system"] == default_system
+
+
+def test_result_includes_conversation_id_when_provided(tmp_path, monkeypatch):
+    """The supervisor reads `conversation_id` off the cs result to post a reply
+    back to Etsy. The worker must echo whatever the payload supplied (or None)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _capture_anthropic_system(monkeypatch)
+    from cs.agent import handle
+    # Provided → echoed through.
+    result = handle(
+        "process_job",
+        {"payload": {"buyer_message": "hi", "conversation_id": 555444333}},
+    )
+    assert result["ok"] is True
+    assert result["conversation_id"] == 555444333
+    assert "reply" in result
+    # Not provided → default None.
+    result2 = handle("process_job", {"payload": {"buyer_message": "hi"}})
+    assert result2["ok"] is True
+    assert result2["conversation_id"] is None

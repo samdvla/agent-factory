@@ -52,4 +52,5 @@ export const api = {
     invoke<ActivateResult>("cmd_etsy_activate_listing", {
       localListingId,
     }),
+  etsyKillSwitch: () => invoke<void>("cmd_etsy_kill_switch"),
 };

@@ -149,9 +149,27 @@ export type FactoryStore = {
   agentLastIdleAt: Record<string, number>;
   /** Monotonic counter bumped whenever Etsy publish state changes, so panels can refetch. */
   etsyPublishesRev: number;
+  /** Last 5 receipts ingested via the real Etsy receipts poller. Newest first. */
+  etsyRecentReceipts: Array<{
+    receipt_id: number;
+    revenue_usd: number;
+    txns: number;
+    ts: number;
+  }>;
+  /** Last 5 buyer DMs ingested via the real Etsy conversations poller. Newest first. */
+  etsyRecentMessages: Array<{
+    conversation_id: number;
+    snippet: string;
+    ts: number;
+  }>;
+  /** True once the kill-switch has fired this session. UI surfaces a banner. */
+  etsyKilled: boolean;
 
   markRealActivity: (roleId: string) => void;
   bumpEtsyPublishesRev: () => void;
+  pushEtsyReceipt: (r: { receipt_id: number; revenue_usd: number; txns: number; ts: number }) => void;
+  pushEtsyMessage: (m: { conversation_id: number; snippet: string; ts: number }) => void;
+  setEtsyKilled: (v: boolean) => void;
 
   setAgentState: (role: string, state: AgentVisualState) => void;
   setAgentJob: (role: string, jobId: number | null) => void;

@@ -28,6 +28,20 @@ pub enum SupervisorEvent {
     },
     EtsyListingCapped { count: i64, cap: i64 },
     EtsyListingActivated { etsy_listing_id: i64 },
+    EtsyReceiptIngested {
+        receipt_id: i64,
+        transactions_count: usize,
+        revenue_usd: f64,
+    },
+    EtsyMessageIngested {
+        conversation_id: i64,
+        /// First 80 chars of the buyer's message.
+        snippet: String,
+    },
+    EtsyReplyPosted {
+        conversation_id: i64,
+    },
+    EtsyKillSwitchTriggered,
 }
 
 #[derive(Clone)]

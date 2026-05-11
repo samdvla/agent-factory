@@ -2,6 +2,8 @@ pub mod budget;
 pub mod commands;
 pub mod db;
 pub mod etsy;
+pub mod etsy_ingest;
+pub mod etsy_polling;
 pub mod etsy_publish;
 pub mod events;
 pub mod heartbeat;
@@ -127,7 +129,9 @@ pub fn run() {
 
                         // Fake buyer message generator — fires a CS job every 90s with a
                         // random topic. Gives the CS agent something to do until real Etsy
-                        // messages flow in.
+                        // messages flow in. Gated on `real_etsy_enabled` so that flipping
+                        // the toggle in the UI immediately disables fake messages without a
+                        // process restart (the secret is re-read at every tick).
                         let pool_for_cs = pool_for_job.clone();
                         tauri::async_runtime::spawn(async move {
                             // Wait for first listing to exist before starting CS.
@@ -146,6 +150,17 @@ pub fn run() {
                             interval.tick().await; // skip the immediate first tick
                             loop {
                                 interval.tick().await;
+                                // Re-read the secret each tick so the kill-switch / real
+                                // toggle takes effect immediately. When real Etsy ingest
+                                // is enabled, real buyer DMs drive CS — skip the fake.
+                                let real_enabled = secrets::get("real_etsy_enabled")
+                                    .ok()
+                                    .flatten()
+                                    .map(|v| v.eq_ignore_ascii_case("true"))
+                                    .unwrap_or(false);
+                                if real_enabled {
+                                    continue;
+                                }
                                 // Pick a topic deterministically by time so it varies.
                                 let idx = (std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -160,6 +175,17 @@ pub fn run() {
                                 }
                             }
                         });
+
+                        // Real Etsy pollers — receipts + buyer DMs. Each polls every 5
+                        // minutes, no-ops silently unless `real_etsy_enabled=true` AND
+                        // Etsy OAuth is connected.
+                        let bus_for_pollers = auto_state.bus.clone();
+                        etsy_polling::spawn_pollers(
+                            pool_for_job.clone(),
+                            project_id_for_job,
+                            bus_for_pollers,
+                            std::time::Duration::from_secs(60),
+                        );
 
                         // SI loop — every 5 minutes, ask the SI agent to inspect recent
                         // outcomes and propose at most one prompt tweak. The agent itself
@@ -201,6 +227,7 @@ pub fn run() {
             commands::cmd_etsy_get_listing_cap,
             commands::cmd_etsy_list_publishes,
             commands::cmd_etsy_activate_listing,
+            commands::cmd_etsy_kill_switch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -356,3 +356,14 @@ pub async fn cmd_etsy_activate_listing(
         url,
     })
 }
+
+/// Kill-switch: instantly halt all real Etsy publishing + posting. Flips the
+/// `real_etsy_enabled` secret to `"false"` — pollers + auto-reply + draft
+/// publish all re-read this secret on each tick / completion so the change
+/// takes effect immediately. Re-enabling is a one-click flip in the panel.
+#[tauri::command]
+pub async fn cmd_etsy_kill_switch(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    secrets::set("real_etsy_enabled", "false").map_err(|e| e.to_string())?;
+    state.bus.send(SupervisorEvent::EtsyKillSwitchTriggered);
+    Ok(())
+}

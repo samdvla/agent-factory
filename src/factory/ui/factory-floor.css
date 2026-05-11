@@ -432,6 +432,109 @@ button.etsy-pill {
   display: flex; justify-content: flex-end;
 }
 
+/* ============ Phase I4: kill switch + recent receipts/DMs ============ */
+.etsy-kill-button {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--accent-bad);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    180deg,
+    rgba(239, 79, 90, 0.18) 0%,
+    rgba(239, 79, 90, 0.32) 100%
+  );
+  color: var(--accent-bad);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+  box-shadow: 0 0 0 1px rgba(239, 79, 90, 0.08) inset;
+}
+.etsy-kill-button:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(239, 79, 90, 0.28) 0%,
+    rgba(239, 79, 90, 0.45) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgba(239, 79, 90, 0.4) inset,
+    0 0 12px rgba(239, 79, 90, 0.35);
+  color: #fff;
+}
+.etsy-kill-button:active {
+  transform: translateY(1px);
+}
+.etsy-killed-banner {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border: 1px solid rgba(239, 79, 90, 0.45);
+  border-radius: var(--radius);
+  background: rgba(239, 79, 90, 0.14);
+  color: var(--accent-bad);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.etsy-panel-section {
+  margin-top: 6px;
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
+}
+.etsy-section-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.etsy-section-caret {
+  color: var(--ink-2);
+  font-size: 10px;
+}
+.etsy-mini-list {
+  margin-top: 4px;
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.etsy-mini-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.etsy-mini-id {
+  color: var(--ink-2);
+  font-size: 10px;
+  min-width: 64px;
+  flex-shrink: 0;
+}
+.etsy-mini-meta {
+  color: var(--ink-1);
+  font-size: 10px;
+}
+.etsy-mini-rev {
+  margin-left: auto;
+  color: var(--accent-ok);
+  font-weight: 600;
+}
+.etsy-mini-snippet {
+  flex: 1;
+  color: var(--ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .gate-pill {
   border-color: rgba(245, 166, 35, 0.4);
   color: var(--accent-warm);

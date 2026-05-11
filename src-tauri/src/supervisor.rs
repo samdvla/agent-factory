@@ -239,6 +239,73 @@ async fn run_worker_loop(
                                     result: result.clone(),
                                 });
 
+                                // CS auto-reply: if a CS job completed with a `reply` +
+                                // `conversation_id`, the buyer didn't get escalated, AND
+                                // real Etsy publishing is enabled, post the reply back to
+                                // the Etsy conversation. All failure modes are non-fatal —
+                                // we log and emit a generic warning event.
+                                if role == "cs" {
+                                    let real_enabled = crate::secrets::get("real_etsy_enabled")
+                                        .ok()
+                                        .flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    let escalate = result
+                                        .get("escalate")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let reply = result.get("reply").and_then(|v| v.as_str()).map(str::to_string);
+                                    let conversation_id =
+                                        result.get("conversation_id").and_then(|v| v.as_i64());
+                                    if real_enabled && !escalate {
+                                        if let (Some(reply), Some(conversation_id)) = (reply, conversation_id) {
+                                            if conversation_id > 0 && !reply.trim().is_empty() {
+                                                let status = crate::etsy::load_status();
+                                                if let Some(shop_id) = status.shop_id {
+                                                    if status.connected {
+                                                        let bus_for_reply = bus.clone();
+                                                        tokio::spawn(async move {
+                                                            let client = reqwest::Client::new();
+                                                            match crate::etsy_ingest::post_reply_with_status(
+                                                                &client,
+                                                                shop_id,
+                                                                conversation_id,
+                                                                &reply,
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(()) => {
+                                                                    bus_for_reply.send(
+                                                                        SupervisorEvent::EtsyReplyPosted {
+                                                                            conversation_id,
+                                                                        },
+                                                                    );
+                                                                }
+                                                                Err(e) => {
+                                                                    tracing::warn!(
+                                                                        "etsy post_reply failed for conv {}: {:#}",
+                                                                        conversation_id, e
+                                                                    );
+                                                                    bus_for_reply.send(
+                                                                        SupervisorEvent::JobFailed {
+                                                                            role: "cs".into(),
+                                                                            job_id,
+                                                                            error: format!(
+                                                                                "etsy reply failed: {:#}",
+                                                                                e
+                                                                            ),
+                                                                        },
+                                                                    );
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // If a publisher job completed AND the operator
                                 // has explicitly flipped `real_etsy_enabled=true`,
                                 // attempt a real Etsy draft publish in the

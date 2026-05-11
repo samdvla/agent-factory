@@ -207,6 +207,65 @@ export function applySupervisorEvent(
       store.bumpEtsyPublishesRev();
       break;
     }
+    case "etsy_receipt_ingested": {
+      const receiptId = (evt as any).receipt_id as number | undefined;
+      const txns = (evt as any).transactions_count as number | undefined;
+      const rev = (evt as any).revenue_usd as number | undefined;
+      store.pushEtsyReceipt({
+        receipt_id: receiptId ?? 0,
+        revenue_usd: typeof rev === "number" ? rev : 0,
+        txns: typeof txns === "number" ? txns : 0,
+        ts: Date.now(),
+      });
+      store.pushTicker({
+        ts: Date.now(),
+        source: "etsy",
+        text: `etsy · receipt #${receiptId ?? "?"}: ${txns ?? 0} txns · $${
+          typeof rev === "number" ? rev.toFixed(2) : "0.00"
+        }`,
+      });
+      break;
+    }
+    case "etsy_message_ingested": {
+      const convId = (evt as any).conversation_id as number | undefined;
+      const snippet = (evt as any).snippet as string | undefined;
+      const display = (snippet ?? "").slice(0, 80);
+      store.pushEtsyMessage({
+        conversation_id: convId ?? 0,
+        snippet: display,
+        ts: Date.now(),
+      });
+      store.pushTicker({
+        ts: Date.now(),
+        source: "etsy",
+        text: `etsy DM · ${display}${(snippet?.length ?? 0) > 80 ? "…" : ""}`,
+      });
+      break;
+    }
+    case "etsy_reply_posted": {
+      const convId = (evt as any).conversation_id as number | undefined;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "cs",
+        text: `cs → etsy DM #${convId ?? "?"}: replied`,
+      });
+      break;
+    }
+    case "etsy_kill_switch_triggered": {
+      store.setEtsyKilled(true);
+      store.pushTicker({
+        ts: Date.now(),
+        source: "operator",
+        text: "ETSY KILL SWITCH triggered — real publishing halted",
+      });
+      store.pushAlert({
+        kind: "warn",
+        title: "Etsy kill switch triggered",
+        sub: "real publishing halted — re-enable from the Etsy panel",
+        ts: Date.now(),
+      });
+      break;
+    }
     case "budget_capped": {
       const spent = (evt as any).spent_usd as number;
       const cap = (evt as any).cap_usd as number;

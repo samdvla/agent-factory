@@ -22,7 +22,12 @@ export default function EtsyPanel() {
   const [capDraft, setCapDraft] = useState("3");
   const [publishes, setPublishes] = useState<EtsyPublishRow[]>([]);
   const [activating, setActivating] = useState<number | null>(null);
+  const [showReceipts, setShowReceipts] = useState(false);
+  const [showMessages, setShowMessages] = useState(false);
   const etsyPublishesRev = useFactoryStore((s) => s.etsyPublishesRev);
+  const recentReceipts = useFactoryStore((s) => s.etsyRecentReceipts);
+  const recentMessages = useFactoryStore((s) => s.etsyRecentMessages);
+  const etsyKilled = useFactoryStore((s) => s.etsyKilled);
 
   const refresh = useCallback(async () => {
     try {
@@ -120,6 +125,19 @@ export default function EtsyPanel() {
     }
   };
 
+  const onKill = async () => {
+    const confirmed = window.confirm(
+      "Stop all Etsy publishing? You can re-enable in settings."
+    );
+    if (!confirmed) return;
+    try {
+      await api.etsyKillSwitch();
+      setEnabled(false);
+    } catch (e) {
+      console.warn("etsy kill switch failed", e);
+    }
+  };
+
   const onCapBlur = async () => {
     const n = parseInt(capDraft, 10);
     if (!Number.isFinite(n) || n < 0 || n > 100) {
@@ -205,6 +223,11 @@ export default function EtsyPanel() {
       </button>
       {showPanel && (
         <div className="etsy-panel" role="dialog">
+          {etsyKilled && (
+            <div className="etsy-killed-banner">
+              KILL SWITCH active — real publishing halted
+            </div>
+          )}
           <div className="etsy-panel-row">
             <span className="etsy-panel-label">Real publishing</span>
             <button
@@ -226,6 +249,77 @@ export default function EtsyPanel() {
               onChange={(e) => setCapDraft(e.target.value)}
               onBlur={onCapBlur}
             />
+          </div>
+          <div className="etsy-panel-row">
+            <button
+              type="button"
+              className="etsy-kill-button"
+              onClick={onKill}
+              title="Halt all real Etsy publishing immediately"
+            >
+              🛑 KILL
+            </button>
+          </div>
+          <div className="etsy-panel-section">
+            <button
+              type="button"
+              className="etsy-section-toggle"
+              onClick={() => setShowReceipts((v) => !v)}
+            >
+              <span className="etsy-panel-label">
+                Last 5 receipts
+                {recentReceipts.length > 0 && ` (${recentReceipts.length})`}
+              </span>
+              <span className="etsy-section-caret">{showReceipts ? "▾" : "▸"}</span>
+            </button>
+            {showReceipts && (
+              <div className="etsy-mini-list">
+                {recentReceipts.length === 0 ? (
+                  <div className="etsy-panel-empty">no receipts yet</div>
+                ) : (
+                  recentReceipts.map((r) => (
+                    <div key={r.receipt_id} className="etsy-mini-row">
+                      <span className="etsy-mini-id">#{r.receipt_id}</span>
+                      <span className="etsy-mini-meta">
+                        {r.txns} txn{r.txns === 1 ? "" : "s"}
+                      </span>
+                      <span className="etsy-mini-rev">
+                        ${r.revenue_usd.toFixed(2)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          <div className="etsy-panel-section">
+            <button
+              type="button"
+              className="etsy-section-toggle"
+              onClick={() => setShowMessages((v) => !v)}
+            >
+              <span className="etsy-panel-label">
+                Last 5 buyer DMs
+                {recentMessages.length > 0 && ` (${recentMessages.length})`}
+              </span>
+              <span className="etsy-section-caret">{showMessages ? "▾" : "▸"}</span>
+            </button>
+            {showMessages && (
+              <div className="etsy-mini-list">
+                {recentMessages.length === 0 ? (
+                  <div className="etsy-panel-empty">no DMs yet</div>
+                ) : (
+                  recentMessages.map((m, i) => (
+                    <div key={`${m.conversation_id}-${i}`} className="etsy-mini-row">
+                      <span className="etsy-mini-id">#{m.conversation_id}</span>
+                      <span className="etsy-mini-snippet" title={m.snippet}>
+                        {m.snippet}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
           <div className="etsy-panel-list">
             {publishes.length === 0 ? (
