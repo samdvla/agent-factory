@@ -78,6 +78,11 @@ export type GateRequest = {
   rationale: string; payload: Record<string, unknown>;
 };
 
+// Re-export the IPC shapes from api.ts so the store stays in lockstep with the
+// Rust command schemas. Define once, use everywhere.
+export type { CycleSummary, AgentWealth } from "../../api";
+import type { CycleSummary, AgentWealth } from "../../api";
+
 export type Handoff = {
   id: string;
   fromRoom: string;
@@ -147,6 +152,13 @@ export type FactoryStore = {
     durationPerSegmentMs?: number;
   } | undefined>;
   agentLastIdleAt: Record<string, number>;
+  /** Wall-clock ms when each non-founding role was first created (used for the
+   *  60s wealth-grace period in idle dissolution). */
+  agentCreatedAt: Record<string, number>;
+  /** Last 20 P&L cycles, populated from cmd_list_recent_cycles. */
+  recentCycles: CycleSummary[];
+  /** Lifetime wealth per role, populated from cmd_list_wealth. */
+  wealthByRole: Record<string, AgentWealth>;
   /** Monotonic counter bumped whenever Etsy publish state changes, so panels can refetch. */
   etsyPublishesRev: number;
   /** Last 5 receipts ingested via the real Etsy receipts poller. Newest first. */
@@ -193,4 +205,7 @@ export type FactoryStore = {
   fireHireEvent: (e: HireEvent) => void;
   dissolveAgent: (roleId: string) => void;
   idleDissolveTick: (now: number, idleThresholdMs?: number) => void;
+
+  setRecentCycles: (cycles: CycleSummary[]) => void;
+  setWealthByRole: (m: Record<string, AgentWealth>) => void;
 };

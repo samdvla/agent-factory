@@ -89,12 +89,14 @@ const W = 32;
 const H = 44;
 
 export default function Avatar({
-  role, state, onClick, sizeScale = 1,
+  role, state, onClick, sizeScale = 1, lifetimeNet,
 }: {
   role: Role;
   state: AgentVisualState;
   onClick: () => void;
   sizeScale?: number;
+  /** Lifetime net P&L for this role, surfaced in the hover tooltip. */
+  lifetimeNet?: number;
 }) {
   if (state === "killed") return null;
 
@@ -116,7 +118,9 @@ export default function Avatar({
       className={`avatar avatar-${state}`}
       data-role={role.id}
       onClick={onClick}
-      title={`${role.name} · ${role.title}`}
+      title={`${role.name} · ${role.title} · net $${
+        (lifetimeNet ?? 0).toFixed(2)
+      }`}
       style={
         {
           position: "relative",

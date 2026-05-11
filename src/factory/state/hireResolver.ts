@@ -4,6 +4,23 @@ import {
 import { kitFromTag, TAG_ACCENTS } from "../svg/kit/recipes";
 import { placeNewRoom } from "../svg/layout";
 
+/**
+ * Founding-8 role ids: the user-mandated core staff. These roles never
+ * dissolve via the idle path regardless of wealth, idleness, or any other
+ * metric. Their permanence is enforced at TWO layers:
+ *   (a) Role.permanent === true (set on hire by `reason === "founding"`).
+ *   (b) Their id appearing in this set (defense-in-depth in case a future
+ *       refactor accidentally clears `permanent`).
+ */
+export const FOUNDING_ROLES: ReadonlySet<string> = new Set([
+  "orchestrator", "research", "designer", "listing",
+  "publisher", "cfo", "cs", "si",
+]);
+
+/** Wealth-grace window for new specialists: they're protected from idle
+ *  dissolution for this long after spawn even if they have no wealth row yet. */
+export const WEALTH_GRACE_MS = 60_000;
+
 type SetFn = (
   partial: Partial<FactoryStore> | ((s: FactoryStore) => Partial<FactoryStore>),
   replace?: boolean,
@@ -104,6 +121,7 @@ export function fireHireEvent(set: SetFn, get: GetFn, e: HireEvent): void {
         occupants: [...(s.rooms[roomId].occupants ?? []), roleId],
       },
     },
+    agentCreatedAt: { ...s.agentCreatedAt, [roleId]: e.ts || Date.now() },
   }));
 
   get().pushTicker({
@@ -166,8 +184,10 @@ export function dissolveAgent(set: SetFn, get: GetFn, roleId: string): void {
 
     const nextRevenue = { ...cur.revenueByRole };
     const nextIdle = { ...cur.agentLastIdleAt };
+    const nextCreated = { ...cur.agentCreatedAt };
     delete nextRevenue[roleId];
     delete nextIdle[roleId];
+    delete nextCreated[roleId];
 
     const room = cur.rooms[role.room];
     const occupants = (room?.occupants ?? []).filter((r) => r !== roleId);
@@ -177,7 +197,8 @@ export function dissolveAgent(set: SetFn, get: GetFn, roleId: string): void {
       ? { ...cur.rooms, [role.room]: { ...room, occupants, dissolving: willDissolveRoom } }
       : cur.rooms;
     set({ roles: nextRoles, agents: nextAgents, rooms: nextRooms,
-          revenueByRole: nextRevenue, agentLastIdleAt: nextIdle });
+          revenueByRole: nextRevenue, agentLastIdleAt: nextIdle,
+          agentCreatedAt: nextCreated });
 
     if (willDissolveRoom) {
       setTimeout(() => {
@@ -198,13 +219,31 @@ export function idleDissolveTick(
 ): void {
   const state = get();
   for (const role of Object.values(state.roles)) {
+    // Founding-8 protection (defense-in-depth across both role.permanent and
+    // a hardcoded id set). The user's core staff never dissolve via idle.
     if (role.permanent) continue;
+    if (FOUNDING_ROLES.has(role.id)) continue;
+
     const agent = state.agents[role.id];
     if (!agent) continue;
     if (agent.state !== "idle") continue;
+
     const lastIdle = state.agentLastIdleAt[role.id] ?? 0;
-    if (lastIdle && now - lastIdle > idleThresholdMs) {
-      dissolveAgent(set, get, role.id);
+    if (!lastIdle || now - lastIdle <= idleThresholdMs) continue;
+
+    // Wealth gate: profitable specialists are kept around regardless of idle.
+    const wealth = state.wealthByRole[role.id];
+    if (wealth) {
+      if (wealth.lifetime_net_usd > 0) continue;
+      // Loss-making: dissolve below.
+    } else {
+      // No wealth row yet — apply the wealth-grace window so newly-hired
+      // specialists aren't fired before they have a chance to complete any
+      // cycles. After the grace window, treat as loss-making.
+      const createdAt = state.agentCreatedAt[role.id] ?? 0;
+      if (createdAt === 0 || now - createdAt <= WEALTH_GRACE_MS) continue;
     }
+
+    dissolveAgent(set, get, role.id);
   }
 }

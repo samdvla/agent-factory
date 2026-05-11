@@ -1,5 +1,6 @@
 import { FactoryStore } from "./factoryStore";
 import { SUPERVISOR_ROLE_MAP } from "./fixtures";
+import { api } from "../../api";
 
 export type SupervisorEvent = {
   kind: string;
@@ -282,6 +283,19 @@ export function applySupervisorEvent(
         source: "cfo",
         text: `cycle ${shortId}: ${niche || "?"} · rev $${rev} · cost $${cst} · net ${netStr}`,
       });
+      // Pull fresh analytics snapshots so the AnalyticsPanel + WealthLeaderboard
+      // refresh without polling. Best-effort: in test/non-Tauri environments
+      // these throw, which we silently swallow.
+      api.listRecentCycles(20)
+        .then((rows) => store.setRecentCycles(rows))
+        .catch(() => {});
+      api.listWealth()
+        .then((rows) => {
+          const map: Record<string, typeof rows[number]> = {};
+          for (const r of rows) map[r.role] = r;
+          store.setWealthByRole(map);
+        })
+        .catch(() => {});
       break;
     }
     case "budget_capped": {

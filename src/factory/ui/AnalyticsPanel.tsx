@@ -1,0 +1,111 @@
+import { memo, useCallback, useEffect, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { api } from "../../api";
+import { useFactoryStore } from "../state/factoryStore";
+
+/**
+ * Collapsible HUD pill that surfaces the last N closed P&L cycles. Mount
+ * fetches from `cmd_list_recent_cycles(20)`; subsequent refreshes are driven
+ * by `pnl_cycle_closed` events (push-refreshed, no polling). Cycles also flow
+ * into the store via the eventReducer so re-mounts don't have to re-fetch.
+ */
+function AnalyticsPanelImpl() {
+  const recentCycles = useFactoryStore((s) => s.recentCycles);
+  const setRecentCycles = useFactoryStore((s) => s.setRecentCycles);
+  const [open, setOpen] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const rows = await api.listRecentCycles(20);
+      setRecentCycles(rows);
+    } catch (e) {
+      // Non-Tauri / boot-time: silently no-op; eventReducer will push later.
+      console.warn("analytics: listRecentCycles failed", e);
+    }
+  }, [setRecentCycles]);
+
+  useEffect(() => {
+    refresh();
+    let unlisten: UnlistenFn | undefined;
+    (async () => {
+      try {
+        unlisten = await listen("pnl_cycle_closed", () => {
+          refresh();
+        });
+      } catch {
+        // listen() throws under jsdom — fine, mount-fetch above is enough.
+      }
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, [refresh]);
+
+  const count = recentCycles.length;
+
+  return (
+    <div className="analytics-panel-wrap">
+      <button
+        type="button"
+        className="analytics-pill"
+        onClick={() => setOpen((v) => !v)}
+        title={`${count} recent cycle${count === 1 ? "" : "s"}`}
+      >
+        <span className="analytics-pill-label">Cycles</span>
+        <span className="analytics-pill-value">{count}</span>
+        <span className="analytics-pill-caret">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="analytics-panel" role="dialog">
+          <div className="analytics-panel-header">
+            <span className="analytics-panel-title">Recent cycles</span>
+            <span className="analytics-panel-sub">last {count}</span>
+          </div>
+          <div className="analytics-panel-list">
+            {count === 0 ? (
+              <div className="analytics-panel-empty">no cycles yet</div>
+            ) : (
+              recentCycles.map((c) => {
+                const net = c.net_usd;
+                const netCls = net >= 0 ? "is-gain" : "is-loss";
+                const nicheRaw = c.niche ?? "—";
+                const niche =
+                  nicheRaw.length > 28 ? nicheRaw.slice(0, 27) + "…" : nicheRaw;
+                return (
+                  <div key={c.cycle_id} className="analytics-row">
+                    <span className="analytics-cid" title={c.cycle_id}>
+                      {c.cycle_id.slice(0, 8)}
+                    </span>
+                    <span className="analytics-niche" title={c.niche ?? ""}>
+                      {niche}
+                    </span>
+                    <span className="analytics-num">
+                      ${c.revenue_usd.toFixed(2)} rev
+                    </span>
+                    <span className="analytics-num">
+                      ${c.total_cost_usd.toFixed(2)} cost
+                    </span>
+                    <span className={`analytics-net ${netCls}`}>
+                      {net >= 0 ? "+" : ""}${net.toFixed(2)}
+                    </span>
+                    <span
+                      className="analytics-contrib"
+                      title={`${c.contributor_count} contributor${
+                        c.contributor_count === 1 ? "" : "s"
+                      }`}
+                    >
+                      {c.contributor_count}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AnalyticsPanel = memo(AnalyticsPanelImpl);
+export default AnalyticsPanel;

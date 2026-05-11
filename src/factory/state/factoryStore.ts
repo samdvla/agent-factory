@@ -32,6 +32,9 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   realActivityAt: {},
   agentTravel: {},
   agentLastIdleAt: {},
+  agentCreatedAt: {},
+  recentCycles: [],
+  wealthByRole: {},
   etsyPublishesRev: 0,
   etsyRecentReceipts: [],
   etsyRecentMessages: [],
@@ -102,4 +105,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   fireHireEvent: (e) => fireHireEventImpl(set, get, e),
   dissolveAgent: (roleId) => dissolveAgentImpl(set, get, roleId),
   idleDissolveTick: (now, idleThresholdMs) => idleDissolveTickImpl(set, get, now, idleThresholdMs),
+
+  setRecentCycles: (cycles) => set({ recentCycles: cycles }),
+  setWealthByRole: (m) => set({ wealthByRole: m }),
 }));
