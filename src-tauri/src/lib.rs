@@ -68,12 +68,20 @@ pub fn run() {
                 .flatten()
                 .unwrap_or_default();
 
-            // Read the daily USD budget cap from the secret store; default $1.00.
-            let daily_cap_usd: f64 = secrets::get("daily_budget_usd")
-                .ok()
-                .flatten()
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(1.00);
+            // Read multi-tier USD budget caps from the secret store with defaults.
+            let read_cap = |k: &str, default: f64| -> f64 {
+                secrets::get(k)
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(default)
+            };
+            let _caps = budget::BudgetCaps {
+                hourly_usd:  read_cap("hourly_budget_usd",  0.50),
+                daily_usd:   read_cap("daily_budget_usd",   1.00),
+                monthly_usd: read_cap("monthly_budget_usd", 20.00),
+            };
+            let daily_cap_usd: f64 = _caps.daily_usd; // keep existing var alive for next tasks
 
             let auto_state = state.clone();
             let pool_for_job = pool.clone();

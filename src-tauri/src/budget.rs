@@ -96,6 +96,19 @@ pub fn estimate_cost(model: &str, est_tokens_in: u64, est_tokens_out: u64) -> f6
     cost_usd(model, est_tokens_in, est_tokens_out)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BudgetCaps {
+    pub hourly_usd: f64,
+    pub daily_usd: f64,
+    pub monthly_usd: f64,
+}
+
+impl BudgetCaps {
+    pub fn defaults() -> Self {
+        Self { hourly_usd: 0.50, daily_usd: 1.00, monthly_usd: 20.00 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
