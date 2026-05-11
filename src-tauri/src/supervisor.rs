@@ -170,6 +170,27 @@ async fn run_worker_loop(
             }
 
             _ = poll_interval.tick() => {
+                // Smoke-test 10-minute timeout: if a smoke cycle is in flight and has
+                // been running > 10 minutes, emit TimedOut, set the pause flag, and
+                // clear the start markers.
+                if let (Some(started), Some(cycle_id)) = (
+                    crate::secrets::get("smoke_started_at").ok().flatten().filter(|s| !s.is_empty()).and_then(|s| s.parse::<i64>().ok()),
+                    crate::secrets::get("smoke_cycle_id").ok().flatten().filter(|s| !s.is_empty()),
+                ) {
+                    if chrono::Utc::now().timestamp() - started > 600 {
+                        bus.send(SupervisorEvent::SmokeTestCycleComplete {
+                            cycle_id: cycle_id.clone(),
+                            listing_id: None,
+                            spend_usd: 0.0,
+                            duration_ms: 600_000,
+                            status: crate::events::SmokeTestStatus::TimedOut,
+                        });
+                        let _ = crate::secrets::set("smoke_pause_until", "1");
+                        let _ = crate::secrets::delete("smoke_cycle_id");
+                        let _ = crate::secrets::delete("smoke_started_at");
+                    }
+                }
+
                 // Enforce multi-tier caps BEFORE claiming the next job.
                 // Pre-flight estimate: assume up to 1500 input tokens + 800 output for
                 // an average job (conservative for haiku, low for sonnet/opus).

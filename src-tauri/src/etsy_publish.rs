@@ -445,6 +445,33 @@ pub async fn handle_publisher_complete(
                 url,
                 state: state_str,
             });
+
+            // If this listing belongs to a smoke cycle, end it.
+            let smoke_cycle = crate::secrets::get("smoke_cycle_id").ok().flatten().filter(|v| !v.is_empty());
+            let smoke_started = crate::secrets::get("smoke_started_at")
+                .ok().flatten().and_then(|s| s.parse::<i64>().ok());
+            if let (Some(cycle_id), Some(started)) = (smoke_cycle, smoke_started) {
+                let duration_ms = ((chrono::Utc::now().timestamp() - started).max(0) as u64) * 1000;
+                let pool_clone = pool.clone();
+                let bus_clone = bus.clone();
+                let cid = cycle_id.clone();
+                let listing_id_local = resp.listing_id;
+                tokio::spawn(async move {
+                    let ledger_sum: f64 = sqlx::query_scalar::<_, f64>(
+                        "SELECT COALESCE(SUM(cost_usd), 0.0) FROM agent_contributions WHERE cycle_id = ?"
+                    ).bind(&cid).fetch_one(&pool_clone).await.unwrap_or(0.0);
+                    let _ = crate::secrets::set("smoke_pause_until", "1");
+                    let _ = crate::secrets::delete("smoke_cycle_id");
+                    let _ = crate::secrets::delete("smoke_started_at");
+                    bus_clone.send(crate::events::SupervisorEvent::SmokeTestCycleComplete {
+                        cycle_id: cid,
+                        listing_id: Some(listing_id_local),
+                        spend_usd: ledger_sum,
+                        duration_ms,
+                        status: crate::events::SmokeTestStatus::Success,
+                    });
+                });
+            }
         }
         Err(e) => {
             // Build a flat reason including the full anyhow chain.
