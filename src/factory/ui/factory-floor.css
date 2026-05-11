@@ -270,6 +270,168 @@ button.etsy-pill:disabled { opacity: 0.65; cursor: progress; }
 }
 .etsy-action:hover { color: var(--ink-0); border-color: var(--ink-2); }
 
+.etsy-pill-wrap { position: relative; }
+button.etsy-pill {
+  cursor: pointer;
+}
+.etsy-pill.is-live {
+  border-color: rgba(245, 166, 35, 0.55);
+  box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.2) inset;
+}
+.etsy-live-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-radius: 4px;
+  background: var(--accent-warm);
+  color: #1a1207;
+}
+
+.etsy-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 320px;
+  max-width: 420px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  z-index: 50;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.etsy-panel-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.etsy-panel-row:last-of-type { border-bottom: none; }
+.etsy-panel-label {
+  font-size: 10px;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.etsy-toggle {
+  padding: 2px 10px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.etsy-toggle.is-on {
+  border-color: rgba(245, 166, 35, 0.55);
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--accent-warm);
+}
+.etsy-cap-input {
+  width: 56px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  color: var(--ink-0);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.etsy-panel-list {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.etsy-panel-empty {
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 0;
+  text-align: center;
+}
+.etsy-publish-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg-1);
+}
+.etsy-publish-title {
+  flex: 1;
+  color: var(--ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.etsy-state-badge {
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+}
+.etsy-state-badge.state-draft {
+  background: rgba(245, 166, 35, 0.14);
+  color: var(--accent-warm);
+  border-color: rgba(245, 166, 35, 0.4);
+}
+.etsy-state-badge.state-active {
+  background: rgba(120, 200, 130, 0.14);
+  color: var(--accent-ok);
+  border-color: rgba(120, 200, 130, 0.4);
+}
+.etsy-state-badge.state-inactive,
+.etsy-state-badge.state-expired {
+  background: var(--bg-2);
+  color: var(--ink-2);
+}
+.etsy-publish-link {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.etsy-publish-link:hover { color: var(--ink-0); }
+.etsy-publish-activate {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgba(120, 200, 130, 0.45);
+  border-radius: 4px;
+  background: rgba(120, 200, 130, 0.1);
+  color: var(--accent-ok);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.etsy-publish-activate:hover:not(:disabled) {
+  background: rgba(120, 200, 130, 0.2);
+}
+.etsy-publish-activate:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+.etsy-panel-footer {
+  margin-top: 8px;
+  display: flex; justify-content: flex-end;
+}
+
 .gate-pill {
   border-color: rgba(245, 166, 35, 0.4);
   color: var(--accent-warm);

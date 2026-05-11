@@ -153,6 +153,60 @@ export function applySupervisorEvent(
       }
       break;
     }
+    case "etsy_listing_published": {
+      const local = (evt as any).local_listing_id as number | undefined;
+      const etsy = (evt as any).etsy_listing_id as number | undefined;
+      const title = (evt as any).title as string | undefined;
+      const stateStr = (evt as any).state as string | undefined;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "publisher",
+        text: `Etsy ${stateStr ?? "draft"} #${etsy ?? "?"}: ${title ?? "?"}${
+          local !== undefined ? ` (local #${local})` : ""
+        }`,
+      });
+      store.bumpEtsyPublishesRev();
+      break;
+    }
+    case "etsy_listing_publish_failed": {
+      const local = (evt as any).local_listing_id as number | undefined;
+      const reason = (evt as any).reason as string | undefined;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "publisher",
+        text: `Etsy publish failed${local !== undefined ? ` (local #${local})` : ""}: ${
+          reason ?? "?"
+        }`,
+      });
+      store.pushAlert({
+        kind: "warn",
+        title: "Etsy publish failed",
+        sub: reason ?? "unknown error",
+        ts: Date.now(),
+        agent: "publisher",
+      });
+      break;
+    }
+    case "etsy_listing_capped": {
+      const count = (evt as any).count as number | undefined;
+      const cap = (evt as any).cap as number | undefined;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "publisher",
+        text: `Etsy daily cap reached (${count ?? "?"}/${cap ?? "?"})`,
+      });
+      break;
+    }
+    case "etsy_listing_activated": {
+      const etsy = (evt as any).etsy_listing_id as number | undefined;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "publisher",
+        text: `Etsy #${etsy ?? "?"} activated`,
+      });
+      store.bumpEtsyPublishesRev();
+      break;
+    }
     case "budget_capped": {
       const spent = (evt as any).spent_usd as number;
       const cap = (evt as any).cap_usd as number;

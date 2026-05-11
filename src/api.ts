@@ -12,6 +12,22 @@ export type EtsyStatus = {
 
 export type OAuthInit = { authorize_url: string };
 
+export type EtsyPublishRow = {
+  id: number;
+  local_listing_id: number;
+  etsy_listing_id: number;
+  state: string; // 'draft' | 'active' | 'inactive' | 'expired'
+  title: string;
+  url: string | null;
+  published_at: number;
+  activated_at: number | null;
+};
+
+export type ActivateResult = {
+  etsy_listing_id: number;
+  url: string | null;
+};
+
 export const api = {
   status: () => invoke<StatusReport>("cmd_status"),
   start: () => invoke<void>("cmd_start_supervisor"),
@@ -25,4 +41,15 @@ export const api = {
   etsyStartOAuth: () => invoke<OAuthInit>("cmd_etsy_start_oauth"),
   etsyStatus: () => invoke<EtsyStatus>("cmd_etsy_status"),
   etsyDisconnect: () => invoke<void>("cmd_etsy_disconnect"),
+  etsySetEnabled: (enabled: boolean) =>
+    invoke<void>("cmd_etsy_set_enabled", { enabled }),
+  etsyGetEnabled: () => invoke<boolean>("cmd_etsy_get_enabled"),
+  etsySetListingCap: (cap: number) =>
+    invoke<void>("cmd_etsy_set_listing_cap", { cap }),
+  etsyGetListingCap: () => invoke<number>("cmd_etsy_get_listing_cap"),
+  etsyListPublishes: () => invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes"),
+  etsyActivateListing: (localListingId: number) =>
+    invoke<ActivateResult>("cmd_etsy_activate_listing", {
+      localListingId,
+    }),
 };

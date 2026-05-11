@@ -49,6 +49,16 @@ def handle(method: str, params: dict) -> dict:
         "ok": True,
         "listing_id": listing_id,
         "ticker_text": f"publisher → cfo: listing #{listing_id} LIVE (sandbox)",
+        # Etsy publish hook (Rust supervisor reads these when real_etsy_enabled).
+        # These are flat top-level fields so the Rust hook doesn't have to
+        # reach into the cfo handoff payload.
+        "title": title,
+        "description": listing.get("description", ""),
+        "tags": listing.get("tags", []) or [],
+        "price_usd": record["price_usd"],
+        "niche": niche,
+        "asset_path": asset_path,
+        "job_id": job_id,
         "handoff": {
             "to_role": "cfo",
             "payload": {

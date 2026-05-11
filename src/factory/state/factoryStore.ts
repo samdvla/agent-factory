@@ -32,6 +32,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   realActivityAt: {},
   agentTravel: {},
   agentLastIdleAt: {},
+  etsyPublishesRev: 0,
 
   setAgentState: (role, state) => set((s) => ({
     agents: { ...s.agents, [role]: { ...s.agents[role], state } },
@@ -77,6 +78,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   markRealActivity: (roleId) => set((s) => ({
     realActivityAt: { ...s.realActivityAt, [roleId]: Date.now() },
   })),
+  bumpEtsyPublishesRev: () => set((s) => ({ etsyPublishesRev: s.etsyPublishesRev + 1 })),
 
   addRevenue: (roleId, usd) => set((s) => ({
     revenueTodayUsd: s.revenueTodayUsd + usd,

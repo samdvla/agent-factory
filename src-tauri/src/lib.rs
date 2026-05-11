@@ -2,6 +2,7 @@ pub mod budget;
 pub mod commands;
 pub mod db;
 pub mod etsy;
+pub mod etsy_publish;
 pub mod events;
 pub mod heartbeat;
 pub mod llm;
@@ -194,6 +195,12 @@ pub fn run() {
             commands::cmd_etsy_start_oauth,
             commands::cmd_etsy_status,
             commands::cmd_etsy_disconnect,
+            commands::cmd_etsy_set_enabled,
+            commands::cmd_etsy_get_enabled,
+            commands::cmd_etsy_set_listing_cap,
+            commands::cmd_etsy_get_listing_cap,
+            commands::cmd_etsy_list_publishes,
+            commands::cmd_etsy_activate_listing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

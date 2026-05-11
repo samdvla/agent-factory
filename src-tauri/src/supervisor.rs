@@ -239,6 +239,35 @@ async fn run_worker_loop(
                                     result: result.clone(),
                                 });
 
+                                // If a publisher job completed AND the operator
+                                // has explicitly flipped `real_etsy_enabled=true`,
+                                // attempt a real Etsy draft publish in the
+                                // background. Default (flag absent/false) is a
+                                // full no-op so the sandbox pipeline keeps
+                                // running unchanged.
+                                if role == "publisher" {
+                                    let real_enabled = crate::secrets::get("real_etsy_enabled")
+                                        .ok()
+                                        .flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    if real_enabled {
+                                        let bus_for_pub = bus.clone();
+                                        let pool_for_pub = pool.clone();
+                                        let project_id_for_pub = project_id;
+                                        let result_clone = result.clone();
+                                        tokio::spawn(async move {
+                                            crate::etsy_publish::handle_publisher_complete(
+                                                &pool_for_pub,
+                                                project_id_for_pub,
+                                                &bus_for_pub,
+                                                &result_clone,
+                                            )
+                                            .await;
+                                        });
+                                    }
+                                }
+
                                 // If a designer job produced an SVG asset, kick
                                 // off a background rasterization to a sibling
                                 // .png at 2048px (Etsy requires raster ≥2000px).

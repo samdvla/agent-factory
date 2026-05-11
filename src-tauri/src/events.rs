@@ -15,6 +15,19 @@ pub enum SupervisorEvent {
     BudgetSpent { role: String, cost_usd: f64, tokens_in: u64, tokens_out: u64, model: String },
     BudgetCapped { spent_usd: f64, cap_usd: f64 },
     AssetRasterized { job_id: i64, png_path: String, bytes: u64 },
+    EtsyListingPublished {
+        local_listing_id: i64,
+        etsy_listing_id: i64,
+        title: String,
+        url: Option<String>,
+        state: String,
+    },
+    EtsyListingPublishFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    EtsyListingCapped { count: i64, cap: i64 },
+    EtsyListingActivated { etsy_listing_id: i64 },
 }
 
 #[derive(Clone)]

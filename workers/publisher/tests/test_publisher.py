@@ -57,6 +57,38 @@ def test_asset_path_threaded_to_cfo():
         assert cfo_payload["asset_path"] == "/tmp/.agent-factory/assets/777.svg"
 
 
+def test_result_contains_etsy_fields():
+    """Rust supervisor reads top-level fields off the publisher result to
+    construct the real Etsy POST body. Make sure they're all there."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["AGENT_FACTORY_DATA"] = tmpdir
+        result = handle("process_job", {
+            "job_id": 42,
+            "payload": {
+                "listing": {
+                    "title": "Boho Wall Print | Earthy Tones",
+                    "price_usd": 6.99,
+                    "tags": ["boho", "wall art", "printable"],
+                    "description": "A warm, earthy boho print for cozy walls.",
+                },
+                "asset": {
+                    "brief_for_image_gen": "boho wall art",
+                    "asset_path": "/tmp/.agent-factory/assets/42.svg",
+                },
+                "brief": {"niche": "boho wall art"},
+            },
+        })
+        assert result["ok"] is True
+        # Fields the Rust supervisor expects at the top level:
+        assert result["title"] == "Boho Wall Print | Earthy Tones"
+        assert result["description"] == "A warm, earthy boho print for cozy walls."
+        assert result["tags"] == ["boho", "wall art", "printable"]
+        assert result["price_usd"] == 6.99
+        assert result["niche"] == "boho wall art"
+        assert result["asset_path"] == "/tmp/.agent-factory/assets/42.svg"
+        assert result["job_id"] == 42
+
+
 def test_mock_etsy_record_includes_asset_path():
     with tempfile.TemporaryDirectory() as tmpdir:
         os.environ["AGENT_FACTORY_DATA"] = tmpdir

@@ -147,8 +147,11 @@ export type FactoryStore = {
     durationPerSegmentMs?: number;
   } | undefined>;
   agentLastIdleAt: Record<string, number>;
+  /** Monotonic counter bumped whenever Etsy publish state changes, so panels can refetch. */
+  etsyPublishesRev: number;
 
   markRealActivity: (roleId: string) => void;
+  bumpEtsyPublishesRev: () => void;
 
   setAgentState: (role: string, state: AgentVisualState) => void;
   setAgentJob: (role: string, jobId: number | null) => void;

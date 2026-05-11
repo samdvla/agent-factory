@@ -1,4 +1,4 @@
-use crate::{etsy, events::EventBus, oauth_server, queue, secrets, supervisor};
+use crate::{etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, queue, secrets, supervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -223,4 +223,136 @@ pub async fn cmd_etsy_status() -> Result<etsy::EtsyStatus, String> {
 #[tauri::command]
 pub async fn cmd_etsy_disconnect() -> Result<(), String> {
     etsy::disconnect().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("real_etsy_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_get_enabled() -> Result<bool, String> {
+    Ok(secrets::get("real_etsy_enabled")
+        .map_err(|e| e.to_string())?
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_set_listing_cap(cap: i64) -> Result<(), String> {
+    if !(0..=100).contains(&cap) {
+        return Err("cap must be 0..=100".into());
+    }
+    secrets::set("daily_listing_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_get_listing_cap() -> Result<i64, String> {
+    Ok(secrets::get("daily_listing_cap")
+        .map_err(|e| e.to_string())?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(etsy_publish::DEFAULT_DAILY_CAP))
+}
+
+#[derive(Serialize)]
+pub struct EtsyPublishRow {
+    pub id: i64,
+    pub local_listing_id: i64,
+    pub etsy_listing_id: i64,
+    pub state: String,
+    pub title: String,
+    pub url: Option<String>,
+    pub published_at: i64,
+    pub activated_at: Option<i64>,
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_list_publishes(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<EtsyPublishRow>, String> {
+    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, Option<String>, i64, Option<i64>)>(
+        "SELECT id, local_listing_id, etsy_listing_id, state, title, url, published_at, activated_at \
+         FROM etsy_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| EtsyPublishRow {
+            id: r.0,
+            local_listing_id: r.1,
+            etsy_listing_id: r.2,
+            state: r.3,
+            title: r.4,
+            url: r.5,
+            published_at: r.6,
+            activated_at: r.7,
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+pub struct ActivateResult {
+    pub etsy_listing_id: i64,
+    pub url: Option<String>,
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_activate_listing(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<ActivateResult, String> {
+    let row: Option<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT etsy_listing_id, url FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let (etsy_listing_id, url) = row
+        .ok_or_else(|| format!("no etsy publish row for local_listing_id={local_listing_id}"))?;
+
+    let status = etsy::load_status();
+    if !status.connected {
+        return Err("Etsy not connected".into());
+    }
+    let shop_id = status
+        .shop_id
+        .ok_or_else(|| "shop_id missing — reconnect Etsy".to_string())?;
+    let keystring = secrets::get("etsy_api_keystring")
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "etsy_api_keystring not in keychain".to_string())?;
+
+    let client = reqwest::Client::new();
+    etsy_publish::activate_listing(&client, &keystring, shop_id, etsy_listing_id)
+        .await
+        .map_err(|e| format!("{:#}", e))?;
+
+    let now = chrono::Utc::now().timestamp();
+    if let Err(e) = sqlx::query(
+        "UPDATE etsy_publishes SET state = 'active', activated_at = ? WHERE project_id = ? AND etsy_listing_id = ?",
+    )
+    .bind(now)
+    .bind(state.project_id)
+    .bind(etsy_listing_id)
+    .execute(&state.pool)
+    .await
+    {
+        tracing::warn!("update etsy_publishes after activate: {e}");
+    }
+
+    state
+        .bus
+        .send(SupervisorEvent::EtsyListingActivated { etsy_listing_id });
+
+    Ok(ActivateResult {
+        etsy_listing_id,
+        url,
+    })
 }
