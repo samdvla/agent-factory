@@ -2901,12 +2901,16 @@ button.etsy-pill {
 
 /* ── Cards ───────────────────────────────────────────────────────────────── */
 .rail-card {
-  margin: 12px 10px 0;
+  margin: 14px 10px 0;
   padding: 10px;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.rail-card:hover {
+  border-color: #3a3d44;
 }
 .rail-card-header {
   font-size: 10px;
@@ -2914,14 +2918,34 @@ button.etsy-pill {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-2);
-  opacity: 0.55;
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Color stripe accent per card section */
+.rail-card-accent {
+  display: inline-block;
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 .rail-card-loading {
   font-size: 11px;
   color: var(--ink-3);
   padding: 4px 0;
   font-family: var(--font-mono);
+}
+/* Flash animation: brief outline highlight when scrolled-to */
+@keyframes rail-flash-outline {
+  0%   { outline: 2px solid var(--accent); outline-offset: 2px; }
+  60%  { outline: 2px solid var(--accent); outline-offset: 2px; }
+  100% { outline: 2px solid transparent; outline-offset: 2px; }
+}
+.rail-flash {
+  animation: rail-flash-outline 0.8s ease forwards;
 }
 
 /* Budget rows */
@@ -2973,10 +2997,35 @@ button.etsy-pill {
   border-top: 1px dashed var(--line);
 }
 
-/* Etsy card — contains EtsyPanel which is pill+popover.
-   We override its pill to look at home in the rail card. */
+/* Etsy card — Option 1: hide the pill button, force panel to render inline.
+   The pill-wrap becomes a transparent container; the pill itself is visually
+   hidden but clicking it is irrelevant since we suppress the button entirely. */
 .rail-etsy-card .etsy-pill-wrap { display: block; }
-.rail-etsy-card .etsy-pill {
+
+/* Hide the toggle pill — card header already labels this section */
+.rail-etsy-card .etsy-pill.is-connected,
+.rail-etsy-card .etsy-pill-wrap > button.etsy-pill {
+  display: none;
+}
+
+/* Force the panel body to show inline (simulates alwaysOpen) */
+.rail-etsy-card .etsy-panel {
+  display: block;
+  position: static;
+  margin-top: 0;
+  min-width: unset;
+  max-width: unset;
+  width: 100%;
+  box-shadow: none;
+  border-radius: var(--radius);
+  padding: 6px 0 0;
+  background: transparent;
+  border: none;
+}
+
+/* Disconnected state: show connect button inline at full width */
+.rail-etsy-card button.etsy-pill.is-disconnected {
+  display: flex;
   width: 100%;
   justify-content: flex-start;
   height: auto;
@@ -2985,21 +3034,13 @@ button.etsy-pill {
   border-radius: var(--radius);
   font-size: 12px;
 }
-.rail-etsy-card .etsy-panel {
-  position: static;
-  margin-top: 8px;
-  min-width: unset;
-  max-width: unset;
+
+/* Loading state pill */
+.rail-etsy-card .etsy-pill:not(.is-connected):not(.is-disconnected) {
+  display: flex;
   width: 100%;
-  box-shadow: none;
-  border-radius: var(--radius);
-  padding: 8px;
-  background: var(--bg-1);
-}
-/* Disconnected state: show it inline */
-.rail-etsy-card button.etsy-pill.is-disconnected {
-  width: 100%;
-  justify-content: flex-start;
+  font-size: 12px;
+  padding: 4px 0;
 }
 
 /* ── Panel rows (Cycles / Prompts / Wealth) ──────────────────────────────── */
@@ -3011,9 +3052,13 @@ button.etsy-pill {
   border-top: 1px solid var(--line);
 }
 .rail-panel-row-wrap:first-of-type {
-  margin-top: 12px;
+  margin-top: 14px;
   border-top: 1px solid var(--line);
   border-radius: 0;
+}
+.rail-panel-row-wrap.rail-flash {
+  animation: rail-flash-outline 0.8s ease forwards;
+  border-radius: var(--radius);
 }
 .rail-panel-row {
   width: 100%;
@@ -3045,6 +3090,13 @@ button.etsy-pill {
   color: var(--ink-0);
   min-width: 14px;
   text-align: right;
+  transition: color 0.2s;
+}
+.rail-panel-row-count.is-live {
+  color: var(--accent);
+}
+.rail-panel-row-count.is-zero {
+  color: var(--ink-3);
 }
 .rail-panel-row-caret {
   color: var(--ink-3);
@@ -3100,15 +3152,19 @@ button.etsy-pill {
   background: var(--bg-1);
   border-right: 1px solid var(--line);
   width: var(--rail-w-collapsed);
-  overflow: hidden;
+  overflow: visible;   /* allow tooltips to poke out */
   flex-shrink: 0;
 }
+
+/* Each button is a relative container for badge + tooltip */
 .rail-strip-btn {
+  position: relative;
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   border-radius: var(--radius);
   color: var(--ink-3);
   transition: background 0.15s, color 0.15s;
+  overflow: visible;
 }
 .rail-strip-btn:hover { background: var(--bg-3); color: var(--ink-0); }
 .rail-strip-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
@@ -3116,4 +3172,100 @@ button.etsy-pill {
   color: var(--ink-2);
   margin-bottom: 4px;
 }
+
+/* Icon inside button — sits above the ring SVG */
+.rail-strip-icon {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* Budget ring — background layer behind the $ icon */
+.rail-budget-ring {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Tooltip */
+.rail-tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #13151a;
+  border: 1px solid #2a2d33;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--ink-0);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 200;
+}
+.rail-strip-btn:hover .rail-tip,
+.rail-strip-btn:focus-visible .rail-tip { opacity: 1; }
+
+/* Number badge — top-right corner of the icon button */
+.rail-strip-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #0a1018;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* Etsy status dot — bottom-right of the shop bag icon */
+.rail-etsy-dot {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-1);
+  pointer-events: none;
+}
+.rail-etsy-dot.is-connected {
+  background: var(--accent-ok);
+}
+.rail-etsy-dot.is-disconnected {
+  background: var(--ink-3);
+  animation: etsy-dot-pulse 2s ease-in-out infinite;
+}
+@keyframes etsy-dot-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
+}
+
+/* Empty state inside panel row popovers */
+.rail-panel-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-style: italic;
+}
+.rail-panel-empty-state svg {
+  flex-shrink: 0;
+  color: var(--ink-3);
+}
+
 .smoke-steps li.ok::before { content: "✓ "; }

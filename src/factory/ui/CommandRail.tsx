@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type BudgetStatus } from "../../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type BudgetStatus, type EtsyStatus, type PromptRow } from "../../api";
 import EtsyPanel from "./EtsyPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PromptsPanel from "./PromptsPanel";
@@ -21,39 +21,53 @@ function tone(num: number, den: number): "ok" | "warn" | "danger" {
   return "danger";
 }
 
-/* ─── BudgetCard ─────────────────────────────────────────────────────── */
-function BudgetCard() {
-  const [s, setS] = useState<BudgetStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      api
-        .budgetStatus()
-        .then((v) => {
-          if (!cancelled) setS(v);
-        })
-        .catch(() => {});
-    load();
-    const id = setInterval(load, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
+/* ─── BudgetRing ─────────────────────────────────────────────────────── */
+function BudgetRing({ p, t }: { p: number; t: "ok" | "warn" | "danger" }) {
+  const r = 13;
+  const c = 2 * Math.PI * r;
+  const dash = (p / 100) * c;
+  const color = t === "ok" ? "#9be0b3" : t === "warn" ? "#e8d77b" : "#ff8a93";
   return (
-    <div className="rail-card">
-      <div className="rail-card-header">Budget</div>
-      {!s ? (
+    <svg
+      width="36"
+      height="36"
+      viewBox="0 0 36 36"
+      className="rail-budget-ring"
+      aria-hidden="true"
+    >
+      <circle cx="18" cy="18" r={r} fill="none" stroke="#1f2a37" strokeWidth="2" />
+      <circle
+        cx="18"
+        cy="18"
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeDasharray={`${dash} ${c - dash}`}
+        strokeLinecap="round"
+        transform="rotate(-90 18 18)"
+      />
+    </svg>
+  );
+}
+
+/* ─── BudgetCard ─────────────────────────────────────────────────────── */
+function BudgetCard({ budget }: { budget: BudgetStatus | null }) {
+  return (
+    <div id="rail-budget" className="rail-card rail-card--budget">
+      <div className="rail-card-header">
+        <span className="rail-card-accent" style={{ background: "#9be0b3" }} />
+        Budget
+      </div>
+      {!budget ? (
         <div className="rail-card-loading">loading…</div>
       ) : (
         <>
-          <BudgetRow label="Hour" v={s.hour_usd} cap={s.hourly_cap_usd} />
-          <BudgetRow label="Day" v={s.today_usd} cap={s.daily_cap_usd} />
-          <BudgetRow label="Month" v={s.month_usd} cap={s.monthly_cap_usd} />
+          <BudgetRow label="Hour" v={budget.hour_usd} cap={budget.hourly_cap_usd} />
+          <BudgetRow label="Day" v={budget.today_usd} cap={budget.daily_cap_usd} />
+          <BudgetRow label="Month" v={budget.month_usd} cap={budget.monthly_cap_usd} />
           <div className="rail-budget-burn">
-            Burn&nbsp;&nbsp;{fmt(s.burn_per_hour_usd)}/hr
+            Burn&nbsp;&nbsp;{fmt(budget.burn_per_hour_usd)}/hr
           </div>
         </>
       )}
@@ -88,23 +102,33 @@ function BudgetRow({
 /* ─── EtsyCard ───────────────────────────────────────────────────────── */
 function EtsyCard() {
   return (
-    <div className="rail-card rail-etsy-card">
-      <div className="rail-card-header">Etsy</div>
-      {/* Reuse the existing EtsyPanel component; its pill+popover will sit
-          inside the rail card. The CSS overrides position it inline. */}
-      <EtsyPanel />
+    <div id="rail-etsy" className="rail-card rail-etsy-card rail-card--etsy">
+      <div className="rail-card-header">
+        <span className="rail-card-accent" style={{ background: "#f5a623" }} />
+        Etsy
+      </div>
+      {/* alwaysOpen keeps the panel body visible without needing to click
+          the pill. The pill button is hidden via CSS since the card header
+          already labels this section. */}
+      <EtsyPanel alwaysOpen />
     </div>
   );
 }
 
 /* ─── Rail row for Cycles / Prompts / Wealth ─────────────────────────── */
 function PanelRow({
+  id,
   label,
   count,
+  accentColor,
+  emptyMessage,
   children,
 }: {
+  id: string;
   label: string;
   count: number;
+  accentColor: string;
+  emptyMessage: string;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -123,76 +147,129 @@ function PanelRow({
   }, [open]);
 
   return (
-    <div ref={wrapRef} className="rail-panel-row-wrap">
+    <div ref={wrapRef} id={id} className="rail-panel-row-wrap">
       <button
         type="button"
         className={`rail-panel-row${open ? " is-open" : ""}`}
         onClick={() => setOpen((v) => !v)}
       >
+        <span className="rail-card-accent" style={{ background: accentColor }} />
         <span className="rail-panel-row-label">{label}</span>
-        <span className="rail-panel-row-count">{count}</span>
+        <span className={`rail-panel-row-count${count > 0 ? " is-live" : " is-zero"}`}>
+          {count}
+        </span>
         <span className="rail-panel-row-caret">{open ? "▾" : "▸"}</span>
       </button>
-      {open && <div className="rail-panel-row-popover">{children}</div>}
+      {open && (
+        <div className="rail-panel-row-popover">
+          {count === 0 ? (
+            <div className="rail-panel-empty-state">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <circle cx="12" cy="16" r="0.5" fill="currentColor" strokeWidth="0" />
+              </svg>
+              <span>{emptyMessage}</span>
+            </div>
+          ) : (
+            children
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ─── Collapsed icon strip ───────────────────────────────────────────── */
+
+type FocusTarget = "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null;
+
+interface CollapsedStripProps {
+  onFocusExpand: (target: FocusTarget) => void;
+  budget: BudgetStatus | null;
+  etsyStatus: EtsyStatus | null;
+  cycleCount: number;
+  promptOverrideCount: number;
+  wealthCount: number;
+}
+
 function CollapsedStrip({
-  onExpand,
-}: {
-  onExpand: () => void;
-}) {
+  onFocusExpand,
+  budget,
+  etsyStatus,
+  cycleCount,
+  promptOverrideCount,
+  wealthCount,
+}: CollapsedStripProps) {
+  const budgetTone = budget ? tone(budget.today_usd, budget.daily_cap_usd) : "ok";
+  const budgetPct = budget ? pct(budget.today_usd, budget.daily_cap_usd) : 0;
+  const budgetTip = budget
+    ? `${fmt(budget.today_usd)} / ${fmt(budget.daily_cap_usd)} today`
+    : "Budget loading…";
+  const etsyConnected = etsyStatus?.connected ?? false;
+  const etsyTip = etsyStatus
+    ? etsyConnected
+      ? `${etsyStatus.shop_name ?? "Connected"} — Etsy shop`
+      : "Etsy not connected"
+    : "Etsy loading…";
+
   return (
     <nav
       className="rail-collapsed-strip"
       aria-label="Command rail (collapsed)"
     >
+      {/* Expand chevron */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Expand command rail"
+        onClick={() => onFocusExpand(null)}
+        aria-label="Expand command rail"
       >
-        {/* Chevron-right icon */}
         <svg
-          width="18"
-          height="18"
+          width="16"
+          height="16"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
+          aria-hidden="true"
         >
           <polyline points="9 18 15 12 9 6" />
         </svg>
+        <span className="rail-tip">Expand rail</span>
       </button>
+
+      {/* Budget — ring + $ icon */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Budget"
+        onClick={() => onFocusExpand("budget")}
+        aria-label="Budget"
       >
-        {/* Dollar icon */}
+        <BudgetRing p={budgetPct} t={budgetTone} />
         <svg
-          width="18"
-          height="18"
+          width="15"
+          height="15"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
+          className="rail-strip-icon"
+          aria-hidden="true"
         >
           <line x1="12" y1="1" x2="12" y2="23" />
           <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
         </svg>
+        <span className="rail-tip">{budgetTip}</span>
       </button>
+
+      {/* Etsy — status dot */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Etsy"
+        onClick={() => onFocusExpand("etsy")}
+        aria-label="Etsy"
       >
-        {/* Shop bag icon */}
         <svg
           width="18"
           height="18"
@@ -200,19 +277,26 @@ function CollapsedStrip({
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
+          aria-hidden="true"
         >
           <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
           <line x1="3" y1="6" x2="21" y2="6" />
           <path d="M16 10a4 4 0 01-8 0" />
         </svg>
+        <span
+          className={`rail-etsy-dot${etsyConnected ? " is-connected" : " is-disconnected"}`}
+          aria-hidden="true"
+        />
+        <span className="rail-tip">{etsyTip}</span>
       </button>
+
+      {/* Cycles — count badge */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Cycles"
+        onClick={() => onFocusExpand("cycles")}
+        aria-label="Cycles"
       >
-        {/* Refresh icon */}
         <svg
           width="18"
           height="18"
@@ -220,19 +304,29 @@ function CollapsedStrip({
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
+          aria-hidden="true"
         >
           <polyline points="23 4 23 10 17 10" />
           <polyline points="1 20 1 14 7 14" />
           <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
         </svg>
+        {cycleCount > 0 && (
+          <span className="rail-strip-badge" aria-label={`${cycleCount} cycles`}>
+            {cycleCount > 99 ? "99+" : cycleCount}
+          </span>
+        )}
+        <span className="rail-tip">
+          {cycleCount > 0 ? `${cycleCount} cycle${cycleCount === 1 ? "" : "s"}` : "No cycles yet"}
+        </span>
       </button>
+
+      {/* Prompts — count badge */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Prompts"
+        onClick={() => onFocusExpand("prompts")}
+        aria-label="Prompts"
       >
-        {/* Edit icon */}
         <svg
           width="18"
           height="18"
@@ -240,18 +334,33 @@ function CollapsedStrip({
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
+          aria-hidden="true"
         >
           <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
           <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
+        {promptOverrideCount > 0 && (
+          <span
+            className="rail-strip-badge"
+            aria-label={`${promptOverrideCount} overrides`}
+          >
+            {promptOverrideCount}
+          </span>
+        )}
+        <span className="rail-tip">
+          {promptOverrideCount > 0
+            ? `${promptOverrideCount} override${promptOverrideCount === 1 ? "" : "s"} active`
+            : "No prompt overrides"}
+        </span>
       </button>
+
+      {/* Wealth — count badge */}
       <button
         type="button"
         className="rail-strip-btn"
-        onClick={onExpand}
-        title="Wealth"
+        onClick={() => onFocusExpand("wealth")}
+        aria-label="Wealth"
       >
-        {/* Trophy icon */}
         <svg
           width="18"
           height="18"
@@ -259,6 +368,7 @@ function CollapsedStrip({
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
+          aria-hidden="true"
         >
           <polyline points="8 21 12 17 16 21" />
           <line x1="12" y1="17" x2="12" y2="12" />
@@ -267,6 +377,16 @@ function CollapsedStrip({
           <path d="M4 6H2v3a4 4 0 004 4" />
           <path d="M20 6h2v3a4 4 0 01-4 4" />
         </svg>
+        {wealthCount > 0 && (
+          <span className="rail-strip-badge" aria-label={`${wealthCount} earners`}>
+            {wealthCount}
+          </span>
+        )}
+        <span className="rail-tip">
+          {wealthCount > 0
+            ? `${wealthCount} role${wealthCount === 1 ? "" : "s"} earning`
+            : "No earnings yet"}
+        </span>
       </button>
     </nav>
   );
@@ -286,12 +406,109 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   const cycleCount = recentCycles.length;
   const wealthCount = Object.keys(wealthByRole).length;
 
+  // Budget state — fetched here so collapsed strip can show the ring
+  const [budget, setBudget] = useState<BudgetStatus | null>(null);
+  // Etsy status — for collapsed strip dot
+  const [etsyStatus, setEtsyStatus] = useState<EtsyStatus | null>(null);
+  // Prompt override count
+  const [promptOverrideCount, setPromptOverrideCount] = useState(0);
+
+  // Which card to scroll to after expanding
+  const [pendingFocus, setPendingFocus] = useState<
+    "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null
+  >(null);
+  const railRef = useRef<HTMLElement>(null);
+
+  // Poll budget every 5s
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .budgetStatus()
+        .then((v) => { if (!cancelled) setBudget(v); })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Fetch Etsy status once (refreshed by EtsyPanel internally, this is just
+  // for the collapsed strip indicator)
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .etsyStatus()
+        .then((v) => { if (!cancelled) setEtsyStatus(v); })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 10000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Fetch prompt override count once; refresh every 15s
+  const refreshPromptCount = useCallback(async () => {
+    try {
+      const rows = await api.listPrompts();
+      const n = Object.values(rows).filter((r: PromptRow) => r.override).length;
+      setPromptOverrideCount(n);
+    } catch {
+      // Silently ignore during boot / non-Tauri
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPromptCount();
+    const id = setInterval(refreshPromptCount, 15000);
+    return () => clearInterval(id);
+  }, [refreshPromptCount]);
+
+  // When pendingFocus is set and rail is expanded, scroll + flash the target
+  useEffect(() => {
+    if (!pendingFocus || collapsed) return;
+    // Give React one frame to mount the expanded rail
+    const raf = requestAnimationFrame(() => {
+      const idMap: Record<string, string> = {
+        budget: "rail-budget",
+        etsy: "rail-etsy",
+        cycles: "rail-cycles",
+        prompts: "rail-prompts",
+        wealth: "rail-wealth",
+      };
+      const targetId = idMap[pendingFocus];
+      if (!targetId) return;
+      const el = document.getElementById(targetId);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.add("rail-flash");
+      setTimeout(() => el.classList.remove("rail-flash"), 800);
+      setPendingFocus(null);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [pendingFocus, collapsed]);
+
+  const handleFocusExpand = (target: "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null) => {
+    onToggle(false);
+    if (target) {
+      setPendingFocus(target);
+    }
+  };
+
   if (collapsed) {
-    return <CollapsedStrip onExpand={() => onToggle(false)} />;
+    return (
+      <CollapsedStrip
+        onFocusExpand={handleFocusExpand}
+        budget={budget}
+        etsyStatus={etsyStatus}
+        cycleCount={cycleCount}
+        promptOverrideCount={promptOverrideCount}
+        wealthCount={wealthCount}
+      />
+    );
   }
 
   return (
-    <aside className="rail" aria-label="Command rail">
+    <aside ref={railRef} className="rail" aria-label="Command rail">
       {/* Header */}
       <div className="rail-header">
         <span className="rail-header-label">Command</span>
@@ -315,23 +532,41 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       </div>
 
       {/* Budget card */}
-      <BudgetCard />
+      <BudgetCard budget={budget} />
 
       {/* Etsy card */}
       <EtsyCard />
 
       {/* Cycles row */}
-      <PanelRow label="Cycles" count={cycleCount}>
+      <PanelRow
+        id="rail-cycles"
+        label="Cycles"
+        count={cycleCount}
+        accentColor="#5fd4f0"
+        emptyMessage="No cycles completed yet — start the supervisor to begin."
+      >
         <AnalyticsPanel alwaysOpen />
       </PanelRow>
 
       {/* Prompts row */}
-      <PanelRow label="Prompts" count={0}>
+      <PanelRow
+        id="rail-prompts"
+        label="Prompts"
+        count={promptOverrideCount}
+        accentColor="#b393f5"
+        emptyMessage="No overrides set — agents are using system defaults."
+      >
         <PromptsPanel alwaysOpen />
       </PanelRow>
 
       {/* Wealth row */}
-      <PanelRow label="Wealth" count={wealthCount}>
+      <PanelRow
+        id="rail-wealth"
+        label="Wealth"
+        count={wealthCount}
+        accentColor="#f5a623"
+        emptyMessage="No earnings tracked yet — wealth builds over time."
+      >
         <WealthLeaderboard alwaysOpen />
       </PanelRow>
     </aside>

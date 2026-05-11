@@ -13,11 +13,12 @@ import ListingReviewModal from "./ListingReviewModal";
  * the real-publish toggle, daily cap input, and a recent publishes list with
  * a manual Activate button per draft.
  */
-export default function EtsyPanel() {
+export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
   const [status, setStatus] = useState<EtsyStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPanel, setShowPanel] = useState(false);
+  const isPanelOpen = alwaysOpen || showPanel;
   const [enabled, setEnabled] = useState(false);
   const [cap, setCap] = useState(3);
   const [capDraft, setCapDraft] = useState("3");
@@ -291,7 +292,7 @@ export default function EtsyPanel() {
         </div>
         {enabled && <span className="etsy-live-badge">LIVE</span>}
       </button>
-      {showPanel && (
+      {isPanelOpen && (
         <div className="etsy-panel" role="dialog">
           {etsyKilled && (
             <div className="etsy-killed-banner">
