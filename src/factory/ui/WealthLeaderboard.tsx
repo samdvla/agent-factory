@@ -62,7 +62,13 @@ function WealthLeaderboardImpl({ alwaysOpen = false }: { alwaysOpen?: boolean })
       >
         <span className="wealth-pill-label">Wealth</span>
         <span className="wealth-pill-value">{count}</span>
-        <span className="wealth-pill-caret">{isOpen ? "▾" : "▸"}</span>
+        <svg
+          className={`wealth-pill-caret${isOpen ? " is-open" : ""}`}
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
       </button>
       {isOpen && (
         <div className="wealth-panel" role="dialog">

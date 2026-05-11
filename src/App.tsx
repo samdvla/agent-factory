@@ -52,9 +52,9 @@ export default function App() {
       <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
         {sandbox && (
           <div className="sandbox-banner" role="status" aria-label="Sandbox mode">
-            <span className="glyph">◇</span>
+            <span className="sandbox-banner-rule" />
             <span>Sandbox mode — synthetic floor activity, no live publishing</span>
-            <span className="glyph">◇</span>
+            <span className="sandbox-banner-rule" />
           </div>
         )}
         <SvgFactoryFloor />

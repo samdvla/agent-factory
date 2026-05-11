@@ -40,7 +40,7 @@ export default function AlertTray({ open, onClose }: { open: boolean; onClose: (
             }}
           >
             <div className={`alert-icon ${a.kind === "err" ? "bad" : "warn"}`}>
-              {a.kind === "err" ? "!" : "⚠"}
+              {a.kind === "err" ? "!" : "!"}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="a-title">{a.title}</div>

@@ -114,7 +114,13 @@ function PromptRowView({
         className="prompts-row-header"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="prompts-row-caret">{open ? "▾" : "▸"}</span>
+        <svg
+          className={`prompts-row-caret${open ? " is-open" : ""}`}
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
         <span className="prompts-row-label">{label}</span>
         <span
           className={`prompts-row-tag${row.override ? " is-override" : ""}`}
@@ -253,7 +259,13 @@ function PromptsPanelImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
       >
         <span className="prompts-pill-label">Prompts</span>
         <span className="prompts-pill-value">{overrideCount}</span>
-        <span className="prompts-pill-caret">{isOpen ? "▾" : "▸"}</span>
+        <svg
+          className={`prompts-pill-caret${isOpen ? " is-open" : ""}`}
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
       </button>
       {isOpen && (
         <div className="prompts-panel" role="dialog">

@@ -23,7 +23,7 @@ const LOOPS: Record<string, RoleLoop> = {
     betweenMin: 200, betweenMax: 600,
     phases: [
       { task: "scrape Etsy bestsellers",      ticker: "scanning bestsellers · boho printables +18%" },
-      { task: "Google Trends · seasonal",     ticker: "trends → 'farmhouse SVG' rising 12%" },
+      { task: "Google Trends · seasonal",     ticker: "trends -> 'farmhouse SVG' rising 12%" },
       { task: "competitor pricing scan",      ticker: "competition: 14 listings · median $4.20" },
       { task: "keyword tool · long tail",     ticker: "long-tail: 'minimalist line art print'" },
     ],
@@ -36,8 +36,8 @@ const LOOPS: Record<string, RoleLoop> = {
     betweenMin: 250, betweenMax: 700,
     phases: [
       { task: "review demand brief",           ticker: "approved brief #381 · scheduling design" },
-      { task: "rebalance designer queue",      ticker: "designer queue 4 → 3 · CFO greenlit" },
-      { task: "review CS dispute escalations", ticker: "1 dispute escalated → review by Lina + me" },
+      { task: "rebalance designer queue",      ticker: "designer queue 4 -> 3 · CFO greenlit" },
+      { task: "review CS dispute escalations", ticker: "1 dispute escalated -> review by Lina + me" },
       { task: "monthly KPI review",            ticker: "weekly KPI: revenue $182.40 · refund 1.2%" },
     ],
     patrol: ["research", "designer", "listing", "publisher", "cs", "cfo", "si"],
@@ -74,7 +74,7 @@ const LOOPS: Record<string, RoleLoop> = {
     workMin: 3500, workMax: 6000,
     betweenMin: 200, betweenMax: 500,
     phases: [
-      { task: "upload to Etsy · attach files",  ticker: "publishing → Etsy · listing #4821 LIVE" },
+      { task: "upload to Etsy · attach files",  ticker: "publishing -> Etsy · listing #4821 LIVE" },
       { task: "refresh featured listing",        ticker: "renewed listing #4773 · slot up 1h" },
       { task: "sync inventory · mark in stock",  ticker: "inventory: 12 listings synced" },
       { task: "OAuth keepalive",                 ticker: "etsy oauth · token refreshed" },
@@ -87,8 +87,8 @@ const LOOPS: Record<string, RoleLoop> = {
     workMin: 5000, workMax: 8000,
     betweenMin: 200, betweenMax: 600,
     phases: [
-      { task: "answer buyer · file format question", ticker: "msg #221 → answered (PDF + SVG)" },
-      { task: "review dispute · refund request",     ticker: "dispute #14 → flagged to orchestrator" },
+      { task: "answer buyer · file format question", ticker: "msg #221 -> answered (PDF + SVG)" },
+      { task: "review dispute · refund request",     ticker: "dispute #14 -> flagged to orchestrator" },
       { task: "thank-you note + review nudge",        ticker: "nudge sent · order #882" },
       { task: "policy reminder · custom request",     ticker: "msg: custom work declined per policy" },
     ],
@@ -225,7 +225,7 @@ export function useFoundingLoops(
             store.getState().pushTicker({
               ts: Date.now(),
               source: roleId,
-              text: `→ ${toRole.name}: ${label}`,
+              text: `-> ${toRole.name}: ${label}`,
             });
           }
         }

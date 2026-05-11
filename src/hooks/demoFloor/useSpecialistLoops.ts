@@ -30,7 +30,7 @@ export const SPECIALIST_PROFILES: Record<string, SpecialistProfile> = {
     phases: [
       { task: "review case · evidence + tone",         ticker: "dispute #14 · scoring tone" },
       { task: "draft policy-bound reply",              ticker: "reply: refund declined per policy" },
-      { task: "escalation note → orchestrator",        ticker: "escalation: case #17 → orchestrator" },
+      { task: "escalation note -> orchestrator",        ticker: "escalation: case #17 -> orchestrator" },
       { task: "post-resolution log + lessons",         ticker: "lesson: bundle FAQ on file format" },
     ],
   },
@@ -83,7 +83,7 @@ export function useSpecialistLoops(cancelledRef: { current: boolean }): {
   }
 
   async function runSpecialistLoop(roleId: string, profile: SpecialistProfile) {
-    // Wait for materialize→working transition (~600ms in fireHireEvent).
+    // Wait for materialize->working transition (~600ms in fireHireEvent).
     await sleep(700);
     let counter = 0;
     while (!cancelledRef.current) {
@@ -135,7 +135,7 @@ export function useSpecialistLoops(cancelledRef: { current: boolean }): {
         store.getState().pushTicker({
           ts: Date.now(),
           source: roleId,
-          text: `→ ${parent.name}: ${profile.parentLabel}`,
+          text: `-> ${parent.name}: ${profile.parentLabel}`,
         });
       }
 

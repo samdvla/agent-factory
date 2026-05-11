@@ -116,7 +116,13 @@ function AnalyticsPanelImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
       >
         <span className="analytics-pill-label">Cycles</span>
         <span className="analytics-pill-value">{count}</span>
-        <span className="analytics-pill-caret">{isOpen ? "▾" : "▸"}</span>
+        <svg
+          className={`analytics-pill-caret${isOpen ? " is-open" : ""}`}
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
       </button>
       {isOpen && (
         <div className="analytics-panel" role="dialog">

@@ -7,18 +7,10 @@ export default function ControlsRow({ agentId }: Props) {
     <div className="drawer-section">
       <div className="drawer-section-head">Controls</div>
       <div className="controls-grid">
-        <button className="ctl-btn" disabled>
-          <span className="ctl-glyph">⏸</span> Pause
-        </button>
-        <button className="ctl-btn primary" disabled>
-          <span className="ctl-glyph">▶</span> Resume
-        </button>
-        <button className="ctl-btn kill" disabled>
-          <span className="ctl-glyph">✕</span> Kill
-        </button>
-        <button className="ctl-btn" disabled>
-          <span className="ctl-glyph">↺</span> Restart
-        </button>
+        <button className="ctl-btn" disabled>Pause</button>
+        <button className="ctl-btn primary" disabled>Resume</button>
+        <button className="ctl-btn kill" disabled>Kill</button>
+        <button className="ctl-btn" disabled>Restart</button>
       </div>
       <div
         className="empty-state"

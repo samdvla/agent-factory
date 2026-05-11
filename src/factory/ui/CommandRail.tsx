@@ -158,7 +158,18 @@ function PanelRow({
         <span className={`rail-panel-row-count${count > 0 ? " is-live" : " is-zero"}`}>
           {count}
         </span>
-        <span className="rail-panel-row-caret">{open ? "▾" : "▸"}</span>
+        <svg
+          className={`rail-panel-row-caret${open ? " is-open" : ""}`}
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          aria-hidden="true"
+        >
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
       </button>
       {open && (
         <div className="rail-panel-row-popover">

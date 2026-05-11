@@ -140,7 +140,13 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         <span className="dot" />
         <span className="name">{sandbox ? "Sandbox" : "Live"}</span>
         <span className="sub">mode</span>
-        <span className="caret">▾</span>
+        <svg
+          className="caret"
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
       </button>
 
       <div
@@ -211,7 +217,7 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
                 </div>
                 <div className="etsy-popover-actions">
                   <button type="button" className="modal-btn" onClick={copyAuthUrl}>
-                    {etsyCopied ? "Copied ✓" : "Copy URL"}
+                    {etsyCopied ? "Copied" : "Copy URL"}
                   </button>
                   <button
                     type="button"

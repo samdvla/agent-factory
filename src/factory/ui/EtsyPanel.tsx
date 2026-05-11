@@ -328,7 +328,19 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
               onClick={onKill}
               title="Halt all real Etsy publishing immediately"
             >
-              🛑 KILL
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <line x1="6.5" y1="6.5" x2="17.5" y2="17.5" />
+              </svg>
+              KILL
             </button>
           </div>
           <div className="etsy-panel-section">
@@ -341,7 +353,13 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
                 Last 5 receipts
                 {recentReceipts.length > 0 && ` (${recentReceipts.length})`}
               </span>
-              <span className="etsy-section-caret">{showReceipts ? "▾" : "▸"}</span>
+              <svg
+                className={`etsy-section-caret${showReceipts ? " is-open" : ""}`}
+                width="10" height="10" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+              >
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
             </button>
             {showReceipts && (
               <div className="etsy-mini-list">
@@ -373,7 +391,13 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
                 Last 5 buyer DMs
                 {recentMessages.length > 0 && ` (${recentMessages.length})`}
               </span>
-              <span className="etsy-section-caret">{showMessages ? "▾" : "▸"}</span>
+              <svg
+                className={`etsy-section-caret${showMessages ? " is-open" : ""}`}
+                width="10" height="10" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
+              >
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
             </button>
             {showMessages && (
               <div className="etsy-mini-list">
