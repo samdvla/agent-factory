@@ -821,6 +821,11 @@ pub async fn cmd_start_smoke_test(
     secrets::set("smoke_cycle_id", &cycle_id).map_err(|e| e.to_string())?;
     let now_ts = Utc::now().timestamp().to_string();
     secrets::set("smoke_started_at", &now_ts).map_err(|e| e.to_string())?;
+    // Auto-enable real Etsy publishing for this cycle so the publisher actually
+    // posts a draft. Stash the prior value so Resume can restore it.
+    let prior_real = secrets::get("real_etsy_enabled").ok().flatten().unwrap_or_default();
+    secrets::set("pre_smoke_real_etsy_enabled", &prior_real).ok();
+    secrets::set("real_etsy_enabled", "true").ok();
     // Enqueue one research job; downstream listing/publisher follow the normal pipeline.
     let payload = serde_json::json!({ "smoke": true, "cycle_id": cycle_id });
     queue::enqueue(&state.pool, state.project_id, "research", payload)
@@ -831,11 +836,21 @@ pub async fn cmd_start_smoke_test(
 
 /// Lift the smoke-test pause: clears smoke_pause_until, smoke_cycle_id, and
 /// smoke_started_at so that enforce_caps resumes normal cap checking.
+/// Also restores the prior value of `real_etsy_enabled` that the smoke test
+/// temporarily flipped on.
 #[tauri::command]
 pub async fn cmd_resume_from_smoke_test() -> Result<(), String> {
     secrets::delete("smoke_pause_until").map_err(|e| e.to_string())?;
     secrets::delete("smoke_cycle_id").map_err(|e| e.to_string())?;
     secrets::delete("smoke_started_at").map_err(|e| e.to_string())?;
+    // Restore real_etsy_enabled to whatever it was before the smoke test.
+    let prior = secrets::get("pre_smoke_real_etsy_enabled").ok().flatten().unwrap_or_default();
+    if prior.is_empty() {
+        let _ = secrets::delete("real_etsy_enabled");
+    } else {
+        let _ = secrets::set("real_etsy_enabled", &prior);
+    }
+    let _ = secrets::delete("pre_smoke_real_etsy_enabled");
     Ok(())
 }
 
