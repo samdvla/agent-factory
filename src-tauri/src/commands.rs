@@ -153,6 +153,10 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         .ok()
         .flatten()
         .unwrap_or_default();
+    let base_url = secrets::get("anthropic_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     // Read multi-tier USD budget caps from the secret store with defaults.
     let read_cap = |k: &str, default: f64| -> f64 {
         secrets::get(k)
@@ -166,26 +170,42 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         daily_usd:   read_cap("daily_budget_usd",   1.00),
         monthly_usd: read_cap("monthly_budget_usd", 20.00),
     };
-    let api_key_env = ("ANTHROPIC_API_KEY".into(), api_key.clone());
-    let make_spec = |role: &str, worker_dir: &str| supervisor::AgentSpec {
-        role: role.into(),
-        program: "python3.11".into(),
-        args: vec!["-m".into(), role.into()],
-        env: vec![
-            api_key_env.clone(),
-            ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
-        ],
+    let api_key_env: (String, String) = ("ANTHROPIC_API_KEY".into(), api_key.clone());
+    let make_spec = {
+        let api_key_env = api_key_env.clone();
+        let base_url = base_url.clone();
+        move |role: &str, worker_dir: &str| {
+            let mut env = vec![
+                api_key_env.clone(),
+                ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
+            ];
+            if !base_url.is_empty() {
+                env.push(("ANTHROPIC_BASE_URL".into(), base_url.clone()));
+            }
+            supervisor::AgentSpec {
+                role: role.into(),
+                program: "python3.11".into(),
+                args: vec!["-m".into(), role.into()],
+                env,
+            }
+        }
     };
 
     let agents = vec![
-        supervisor::AgentSpec {
-            role: "hello".into(),
-            program: "python3.11".into(),
-            args: vec!["-m".into(), "hello".into()],
-            env: vec![
+        {
+            let mut env = vec![
                 api_key_env.clone(),
                 ("PYTHONPATH".into(), "workers/hello".into()),
-            ],
+            ];
+            if !base_url.is_empty() {
+                env.push(("ANTHROPIC_BASE_URL".into(), base_url.clone()));
+            }
+            supervisor::AgentSpec {
+                role: "hello".into(),
+                program: "python3.11".into(),
+                args: vec!["-m".into(), "hello".into()],
+                env,
+            }
         },
         make_spec("research", "research"),
         make_spec("orchestrator", "orchestrator"),

@@ -4,6 +4,8 @@ import sys
 import urllib.request
 import urllib.error
 
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+
 
 def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
@@ -78,7 +80,7 @@ def call_claude(system: str, user: str, max_tokens: int = 400) -> dict:
         "messages": [{"role": "user", "content": user}],
     }).encode("utf-8")
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        f"{ANTHROPIC_BASE_URL}/v1/messages",
         data=body,
         headers={
             "x-api-key": api_key,

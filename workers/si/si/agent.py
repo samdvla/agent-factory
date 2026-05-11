@@ -9,6 +9,8 @@ from collections import defaultdict
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 1500
 
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+
 
 def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
@@ -329,7 +331,7 @@ def call_anthropic(api_key: str, outcomes_summary: str, current_prompts: dict) -
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        f"{ANTHROPIC_BASE_URL}/v1/messages",
         data=body,
         headers={
             "x-api-key": api_key,

@@ -10,6 +10,8 @@ MAX_TOKENS = 600
 SVG_MODEL = "claude-sonnet-4-6"
 SVG_MAX_TOKENS = 4000
 
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+
 
 def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
@@ -91,7 +93,7 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        f"{ANTHROPIC_BASE_URL}/v1/messages",
         data=body,
         headers={
             "x-api-key": api_key,
@@ -198,7 +200,7 @@ def _call_svg(api_key: str, brief: dict, asset: dict) -> tuple[str, int, int] | 
             "messages": [{"role": "user", "content": user}],
         }).encode("utf-8")
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            f"{ANTHROPIC_BASE_URL}/v1/messages",
             data=body,
             headers={
                 "x-api-key": api_key,

@@ -67,9 +67,10 @@ interface CredRowProps {
   secretKey: string;
   validate?: (v: string) => string | null; // returns error string or null
   onSaveSuccess: () => void;
+  helperText?: string;
 }
 
-function CredentialRow({ label, placeholder, secretKey, validate, onSaveSuccess }: CredRowProps) {
+function CredentialRow({ label, placeholder, secretKey, validate, onSaveSuccess, helperText }: CredRowProps) {
   const [state, setState] = useState<CredRowState>(makeInitialCredRow());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -180,7 +181,76 @@ function CredentialRow({ label, placeholder, secretKey, validate, onSaveSuccess 
           </div>
         </div>
       )}
+      {helperText && <div className="settings-helper">{helperText}</div>}
       <SaveFeedback state={state.saveState} error={state.saveError} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  BridgeUrlRow                                                          */
+/* ------------------------------------------------------------------ */
+
+function BridgeUrlRow() {
+  const [draft, setDraft] = useState<string>("");
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getSecret("anthropic_base_url").then((v) => {
+      if (cancelled) return;
+      setDraft(v ?? "");
+      setLoaded(true);
+    }).catch(() => { setLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async () => {
+    setSaveState("saving");
+    setSaveError(null);
+    try {
+      await api.setSecret("anthropic_base_url", draft.trim());
+      setSaveState("saved");
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setSaveState("idle"), 1500);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveState("error");
+      setSaveError(msg);
+    }
+  };
+
+  return (
+    <div className="settings-budget-row">
+      <div className="settings-budget-header">
+        <span className="settings-budget-label">Bridge URL</span>
+        <div className="settings-budget-input-wrap" style={{ flex: 1, maxWidth: "none" }}>
+          <input
+            type="text"
+            className="settings-input"
+            placeholder="http://your-bridge.example:port"
+            value={loaded ? draft : ""}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <button type="button" className="modal-btn settings-inline-save" onClick={save}>
+            Save
+          </button>
+        </div>
+      </div>
+      <div className="settings-helper">
+        Optional. Set to route all Anthropic calls through a local proxy. Leave empty to use
+        https://api.anthropic.com directly. Paste the bridge's auth key into the Anthropic API Key
+        field above.
+      </div>
+      <div className="settings-helper" style={{ marginTop: 2 }}>
+        Restart the supervisor (Stop &rarr; Start) after changing this for it to apply.
+      </div>
+      <SaveFeedback state={saveState} error={saveError} />
     </div>
   );
 }
@@ -486,6 +556,7 @@ export default function SettingsModal({
               placeholder="sk-ant-…"
               secretKey="anthropic_api_key"
               onSaveSuccess={() => {}}
+              helperText="If using a bridge, paste the bridge's key here instead of an Anthropic API key."
             />
             <CredentialRow
               label="Etsy keystring"
@@ -636,7 +707,13 @@ export default function SettingsModal({
             )}
           </section>
 
-          {/* ---- Section 4: Autonomous behavior ---- */}
+          {/* ---- Section 4: Anthropic bridge ---- */}
+          <section className="settings-section">
+            <div className="settings-section-title">Anthropic bridge</div>
+            <BridgeUrlRow />
+          </section>
+
+          {/* ---- Section 5: Autonomous behavior ---- */}
           <section className="settings-section">
             <div className="settings-section-title">Autonomous behavior</div>
 
@@ -699,7 +776,7 @@ export default function SettingsModal({
             </div>
           </section>
 
-          {/* ---- Section 5: Diagnostics ---- */}
+          {/* ---- Section 6: Diagnostics ---- */}
           <section className="settings-section settings-section-diagnostics">
             <div className="settings-section-title">Diagnostics</div>
             <div className="settings-diag-row">

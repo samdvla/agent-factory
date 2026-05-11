@@ -51,7 +51,9 @@ impl LlmRouter {
 
     pub fn anthropic() -> Self {
         let key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-        Self::new(&key, "https://api.anthropic.com")
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        Self::new(&key, &base_url)
     }
 
     pub async fn complete(&self, req: CompleteRequest) -> anyhow::Result<CompleteResponse> {
