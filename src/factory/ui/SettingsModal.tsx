@@ -287,17 +287,28 @@ export default function SettingsModal({
   const [disconnecting, setDisconnecting] = useState(false);
   const capTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Autonomous behavior toggles
+  const [autonomousLoops, setAutonomousLoops] = useState(false);
+  const [autonomousLoopsSaving, setAutonomousLoopsSaving] = useState(false);
+  const [fakeCs, setFakeCs] = useState(false);
+  const [fakeCsSaving, setFakeCsSaving] = useState(false);
+  const [siLoop, setSiLoop] = useState(false);
+  const [siLoopSaving, setSiLoopSaving] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
 
     const load = async () => {
       try {
-        const [status, enabled, cap, lastErr] = await Promise.all([
+        const [status, enabled, cap, lastErr, autoLoops, fakeMsg, siEnabled] = await Promise.all([
           api.etsyStatus(),
           api.etsyGetEnabled(),
           api.etsyGetListingCap(),
           api.etsyLastError().catch(() => null),
+          api.getSecret("autonomous_loops_enabled").catch(() => null),
+          api.getSecret("fake_cs_messages_enabled").catch(() => null),
+          api.getSecret("si_loop_enabled").catch(() => null),
         ]);
         if (cancelled) return;
         setEtsyStatus(status);
@@ -305,6 +316,9 @@ export default function SettingsModal({
         setEtsyCap(cap);
         setEtsyCapDraft(String(cap));
         setEtsyLastError(lastErr && lastErr.length > 0 ? lastErr : null);
+        setAutonomousLoops(autoLoops === "true");
+        setFakeCs(fakeMsg === "true");
+        setSiLoop(siEnabled === "true");
       } catch (e) {
         console.warn("Settings modal load failed:", e);
       }
@@ -388,6 +402,46 @@ export default function SettingsModal({
       console.warn("etsyDisconnect failed", e);
     } finally {
       setDisconnecting(false);
+    }
+  };
+
+  /* -- Autonomous loops toggles -- */
+  const toggleAutonomousLoops = async () => {
+    const next = !autonomousLoops;
+    setAutonomousLoopsSaving(true);
+    try {
+      await api.setSecret("autonomous_loops_enabled", next ? "true" : "false");
+      setAutonomousLoops(next);
+    } catch (e) {
+      console.warn("autonomous_loops_enabled save failed", e);
+    } finally {
+      setAutonomousLoopsSaving(false);
+    }
+  };
+
+  const toggleFakeCs = async () => {
+    const next = !fakeCs;
+    setFakeCsSaving(true);
+    try {
+      await api.setSecret("fake_cs_messages_enabled", next ? "true" : "false");
+      setFakeCs(next);
+    } catch (e) {
+      console.warn("fake_cs_messages_enabled save failed", e);
+    } finally {
+      setFakeCsSaving(false);
+    }
+  };
+
+  const toggleSiLoop = async () => {
+    const next = !siLoop;
+    setSiLoopSaving(true);
+    try {
+      await api.setSecret("si_loop_enabled", next ? "true" : "false");
+      setSiLoop(next);
+    } catch (e) {
+      console.warn("si_loop_enabled save failed", e);
+    } finally {
+      setSiLoopSaving(false);
     }
   };
 
@@ -582,7 +636,70 @@ export default function SettingsModal({
             )}
           </section>
 
-          {/* ---- Section 4: Diagnostics ---- */}
+          {/* ---- Section 4: Autonomous behavior ---- */}
+          <section className="settings-section">
+            <div className="settings-section-title">Autonomous behavior</div>
+
+            {/* Autonomous loops master switch */}
+            <div className="settings-field-row">
+              <div className="settings-field-label-col">
+                <span className="settings-field-label">Autonomous loops</span>
+                <span className="settings-helper">
+                  Master switch — when off, the supervisor only processes jobs you
+                  explicitly enqueue. When on, it runs the orchestrator/CS/SI loops
+                  continuously.
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`settings-toggle${autonomousLoops ? " is-on" : ""}`}
+                onClick={toggleAutonomousLoops}
+                disabled={autonomousLoopsSaving}
+              >
+                {autonomousLoopsSaving ? "…" : autonomousLoops ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            {/* Fake CS messages */}
+            <div className="settings-field-row">
+              <div className="settings-field-label-col">
+                <span className="settings-field-label">Fake CS messages</span>
+                <span className="settings-helper">
+                  Fire a synthetic buyer message every 90s for CS testing. Only
+                  useful while iterating on CS prompts; leave off for real operation.
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`settings-toggle${fakeCs ? " is-on" : ""}`}
+                onClick={toggleFakeCs}
+                disabled={fakeCsSaving}
+              >
+                {fakeCsSaving ? "…" : fakeCs ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            {/* SI prompt-tuning loop */}
+            <div className="settings-field-row">
+              <div className="settings-field-label-col">
+                <span className="settings-field-label">SI prompt-tuning loop</span>
+                <span className="settings-helper">
+                  Every 5 min, run the SI agent to propose prompt improvements based
+                  on recent outcomes. Costs ~$0.05 per tick.
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`settings-toggle${siLoop ? " is-on" : ""}`}
+                onClick={toggleSiLoop}
+                disabled={siLoopSaving}
+              >
+                {siLoopSaving ? "…" : siLoop ? "ON" : "OFF"}
+              </button>
+            </div>
+          </section>
+
+          {/* ---- Section 5: Diagnostics ---- */}
           <section className="settings-section settings-section-diagnostics">
             <div className="settings-section-title">Diagnostics</div>
             <div className="settings-diag-row">

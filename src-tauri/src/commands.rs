@@ -1,4 +1,4 @@
-use crate::{budget, etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, prompts, queue, secrets, supervisor};
+use crate::{budget, etsy, etsy_polling, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, prompts, queue, secrets, supervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -40,6 +40,108 @@ pub async fn cmd_set_secret(key: String, value: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn cmd_get_secret(key: String) -> Result<Option<String>, String> {
     secrets::get(&key).map_err(|e| e.to_string())
+}
+
+/// Spawn the three autonomous loops (boot orchestrator, fake CS messages, SI
+/// tuner) only when `autonomous_loops_enabled=true`. Call this after the
+/// supervisor handle is stored so workers are ready to claim jobs.
+///
+/// Loop-specific secrets (`fake_cs_messages_enabled`, `si_loop_enabled`) are
+/// re-read on every tick inside each loop so kill-switches take effect
+/// immediately without a restart.
+fn spawn_autonomous_loops(pool: SqlitePool, project_id: i64, bus: EventBus) {
+    // Boot orchestrator: enqueue one orchestrator job 2s after supervisor start.
+    let pool_boot = pool.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if let Err(e) = queue::enqueue(
+            &pool_boot,
+            project_id,
+            "orchestrator",
+            serde_json::json!({"trigger": "boot"}),
+        ).await {
+            tracing::warn!("autonomous boot-orchestrator enqueue failed: {e}");
+        }
+    });
+
+    // Fake CS message loop — fires a CS job every 90s with a random topic.
+    // Gated on `fake_cs_messages_enabled` secret, re-read every tick.
+    let pool_for_cs = pool.clone();
+    tauri::async_runtime::spawn(async move {
+        // Wait for first listing to exist before starting CS.
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+        let topics = [
+            "How do I download my purchase?",
+            "Can I get a refund? I changed my mind.",
+            "Could you customize this for my wedding?",
+            "Is this licensed for commercial use?",
+            "The PDF won't open on my phone.",
+            "Can you send me higher resolution?",
+            "Do you offer this in a different color?",
+            "I love this! Could I get a discount on a bundle?",
+        ];
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(90));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            // Re-read the secret each tick — disable immediately without restart.
+            let fake_enabled = secrets::get("fake_cs_messages_enabled")
+                .ok()
+                .flatten()
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !fake_enabled {
+                continue;
+            }
+            // Pick a topic deterministically by time so it varies.
+            let idx = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0) as usize) % topics.len();
+            let payload = serde_json::json!({
+                "buyer_message": topics[idx],
+                "trigger": "fake_message",
+            });
+            if let Err(e) = queue::enqueue(&pool_for_cs, project_id, "cs", payload).await {
+                tracing::warn!("fake CS message enqueue failed: {e}");
+            }
+        }
+    });
+
+    // Real Etsy pollers — receipts + buyer DMs. HTTP only, no token spend.
+    // Pollers are always spawned alongside autonomous loops; they silently
+    // no-op unless `real_etsy_enabled=true` AND OAuth is connected.
+    etsy_polling::spawn_pollers(
+        pool.clone(),
+        project_id,
+        bus,
+        std::time::Duration::from_secs(60),
+    );
+
+    // SI loop — every 5 min, run the SI agent to propose one prompt tweak.
+    // Gated on `si_loop_enabled` secret, re-read every tick.
+    let pool_for_si = pool.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            // Re-read the secret each tick — disable immediately without restart.
+            let si_enabled = secrets::get("si_loop_enabled")
+                .ok()
+                .flatten()
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !si_enabled {
+                continue;
+            }
+            let payload = serde_json::json!({"trigger": "loop_b"});
+            if let Err(e) = queue::enqueue(&pool_for_si, project_id, "si", payload).await {
+                tracing::warn!("SI loop enqueue failed: {e}");
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -92,12 +194,26 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         make_spec("publisher", "publisher"),
         make_spec("cfo", "cfo"),
         make_spec("cs", "cs"),
+        make_spec("si", "si"),
     ];
 
     let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id, caps)
         .await
         .map_err(|e| e.to_string())?;
     *guard = Some(handle);
+
+    // Only spawn the autonomous loops when explicitly opted in. Default is
+    // false so a fresh Start leaves the queue empty — zero spend until the
+    // user enqueues a job (e.g. smoke test) or enables autonomous mode.
+    let autonomous_enabled = secrets::get("autonomous_loops_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if autonomous_enabled {
+        spawn_autonomous_loops(state.pool.clone(), state.project_id, state.bus.clone());
+    }
+
     Ok(())
 }
 
