@@ -202,6 +202,74 @@ input, textarea { font: inherit; color: inherit; }
 }
 .alert-pill:hover, .gate-pill:hover, .topbar-icon:hover { background: var(--bg-3); }
 
+.etsy-pill {
+  display: flex; align-items: center; gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  color: inherit;
+  cursor: default;
+}
+button.etsy-pill {
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+button.etsy-pill:hover:not(:disabled) { background: var(--bg-3); }
+button.etsy-pill:disabled { opacity: 0.65; cursor: progress; }
+
+.etsy-pill-label {
+  font-size: 10px;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.etsy-pill-value {
+  color: var(--ink-0);
+  font-weight: 500;
+}
+.etsy-pill-stack {
+  display: flex; flex-direction: column; line-height: 1.1;
+}
+.etsy-pill-sub {
+  font-size: 10px;
+  color: var(--ink-2);
+}
+.etsy-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ink-2);
+}
+.etsy-pill.is-connected .etsy-dot {
+  background: var(--accent-ok);
+  box-shadow: 0 0 6px var(--accent-ok);
+}
+.etsy-pill.is-disconnected .etsy-dot {
+  background: var(--ink-2);
+}
+.etsy-pill.is-connected {
+  border-color: rgba(120, 200, 130, 0.35);
+}
+.etsy-action {
+  margin-left: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.etsy-action:hover { color: var(--ink-0); border-color: var(--ink-2); }
+
 .gate-pill {
   border-color: rgba(245, 166, 35, 0.4);
   color: var(--accent-warm);

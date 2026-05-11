@@ -1,9 +1,11 @@
 pub mod budget;
 pub mod commands;
 pub mod db;
+pub mod etsy;
 pub mod events;
 pub mod heartbeat;
 pub mod llm;
+pub mod oauth_server;
 pub mod queue;
 pub mod raster;
 pub mod secrets;
@@ -48,6 +50,7 @@ pub fn run() {
                 bus: bus.clone(),
                 project_id,
                 supervisor_handle: tokio::sync::Mutex::new(None),
+                pending_oauth: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             });
 
             commands::forward_events_to_window(app.handle().clone(), bus.clone());
@@ -188,6 +191,9 @@ pub fn run() {
             commands::cmd_start_supervisor,
             commands::cmd_stop_supervisor,
             commands::cmd_enqueue,
+            commands::cmd_etsy_start_oauth,
+            commands::cmd_etsy_status,
+            commands::cmd_etsy_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

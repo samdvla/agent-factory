@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+import EtsyPanel from "./EtsyPanel";
 
 export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const [status, setStatus] = useState<StatusReport | null>(null);
@@ -113,6 +114,8 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
             : "—"}
         </span>
       </div>
+
+      <EtsyPanel />
 
       <div className="topbar-spacer" />
 

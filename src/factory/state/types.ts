@@ -88,6 +88,14 @@ export type Handoff = {
   durationMs: number;
 };
 
+export type EtsyStatus = {
+  connected: boolean;
+  shop_id: number | null;
+  shop_name: string | null;
+  expires_at: number | null;
+  needs_refresh: boolean;
+};
+
 export type HireEvent = {
   id: string;
   ts: number;
