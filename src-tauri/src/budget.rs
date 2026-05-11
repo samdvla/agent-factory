@@ -1,19 +1,10 @@
 use sqlx::SqlitePool;
 
 /// Compute USD cost from token counts and model name.
-/// Prices per 1M tokens (Anthropic public pricing, late 2025).
+/// Uses the same pricing table as `record()`. Single source of truth.
 pub fn cost_usd(model: &str, tokens_in: u64, tokens_out: u64) -> f64 {
-    let (price_in, price_out) = if model.contains("haiku") {
-        (1.0_f64, 5.0_f64)
-    } else if model.contains("sonnet") {
-        (3.0, 15.0)
-    } else if model.contains("opus") {
-        (15.0, 75.0)
-    } else {
-        (3.0, 15.0) // safe default
-    };
-    (tokens_in as f64 / 1_000_000.0) * price_in
-        + (tokens_out as f64 / 1_000_000.0) * price_out
+    let (pin, pout) = price_per_million(model);
+    (tokens_in as f64 / 1_000_000.0) * pin + (tokens_out as f64 / 1_000_000.0) * pout
 }
 
 fn price_per_million(model: &str) -> (f64, f64) {
@@ -121,5 +112,24 @@ mod tests {
         record(&pool, 1, "claude-sonnet-4-6", 1_000, 0).await.unwrap();
         let under_cap = check_cap(&pool, 1, 1.00).await.unwrap();
         assert!(under_cap, "expected check_cap=true when spend < cap");
+    }
+
+    #[test]
+    fn cost_usd_matches_record_pricing_for_haiku() {
+        // Haiku: $0.80/M in, $4.00/M out → 1M in + 1M out = $0.80 + $4.00 = $4.80
+        let usd = cost_usd("claude-haiku-4-5-20251001", 1_000_000, 1_000_000);
+        assert!((usd - 4.80).abs() < 1e-9, "expected 4.80, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_matches_record_pricing_for_sonnet() {
+        let usd = cost_usd("claude-sonnet-4-6", 1_000_000, 0);
+        assert!((usd - 3.00).abs() < 1e-9, "expected 3.00, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_matches_record_pricing_for_opus() {
+        let usd = cost_usd("claude-opus-4-7", 0, 1_000_000);
+        assert!((usd - 75.00).abs() < 1e-9, "expected 75.00, got {usd}");
     }
 }
