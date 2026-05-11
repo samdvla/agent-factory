@@ -2804,3 +2804,10 @@ button.etsy-pill {
 .budget-pill-row.warn   .budget-pill-row-fill { background: #e8d77b; }
 .budget-pill-row.danger .budget-pill-row-fill { background: #ff8a93; }
 .budget-pill-burn { opacity: .6; font-size: 11px; margin-top: 6px; }
+
+/* ── Smoke-test panel ────────────────────────────────────────────────────── */
+.smoke-test { margin-top: 12px; }
+.smoke-steps { list-style: none; padding: 0; margin: 8px 0; }
+.smoke-steps li { padding: 4px 0; opacity: .5; }
+.smoke-steps li.ok { opacity: 1; color: #9be0b3; }
+.smoke-steps li.ok::before { content: "✓ "; }

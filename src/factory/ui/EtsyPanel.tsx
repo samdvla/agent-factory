@@ -26,6 +26,13 @@ export default function EtsyPanel() {
   const [showReceipts, setShowReceipts] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [reviewing, setReviewing] = useState<EtsyPublishRow | null>(null);
+  const [smokeRunning, setSmokeRunning] = useState(false);
+  const [smokeSteps, setSmokeSteps] = useState({
+    research: false, asset: false, listing: false, draft: false,
+  });
+  const [smokeListingId, setSmokeListingId] = useState<number | null>(null);
+  const [smokeDone, setSmokeDone] = useState(false);
+  const [smokeError, setSmokeError] = useState<string | null>(null);
   const etsyPublishesRev = useFactoryStore((s) => s.etsyPublishesRev);
   const recentReceipts = useFactoryStore((s) => s.etsyRecentReceipts);
   const recentMessages = useFactoryStore((s) => s.etsyRecentMessages);
@@ -94,6 +101,63 @@ export default function EtsyPanel() {
   useEffect(() => {
     if (status?.connected) refreshPublishes();
   }, [etsyPublishesRev, status?.connected, refreshPublishes]);
+
+  useEffect(() => {
+    let unlisten: import("@tauri-apps/api/event").UnlistenFn | undefined;
+    listen<Record<string, unknown>>("supervisor.event", (e) => {
+      const evt = e.payload;
+      switch (evt.kind) {
+        case "job_completed":
+          if (evt.role === "research") {
+            setSmokeSteps((s) => ({ ...s, research: true }));
+          } else if (evt.role === "listing") {
+            setSmokeSteps((s) => ({ ...s, listing: true }));
+          }
+          break;
+        case "asset_rasterized":
+          setSmokeSteps((s) => ({ ...s, asset: true }));
+          break;
+        case "etsy_listing_published":
+          setSmokeSteps((s) => ({ ...s, draft: true }));
+          if (typeof evt.local_listing_id === "number") {
+            setSmokeListingId(evt.local_listing_id as number);
+          }
+          break;
+        case "smoke_test_cycle_complete":
+          setSmokeRunning(false);
+          setSmokeDone(true);
+          break;
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  const startSmoke = async () => {
+    setSmokeError(null);
+    setSmokeRunning(true);
+    setSmokeSteps({ research: false, asset: false, listing: false, draft: false });
+    setSmokeListingId(null);
+    setSmokeDone(false);
+    try {
+      await api.startSmokeTest();
+    } catch (e: any) {
+      setSmokeError(e?.message || String(e));
+      setSmokeRunning(false);
+    }
+  };
+
+  const resumeSmoke = async () => {
+    try {
+      await api.resumeFromSmokeTest();
+    } finally {
+      setSmokeRunning(false);
+      setSmokeDone(false);
+    }
+  };
 
   const onConnect = async () => {
     setError(null);
@@ -368,6 +432,32 @@ export default function EtsyPanel() {
                 </div>
               ))
             )}
+          </div>
+          <div className="smoke-test">
+            <button
+              className="modal-btn approve"
+              disabled={smokeRunning || !status.connected}
+              onClick={startSmoke}
+            >
+              {smokeRunning ? "Smoke test running…" : "Run smoke-test cycle"}
+            </button>
+            {smokeRunning && (
+              <ul className="smoke-steps">
+                <li className={smokeSteps.research ? "ok" : ""}>Research</li>
+                <li className={smokeSteps.asset    ? "ok" : ""}>Asset</li>
+                <li className={smokeSteps.listing  ? "ok" : ""}>Listing</li>
+                <li className={smokeSteps.draft    ? "ok" : ""}>Draft published</li>
+              </ul>
+            )}
+            {smokeDone && (
+              <>
+                <div className="ck ok">
+                  Draft posted{smokeListingId ? ` (listing id ${smokeListingId})` : ""}. Review on Etsy, then resume.
+                </div>
+                <button className="modal-btn" onClick={resumeSmoke}>Resume loops</button>
+              </>
+            )}
+            {smokeError && <div className="ck err">{smokeError}</div>}
           </div>
           <div className="etsy-panel-footer">
             <button
