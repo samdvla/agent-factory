@@ -71,10 +71,11 @@ function CycleThumb({ listingId }: { listingId: number | null }) {
  * by `pnl_cycle_closed` events (push-refreshed, no polling). Cycles also flow
  * into the store via the eventReducer so re-mounts don't have to re-fetch.
  */
-function AnalyticsPanelImpl() {
+function AnalyticsPanelImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
   const recentCycles = useFactoryStore((s) => s.recentCycles);
   const setRecentCycles = useFactoryStore((s) => s.setRecentCycles);
   const [open, setOpen] = useState(false);
+  const isOpen = alwaysOpen || open;
 
   const refresh = useCallback(async () => {
     try {
@@ -115,9 +116,9 @@ function AnalyticsPanelImpl() {
       >
         <span className="analytics-pill-label">Cycles</span>
         <span className="analytics-pill-value">{count}</span>
-        <span className="analytics-pill-caret">{open ? "▾" : "▸"}</span>
+        <span className="analytics-pill-caret">{isOpen ? "▾" : "▸"}</span>
       </button>
-      {open && (
+      {isOpen && (
         <div className="analytics-panel" role="dialog">
           <div className="analytics-panel-header">
             <span className="analytics-panel-title">Recent cycles</span>

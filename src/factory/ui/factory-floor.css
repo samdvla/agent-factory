@@ -40,6 +40,8 @@
 
   --topbar-h: 56px;
   --ticker-h: 36px;
+  --rail-w: 300px;
+  --rail-w-collapsed: 48px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -64,9 +66,25 @@ input, textarea { font: inherit; color: inherit; }
 
 .app {
   display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
   grid-template-rows: var(--topbar-h) 1fr var(--ticker-h);
+  grid-template-areas:
+    "rail topbar"
+    "rail floor"
+    "rail ticker";
   height: 100vh;
   width: 100vw;
+  transition: grid-template-columns 0.2s ease;
+}
+
+.app > .topbar    { grid-area: topbar; }
+.app > .rail      { grid-area: rail; }
+.app > .ticker    { grid-area: ticker; }
+.app > .floor-wrap { grid-area: floor; }
+
+/* Collapsed rail override */
+.app.rail-collapsed {
+  grid-template-columns: var(--rail-w-collapsed) 1fr;
 }
 
 /* ============== Top bar ============== */
@@ -2810,4 +2828,292 @@ button.etsy-pill {
 .smoke-steps { list-style: none; padding: 0; margin: 8px 0; }
 .smoke-steps li { padding: 4px 0; opacity: .5; }
 .smoke-steps li.ok { opacity: 1; color: #9be0b3; }
+
+/* ── Combined Revenue/Net pill (TopBar) ─────────────────────────────────── */
+.topbar-rev-net {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 14px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.topbar-rev-sep {
+  color: var(--ink-3);
+  font-size: 11px;
+  margin: 0 2px;
+}
+.topbar-rev-net.is-gain .topbar-net-value { color: #6bd968; }
+.topbar-rev-net.is-loss .topbar-net-value { color: #ff6b6b; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Command Rail
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Expanded rail ───────────────────────────────────────────────────────── */
+.rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: var(--rail-w);
+  transition: width 0.2s ease;
+  flex-shrink: 0;
+}
+.rail::-webkit-scrollbar { width: 4px; }
+.rail::-webkit-scrollbar-track { background: transparent; }
+.rail::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 2px; }
+
+/* Rail header */
+.rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: var(--topbar-h);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.rail-header-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  opacity: 0.55;
+}
+.rail-collapse-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  transition: background 0.15s, color 0.15s;
+}
+.rail-collapse-btn:hover { background: var(--bg-3); color: var(--ink-0); }
+.rail-collapse-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+.rail-card {
+  margin: 12px 10px 0;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+.rail-card-header {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  opacity: 0.55;
+  margin-bottom: 8px;
+}
+.rail-card-loading {
+  font-size: 11px;
+  color: var(--ink-3);
+  padding: 4px 0;
+  font-family: var(--font-mono);
+}
+
+/* Budget rows */
+.rail-budget-row {
+  display: grid;
+  grid-template-columns: 38px 1fr 96px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+}
+.rail-budget-row-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rail-budget-bar {
+  height: 5px;
+  background: var(--bg-3);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.rail-budget-bar-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: #9be0b3;
+  border-radius: 3px;
+  transition: width 0.6s ease, background 0.4s;
+}
+.rail-budget-row.warn  .rail-budget-bar-fill { background: #e8d77b; }
+.rail-budget-row.danger .rail-budget-bar-fill { background: #ff8a93; }
+.rail-budget-row-num {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-1);
+  text-align: right;
+  white-space: nowrap;
+}
+.rail-budget-row.ok  .rail-budget-row-num { color: #9be0b3; }
+.rail-budget-row.warn .rail-budget-row-num { color: #e8d77b; }
+.rail-budget-row.danger .rail-budget-row-num { color: #ff8a93; }
+.rail-budget-burn {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+
+/* Etsy card — contains EtsyPanel which is pill+popover.
+   We override its pill to look at home in the rail card. */
+.rail-etsy-card .etsy-pill-wrap { display: block; }
+.rail-etsy-card .etsy-pill {
+  width: 100%;
+  justify-content: flex-start;
+  height: auto;
+  min-height: 30px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.rail-etsy-card .etsy-panel {
+  position: static;
+  margin-top: 8px;
+  min-width: unset;
+  max-width: unset;
+  width: 100%;
+  box-shadow: none;
+  border-radius: var(--radius);
+  padding: 8px;
+  background: var(--bg-1);
+}
+/* Disconnected state: show it inline */
+.rail-etsy-card button.etsy-pill.is-disconnected {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ── Panel rows (Cycles / Prompts / Wealth) ──────────────────────────────── */
+.rail-panel-row-wrap {
+  margin: 0 10px;
+  position: relative;
+}
+.rail-panel-row-wrap + .rail-panel-row-wrap {
+  border-top: 1px solid var(--line);
+}
+.rail-panel-row-wrap:first-of-type {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+.rail-panel-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 4px;
+  background: transparent;
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  text-align: left;
+  border: none;
+}
+.rail-panel-row:hover { background: var(--bg-3); color: var(--ink-0); }
+.rail-panel-row.is-open { color: var(--ink-0); }
+.rail-panel-row-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  flex: 1;
+}
+.rail-panel-row-count {
+  font-weight: 600;
+  color: var(--ink-0);
+  min-width: 14px;
+  text-align: right;
+}
+.rail-panel-row-caret {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+/* The popover opens below the row, flush left in the rail */
+.rail-panel-row-popover {
+  padding: 4px 0 8px;
+  animation: rail-row-open 0.14s ease;
+}
+@keyframes rail-row-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* Inside the rail popover the components use alwaysOpen=true, so the panel
+   is rendered. Override positioning to be static/inline rather than absolute. */
+.rail-panel-row-popover .analytics-panel-wrap > .analytics-pill,
+.rail-panel-row-popover .wealth-panel-wrap > .wealth-pill,
+.rail-panel-row-popover .prompts-panel-wrap > .prompts-pill {
+  display: none;
+}
+.rail-panel-row-popover .analytics-panel,
+.rail-panel-row-popover .wealth-panel,
+.rail-panel-row-popover .prompts-panel {
+  position: static;
+  min-width: unset;
+  max-width: unset;
+  width: 100%;
+  box-shadow: none;
+  border-radius: var(--radius);
+  margin: 0;
+  padding: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  z-index: auto;
+}
+.rail-panel-row-popover .analytics-panel-wrap,
+.rail-panel-row-popover .wealth-panel-wrap,
+.rail-panel-row-popover .prompts-panel-wrap {
+  position: static;
+}
+
+/* ── Collapsed icon strip ────────────────────────────────────────────────── */
+.rail-collapsed-strip {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 4px;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+  width: var(--rail-w-collapsed);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.rail-strip-btn {
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius);
+  color: var(--ink-3);
+  transition: background 0.15s, color 0.15s;
+}
+.rail-strip-btn:hover { background: var(--bg-3); color: var(--ink-0); }
+.rail-strip-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.rail-strip-btn:first-child {
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
 .smoke-steps li.ok::before { content: "✓ "; }

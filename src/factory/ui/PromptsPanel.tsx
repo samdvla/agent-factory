@@ -215,8 +215,9 @@ function PromptRowView({
   );
 }
 
-function PromptsPanelImpl() {
+function PromptsPanelImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
   const [open, setOpen] = useState(false);
+  const isOpen = alwaysOpen || open;
   const [rows, setRows] = useState<Record<string, PromptRow> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -232,10 +233,10 @@ function PromptsPanelImpl() {
   }, []);
 
   useEffect(() => {
-    if (open && rows === null) {
+    if (isOpen && rows === null) {
       refresh();
     }
-  }, [open, rows, refresh]);
+  }, [isOpen, rows, refresh]);
 
   const overrideCount = useMemo(() => {
     if (!rows) return 0;
@@ -252,9 +253,9 @@ function PromptsPanelImpl() {
       >
         <span className="prompts-pill-label">Prompts</span>
         <span className="prompts-pill-value">{overrideCount}</span>
-        <span className="prompts-pill-caret">{open ? "▾" : "▸"}</span>
+        <span className="prompts-pill-caret">{isOpen ? "▾" : "▸"}</span>
       </button>
-      {open && (
+      {isOpen && (
         <div className="prompts-panel" role="dialog">
           <div className="prompts-panel-header">
             <span className="prompts-panel-title">Prompt overrides</span>

@@ -1,19 +1,12 @@
 import { useEffect, useState } from "react";
 import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
-import EtsyPanel from "./EtsyPanel";
-import AnalyticsPanel from "./AnalyticsPanel";
-import BudgetPill from "./BudgetPill";
-import PromptsPanel from "./PromptsPanel";
-import WealthLeaderboard from "./WealthLeaderboard";
 
 export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   const [status, setStatus] = useState<StatusReport | null>(null);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
   const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
-  const budgetCap = useFactoryStore((s) => s.budgetCapUsd);
-  const budgetCapped = useFactoryStore((s) => s.budgetCapped);
   const revenueUsd = useFactoryStore((s) => s.revenueTodayUsd);
   const alerts = useFactoryStore((s) => s.alerts);
   const setAllStop = useFactoryStore((s) => s.setAllStop);
@@ -26,14 +19,6 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
   }, []);
 
   const netUsd = revenueUsd - budgetUsd;
-  const pct = Math.min(100, (budgetUsd / budgetCap) * 100);
-  const fillClass = budgetCapped
-    ? "budget-bar-fill bad"
-    : pct > 90
-      ? "budget-bar-fill bad"
-      : pct > 70
-        ? "budget-bar-fill warn"
-        : "budget-bar-fill";
 
   const onStartStop = async () => {
     if (status?.running) {
@@ -89,41 +74,20 @@ export default function TopBar({ onAlertClick }: { onAlertClick: () => void }) {
         </svg>
       </div>
 
-      {/* Center: budget bar */}
       <div className="topbar-spacer" />
 
-      <div className={`budget${budgetCapped ? " is-capped" : ""}`}>
-        <span className="budget-label">
-          {budgetCapped ? "Capped" : "Daily Budget"}
-        </span>
-        <div className="budget-bar">
-          <div className={fillClass} style={{ width: `${pct}%` }} />
-        </div>
-        <div className="budget-numbers">
-          <span className="spent">${budgetUsd.toFixed(2)}</span>
-          <span className="cap"> / ${budgetCap.toFixed(2)}</span>
-        </div>
-      </div>
-
-      <div className="topbar-pill">
+      {/* Combined Revenue / Net pill */}
+      <div className={`topbar-pill topbar-rev-net${budgetUsd > 0 ? (netUsd >= 0 ? " is-gain" : " is-loss") : ""}`}>
         <span className="topbar-pill-label">Revenue</span>
         <span className="topbar-pill-value">${revenueUsd.toFixed(2)}</span>
-      </div>
-
-      <div className={`topbar-pill topbar-net${budgetUsd > 0 ? (netUsd >= 0 ? " is-gain" : " is-loss") : ""}`}>
+        <span className="topbar-rev-sep">·</span>
         <span className="topbar-pill-label">Net</span>
-        <span className="topbar-pill-value">
+        <span className="topbar-pill-value topbar-net-value">
           {budgetUsd > 0
             ? `${netUsd >= 0 ? "+" : ""}$${netUsd.toFixed(2)}`
             : "—"}
         </span>
       </div>
-
-      <BudgetPill />
-      <AnalyticsPanel />
-      <PromptsPanel />
-      <WealthLeaderboard />
-      <EtsyPanel />
 
       <div className="topbar-spacer" />
 

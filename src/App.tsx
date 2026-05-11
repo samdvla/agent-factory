@@ -6,12 +6,15 @@ import SideDrawer from "./factory/ui/SideDrawer";
 import AlertTray from "./factory/ui/AlertTray";
 import GateModal from "./factory/ui/GateModal";
 import OnboardingWizard from "./factory/ui/OnboardingWizard";
+import CommandRail from "./factory/ui/CommandRail";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { useDemoFloor } from "./hooks/useDemoFloor";
 import { useFactoryStore } from "./factory/state/factoryStore";
 import { api } from "./api";
 import "./factory/ui/factory-floor.css";
 import "./App.css";
+
+const RAIL_STORAGE_KEY = "agentFactory.rail.collapsed";
 
 export default function App() {
   useSupervisorEventsToStore();
@@ -20,6 +23,13 @@ export default function App() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [alertTrayOpen, setAlertTrayOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RAIL_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
 
   // Open onboarding on cold start if no Anthropic key set
   useEffect(() => {
@@ -28,10 +38,18 @@ export default function App() {
     });
   }, []);
 
+  const handleRailToggle = (collapsed: boolean) => {
+    setRailCollapsed(collapsed);
+    try {
+      localStorage.setItem(RAIL_STORAGE_KEY, String(collapsed));
+    } catch {}
+  };
+
   return (
-    <div className="app">
+    <div className={`app${railCollapsed ? " rail-collapsed" : ""}`}>
+      <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
       <TopBar onAlertClick={() => setAlertTrayOpen((v) => !v)} />
-      <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
+      <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
         <SvgFactoryFloor />
       </div>
       <Ticker />

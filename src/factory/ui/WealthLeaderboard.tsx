@@ -9,11 +9,12 @@ import { useFactoryStore } from "../state/factoryStore";
  * "is-leader" class for the gold accent (no emoji — matches existing CSS-only
  * style of EtsyPanel).
  */
-function WealthLeaderboardImpl() {
+function WealthLeaderboardImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
   const wealthByRole = useFactoryStore((s) => s.wealthByRole);
   const setWealthByRole = useFactoryStore((s) => s.setWealthByRole);
   const roles = useFactoryStore((s) => s.roles);
   const [open, setOpen] = useState(false);
+  const isOpen = alwaysOpen || open;
 
   const refresh = useCallback(async () => {
     try {
@@ -61,9 +62,9 @@ function WealthLeaderboardImpl() {
       >
         <span className="wealth-pill-label">Wealth</span>
         <span className="wealth-pill-value">{count}</span>
-        <span className="wealth-pill-caret">{open ? "▾" : "▸"}</span>
+        <span className="wealth-pill-caret">{isOpen ? "▾" : "▸"}</span>
       </button>
-      {open && (
+      {isOpen && (
         <div className="wealth-panel" role="dialog">
           <div className="wealth-panel-header">
             <span className="wealth-panel-title">Leaderboard</span>
