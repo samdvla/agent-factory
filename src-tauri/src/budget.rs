@@ -28,8 +28,7 @@ pub async fn record(
     tokens_in: u64,
     tokens_out: u64,
 ) -> anyhow::Result<()> {
-    let (pin, pout) = price_per_million(model);
-    let usd = (tokens_in as f64) * pin / 1_000_000.0 + (tokens_out as f64) * pout / 1_000_000.0;
+    let usd = cost_usd(model, tokens_in, tokens_out);
     sqlx::query(
         "INSERT INTO budget_ledger (project_id, day, model, tokens_in, tokens_out, usd_cost) VALUES (?, date('now'), ?, ?, ?, ?)"
     )
