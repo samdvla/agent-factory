@@ -18,7 +18,7 @@ for line in sys.stdin:
 
 #[tokio::test]
 async fn worker_request_response_round_trip() {
-    let mut w = Worker::spawn("python3", &["-c", ECHO_SCRIPT]).await.expect("spawn");
+    let mut w = Worker::spawn("python3", &["-c", ECHO_SCRIPT], &[]).await.expect("spawn");
 
     let resp = w.request("ping", json!({"x": 1})).await.expect("request");
     assert_eq!(resp["echo"]["x"], 1);
@@ -38,7 +38,7 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":msg["id"],"result":"ok"}) + "\n")
         sys.stdout.flush()
 "#;
-    let mut w = Worker::spawn("python3", &["-c", NOTIFY_SCRIPT]).await.expect("spawn");
+    let mut w = Worker::spawn("python3", &["-c", NOTIFY_SCRIPT], &[]).await.expect("spawn");
 
     // First event should be the hello notification
     let evt = tokio::time::timeout(std::time::Duration::from_secs(2), w.next_event())

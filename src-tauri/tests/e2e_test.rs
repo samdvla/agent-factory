@@ -32,7 +32,10 @@ async fn end_to_end_hello_agent_completes_a_job() {
             role: "hello".into(),
             program: "python3.11".into(),
             args: vec!["-m".into(), "hello".into()],
+            env: vec![],
         }],
+        project_id,
+        f64::INFINITY,
     )
     .await
     .unwrap();

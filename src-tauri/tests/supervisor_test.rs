@@ -41,7 +41,10 @@ async fn supervisor_dispatches_one_job_to_hello_worker() {
             role: "hello".into(),
             program: "python3".into(),
             args: vec!["-c".into(), HELLO_AGENT_INLINE.into()],
+            env: vec![],
         }],
+        project_id,
+        f64::INFINITY,
     )
     .await
     .expect("start");
