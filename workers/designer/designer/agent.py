@@ -252,6 +252,7 @@ def handle(method: str, params: dict) -> dict:
     job_id = params.get("job_id", 0)
     payload = params.get("payload", {})
     brief = payload.get("brief", payload)  # accept brief directly or nested
+    cycle_id = payload.get("cycle_id") if isinstance(payload, dict) else None
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -296,7 +297,10 @@ def handle(method: str, params: dict) -> dict:
             f"asset_path={asset.get('asset_path')!r}",
             file=sys.stderr, flush=True,
         )
-        return {
+        handoff_payload: dict = {"brief": brief, "asset": asset}
+        if cycle_id:
+            handoff_payload["cycle_id"] = cycle_id
+        result: dict = {
             "ok": True,
             "asset": asset,
             "ticker_text": f"designer → listing: {asset_type} · {dimensions} · {svg_glyph}",
@@ -305,9 +309,12 @@ def handle(method: str, params: dict) -> dict:
             "tokens_out": tokens_out,
             "handoff": {
                 "to_role": "listing",
-                "payload": {"brief": brief, "asset": asset},
+                "payload": handoff_payload,
             },
         }
+        if cycle_id:
+            result["cycle_id"] = cycle_id
+        return result
     except Exception as e:
         msg = str(e)
         print(f"[designer] job_id={job_id} ERROR: {msg}", file=sys.stderr, flush=True)

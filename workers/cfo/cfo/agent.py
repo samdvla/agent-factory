@@ -145,6 +145,7 @@ def handle(method: str, params: dict) -> dict:
     job_id = params.get("job_id", 0)
     payload = params.get("payload", {})
     listing_id = payload.get("listing_id")
+    cycle_id = payload.get("cycle_id") if isinstance(payload, dict) else None
     price = payload.get("price_usd", 4.0)
     if price is None:
         price = 4.0
@@ -218,7 +219,9 @@ def handle(method: str, params: dict) -> dict:
         "fees_usd": fees,
         "net_usd": net,
         "ticker_text": ticker_text,
-        # Kick off the next product cycle after a 60 s cooldown.
+        # Kick off the next product cycle after a 60 s cooldown. The next
+        # cycle starts fresh, so we intentionally do NOT thread cycle_id
+        # into the orchestrator handoff payload — orchestrator regenerates.
         "handoff": {
             "to_role": "orchestrator",
             "payload": {
@@ -229,6 +232,11 @@ def handle(method: str, params: dict) -> dict:
             "delay_ms": 60_000,
         },
     }
+    # Thread cycle_id through so the supervisor can close the cycle and
+    # distribute wealth. Only set when present on the inbound payload — a
+    # missing cycle_id means this job ran outside the pipeline.
+    if cycle_id:
+        result["cycle_id"] = cycle_id
 
     # Only include model/token fields when Sonnet was actually used — supervisor
     # gates BudgetSpent emission on all three being present.

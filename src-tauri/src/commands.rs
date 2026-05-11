@@ -1,4 +1,4 @@
-use crate::{etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, queue, secrets, supervisor};
+use crate::{etsy, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, queue, secrets, supervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -355,6 +355,28 @@ pub async fn cmd_etsy_activate_listing(
         etsy_listing_id,
         url,
     })
+}
+
+/// Read-only: most recent closed cycles for the UI's P&L panel. Hot-path
+/// safe — pull-based, no events emitted per-job.
+#[tauri::command]
+pub async fn cmd_list_recent_cycles(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<pnl::CycleSummary>, String> {
+    pnl::list_recent_cycles(&state.pool, state.project_id, limit.unwrap_or(20))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read-only: per-agent lifetime wealth aggregates.
+#[tauri::command]
+pub async fn cmd_list_wealth(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<pnl::AgentWealth>, String> {
+    pnl::list_wealth(&state.pool, state.project_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Kill-switch: instantly halt all real Etsy publishing + posting. Flips the

@@ -102,3 +102,24 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     call_anthropic("k-test", {"niche": "x"}, {"asset_type": "printable"})
     default_system, _ = build_listing_prompt({"niche": "x"}, {"asset_type": "printable"})
     assert captured["body"]["system"] == default_system
+
+
+def test_cycle_id_propagates(tmp_path, monkeypatch):
+    """Listing echoes inbound cycle_id into result top-level and handoff."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _capture_anthropic_system(monkeypatch)
+    from listing.agent import handle
+
+    cid = "listing-cycle-deadbeef"
+    result = handle("process_job", {
+        "job_id": 9,
+        "payload": {
+            "brief": {"niche": "x"},
+            "asset": {"asset_type": "printable"},
+            "cycle_id": cid,
+        },
+    })
+    assert result["ok"] is True
+    assert result.get("cycle_id") == cid
+    assert result["handoff"]["payload"]["cycle_id"] == cid

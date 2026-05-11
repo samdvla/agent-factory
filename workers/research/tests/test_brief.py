@@ -92,3 +92,25 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     call_anthropic("k-test")
     default_system, _ = build_demand_brief_prompt()
     assert captured["body"]["system"] == default_system
+
+
+def test_cycle_id_propagates(tmp_path, monkeypatch):
+    """When inbound payload carries cycle_id, research echoes it into both
+    the top-level result and the designer handoff payload. When absent, no
+    cycle_id appears anywhere."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _capture_anthropic_system(monkeypatch)
+    from research.agent import process_job
+
+    cid = "abc123fixedhex456"
+    result = process_job(7, {"niche_seed": "minimal art", "rationale": "trending", "cycle_id": cid})
+    assert result["ok"] is True
+    assert result.get("cycle_id") == cid
+    assert result["handoff"]["payload"]["cycle_id"] == cid
+
+    # Without cycle_id on input, nothing leaks downstream.
+    result2 = process_job(8, {"niche_seed": "minimal art", "rationale": "trending"})
+    assert result2["ok"] is True
+    assert "cycle_id" not in result2
+    assert "cycle_id" not in result2["handoff"]["payload"]

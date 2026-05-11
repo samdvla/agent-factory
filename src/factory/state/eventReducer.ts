@@ -266,6 +266,24 @@ export function applySupervisorEvent(
       });
       break;
     }
+    case "pnl_cycle_closed": {
+      const cycleId = (evt as any).cycle_id as string | undefined;
+      const niche = (evt as any).niche as string | null | undefined;
+      const revenue = (evt as any).revenue_usd as number | undefined;
+      const cost = (evt as any).total_cost_usd as number | undefined;
+      const net = (evt as any).net_usd as number | undefined;
+      const shortId = typeof cycleId === "string" ? cycleId.slice(0, 8) : "?";
+      const rev = typeof revenue === "number" ? revenue.toFixed(2) : "0.00";
+      const cst = typeof cost === "number" ? cost.toFixed(2) : "0.00";
+      const n = typeof net === "number" ? net : 0;
+      const netStr = `${n >= 0 ? "+" : ""}$${n.toFixed(2)}`;
+      store.pushTicker({
+        ts: Date.now(),
+        source: "cfo",
+        text: `cycle ${shortId}: ${niche || "?"} · rev $${rev} · cost $${cst} · net ${netStr}`,
+      });
+      break;
+    }
     case "budget_capped": {
       const spent = (evt as any).spent_usd as number;
       const cap = (evt as any).cap_usd as number;

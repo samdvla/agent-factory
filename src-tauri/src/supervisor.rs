@@ -231,6 +231,51 @@ async fn run_worker_loop(
                                             tokens_out: tout,
                                             model: model.to_string(),
                                         });
+
+                                        // Per-cycle P&L: attribute this job's
+                                        // cost to its pipeline cycle. Fire-and-
+                                        // forget on a tokio task so the worker
+                                        // loop never blocks on a DB write.
+                                        if let Some(cycle_id_str) = result.get("cycle_id").and_then(|v| v.as_str()) {
+                                            let pool_for_pnl = pool.clone();
+                                            let project_id_for_pnl = project_id;
+                                            let role_for_pnl = role.to_string();
+                                            let cycle_for_pnl = cycle_id_str.to_string();
+                                            let tin_i = tin as i64;
+                                            let tout_i = tout as i64;
+                                            let cost_for_pnl = cost;
+                                            let model_for_pnl = model.to_string();
+                                            let niche_for_pnl: Option<String> = result
+                                                .get("niche_seed")
+                                                .or_else(|| result.get("brief").and_then(|b| b.get("niche")))
+                                                .or_else(|| result.get("niche"))
+                                                .and_then(|v| v.as_str())
+                                                .map(String::from);
+                                            tokio::spawn(async move {
+                                                let _ = crate::pnl::ensure_cycle(
+                                                    &pool_for_pnl,
+                                                    project_id_for_pnl,
+                                                    &cycle_for_pnl,
+                                                    niche_for_pnl.as_deref(),
+                                                )
+                                                .await;
+                                                if let Err(e) = crate::pnl::record_contribution(
+                                                    &pool_for_pnl,
+                                                    project_id_for_pnl,
+                                                    &cycle_for_pnl,
+                                                    &role_for_pnl,
+                                                    job_id,
+                                                    cost_for_pnl,
+                                                    tin_i,
+                                                    tout_i,
+                                                    Some(&model_for_pnl),
+                                                )
+                                                .await
+                                                {
+                                                    tracing::warn!("pnl record_contribution failed: {e}");
+                                                }
+                                            });
+                                        }
                                     }
                                 }
                                 bus.send(SupervisorEvent::JobCompleted {
@@ -238,6 +283,50 @@ async fn run_worker_loop(
                                     job_id,
                                     result: result.clone(),
                                 });
+
+                                // CFO closes the pipeline cycle: sum contributions,
+                                // compute true net (using gross_usd so Etsy fees are
+                                // excluded from cost-margin math), distribute wealth.
+                                // Background task so the worker loop never blocks.
+                                if role == "cfo" {
+                                    if let (Some(cycle_id_str), Some(revenue)) = (
+                                        result.get("cycle_id").and_then(|v| v.as_str()),
+                                        result.get("gross_usd").and_then(|v| v.as_f64()),
+                                    ) {
+                                        let pool_close = pool.clone();
+                                        let bus_close = bus.clone();
+                                        let project_id_close = project_id;
+                                        let cycle_close = cycle_id_str.to_string();
+                                        let local_id: Option<i64> =
+                                            result.get("listing_id").and_then(|v| v.as_i64());
+                                        tokio::spawn(async move {
+                                            // Give cfo's own contribution INSERT a moment to land
+                                            // before we read the contributions table.
+                                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                            match crate::pnl::close_cycle(
+                                                &pool_close,
+                                                project_id_close,
+                                                &cycle_close,
+                                                revenue,
+                                                local_id,
+                                            )
+                                            .await
+                                            {
+                                                Ok(summary) => {
+                                                    bus_close.send(SupervisorEvent::PnlCycleClosed {
+                                                        cycle_id: summary.cycle_id.clone(),
+                                                        niche: summary.niche.clone(),
+                                                        revenue_usd: summary.revenue_usd,
+                                                        total_cost_usd: summary.total_cost_usd,
+                                                        net_usd: summary.net_usd,
+                                                        contributor_count: summary.contributor_count,
+                                                    });
+                                                }
+                                                Err(e) => tracing::warn!("pnl close_cycle failed: {e}"),
+                                            }
+                                        });
+                                    }
+                                }
 
                                 // CS auto-reply: if a CS job completed with a `reply` +
                                 // `conversation_id`, the buyer didn't get escalated, AND

@@ -42,6 +42,14 @@ pub enum SupervisorEvent {
         conversation_id: i64,
     },
     EtsyKillSwitchTriggered,
+    PnlCycleClosed {
+        cycle_id: String,
+        niche: Option<String>,
+        revenue_usd: f64,
+        total_cost_usd: f64,
+        net_usd: f64,
+        contributor_count: i64,
+    },
 }
 
 #[derive(Clone)]

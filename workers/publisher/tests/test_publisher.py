@@ -89,6 +89,29 @@ def test_result_contains_etsy_fields():
         assert result["job_id"] == 42
 
 
+def test_cycle_id_propagates():
+    """Publisher echoes inbound cycle_id into result top-level and cfo handoff."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["AGENT_FACTORY_DATA"] = tmpdir
+        cid = "pub-cycle-feedface"
+        result = handle("process_job", {
+            "job_id": 51,
+            "payload": {
+                "listing": {
+                    "title": "Test Cycle Id Title",
+                    "price_usd": 4.0,
+                    "tags": ["t"],
+                },
+                "asset": {},
+                "brief": {"niche": "x"},
+                "cycle_id": cid,
+            },
+        })
+        assert result["ok"] is True
+        assert result.get("cycle_id") == cid
+        assert result["handoff"]["payload"]["cycle_id"] == cid
+
+
 def test_mock_etsy_record_includes_asset_path():
     with tempfile.TemporaryDirectory() as tmpdir:
         os.environ["AGENT_FACTORY_DATA"] = tmpdir

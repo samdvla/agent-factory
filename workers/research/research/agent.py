@@ -151,6 +151,11 @@ def process_job(job_id: int, payload: dict) -> dict:
 
     niche_seed: str | None = payload.get("niche_seed") or None
     rationale: str | None = payload.get("rationale") or None
+    # cycle_id is the chain identifier the orchestrator generated at the head
+    # of this pipeline run. We propagate it but never invent one — a missing
+    # cycle_id means this job was kicked off outside the pipeline, and we want
+    # the supervisor to skip P&L attribution for it.
+    cycle_id = payload.get("cycle_id") if isinstance(payload, dict) else None
     if niche_seed:
         print(f"[research] job_id={job_id} seeded niche={niche_seed!r} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
     else:
@@ -162,7 +167,10 @@ def process_job(job_id: int, payload: dict) -> dict:
             f"· ${brief['price_band_usd'][0]}-{brief['price_band_usd'][1]}"
         )
         print(f"[research] job_id={job_id} done in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
-        return {
+        handoff_payload: dict = {"brief": brief}
+        if cycle_id:
+            handoff_payload["cycle_id"] = cycle_id
+        result: dict = {
             "ok": True,
             "brief": brief,
             "ticker_text": ticker_text,
@@ -171,9 +179,12 @@ def process_job(job_id: int, payload: dict) -> dict:
             "tokens_out": tokens_out,
             "handoff": {
                 "to_role": "designer",
-                "payload": {"brief": brief},
+                "payload": handoff_payload,
             },
         }
+        if cycle_id:
+            result["cycle_id"] = cycle_id
+        return result
     except Exception as e:
         msg = str(e)
         print(f"[research] job_id={job_id} ERROR: {msg}", file=sys.stderr, flush=True)

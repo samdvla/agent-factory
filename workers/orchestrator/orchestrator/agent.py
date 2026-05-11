@@ -3,6 +3,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import uuid
 from collections import defaultdict
 
 MODEL = "claude-sonnet-4-6"
@@ -193,6 +194,13 @@ def handle(method: str, params: dict) -> dict:
         return {"ok": False, "error": f"unknown method {method}"}
 
     job_id = params.get("job_id", 0)
+    payload = params.get("payload", {}) if isinstance(params, dict) else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    # Orchestrator is the head of the pipeline — it always generates a fresh
+    # cycle_id. Any cycle_id arriving in the payload (e.g. from cfo's loop-back
+    # handoff) is intentionally discarded so each run is its own cycle.
+    cycle_id = uuid.uuid4().hex
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         msg = "ANTHROPIC_API_KEY not set"
@@ -226,9 +234,14 @@ def handle(method: str, params: dict) -> dict:
             "model": MODEL,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "cycle_id": cycle_id,
             "handoff": {
                 "to_role": "research",
-                "payload": {"niche_seed": niche_seed, "rationale": rationale},
+                "payload": {
+                    "niche_seed": niche_seed,
+                    "rationale": rationale,
+                    "cycle_id": cycle_id,
+                },
             },
         }
     except Exception as e:

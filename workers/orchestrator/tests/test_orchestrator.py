@@ -132,6 +132,30 @@ def test_falls_back_to_default_prompt_with_no_outcomes(tmp_path, monkeypatch):
     assert "Pick the next niche to pursue" in user_prompt
 
 
+def test_cycle_id_threaded(tmp_path, monkeypatch):
+    """Orchestrator is head of pipeline — it generates a fresh cycle_id and
+    threads it into both the result top-level and the research handoff."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    captured: list[bytes] = []
+    with patch("urllib.request.urlopen", side_effect=_capture_urlopen(_orch_response_payload(), captured)):
+        result = orch_agent.handle("process_job", {"job_id": 99, "payload": {}})
+
+    assert result["ok"] is True
+    assert "cycle_id" in result
+    cid = result["cycle_id"]
+    # uuid4().hex is 32 hex chars.
+    assert isinstance(cid, str) and len(cid) >= 16
+    # Each call generates a fresh id — caller-provided ids must be ignored.
+    captured2: list[bytes] = []
+    with patch("urllib.request.urlopen", side_effect=_capture_urlopen(_orch_response_payload(), captured2)):
+        result2 = orch_agent.handle("process_job", {"job_id": 100, "payload": {"cycle_id": "stale-prev"}})
+    assert result2["cycle_id"] != "stale-prev"
+    assert result2["cycle_id"] != cid
+    # Handoff carries the same id as the top-level result.
+    assert result["handoff"]["payload"]["cycle_id"] == cid
+
+
 def test_falls_back_when_too_few_outcomes(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")

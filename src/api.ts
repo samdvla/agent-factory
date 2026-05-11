@@ -28,6 +28,24 @@ export type ActivateResult = {
   url: string | null;
 };
 
+export type CycleSummary = {
+  cycle_id: string;
+  niche: string | null;
+  local_listing_id: number | null;
+  revenue_usd: number;
+  total_cost_usd: number;
+  net_usd: number;
+  contributor_count: number;
+};
+
+export type AgentWealth = {
+  role: string;
+  lifetime_revenue_usd: number;
+  lifetime_cost_usd: number;
+  lifetime_net_usd: number;
+  cycles_count: number;
+};
+
 export const api = {
   status: () => invoke<StatusReport>("cmd_status"),
   start: () => invoke<void>("cmd_start_supervisor"),
@@ -53,4 +71,7 @@ export const api = {
       localListingId,
     }),
   etsyKillSwitch: () => invoke<void>("cmd_etsy_kill_switch"),
+  listRecentCycles: (limit?: number) =>
+    invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit }),
+  listWealth: () => invoke<AgentWealth[]>("cmd_list_wealth"),
 };

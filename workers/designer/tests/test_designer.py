@@ -210,6 +210,32 @@ def test_svg_call_failure_does_not_crash(tmp_path, monkeypatch):
     assert result["handoff"]["to_role"] == "listing"
 
 
+def test_cycle_id_propagates(tmp_path, monkeypatch):
+    """Designer echoes the inbound cycle_id into its result and handoff."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    cid = "designer-cycle-7777"
+    # Two responses queued: Haiku asset + invalid SVG (falls back to text-only).
+    fake = _mock_urlopen_factory([
+        _haiku_response(),
+        _svg_response("not a valid svg"),
+    ])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    params = {
+        "job_id": 404,
+        "payload": {
+            "brief": {"niche": "test", "keywords": [], "price_band_usd": [1, 2]},
+            "cycle_id": cid,
+        },
+    }
+    result = handle("process_job", params)
+    assert result["ok"] is True
+    assert result.get("cycle_id") == cid
+    assert result["handoff"]["payload"]["cycle_id"] == cid
+
+
 def test_svg_validation_rejects_no_drawing_elements(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))

@@ -251,6 +251,24 @@ def test_buyer_prompt_mentions_asset_when_present(tmp_path, monkeypatch):
     assert "/tmp/.agent-factory/assets/3030.svg" in user_msg
 
 
+def test_cycle_id_propagates(tmp_path, monkeypatch):
+    """CFO echoes inbound cycle_id into its result top-level so the supervisor's
+    close-cycle path triggers. The orchestrator-loop handoff does NOT carry
+    cycle_id — the next cycle generates its own."""
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cid = "cfo-cycle-cafe1234"
+    payload = _full_payload(5050)
+    payload["cycle_id"] = cid
+    result = handle("process_job", {"job_id": 30, "payload": payload})
+    assert result["ok"] is True
+    assert result.get("cycle_id") == cid
+    # gross_usd must coexist with cycle_id so the supervisor closes the cycle.
+    assert "gross_usd" in result
+    # cycle_id intentionally NOT in the orchestrator-loop handoff payload.
+    assert "cycle_id" not in result["handoff"]["payload"]
+
+
 def test_buyer_prompt_says_text_only_when_no_asset(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
