@@ -633,6 +633,40 @@ pub async fn cmd_budget_status(state: State<'_, Arc<AppState>>) -> Result<Budget
     })
 }
 
+/// Start a smoke-test cycle: stamps a cycle id + start timestamp into secrets,
+/// sets the smoke_pause_until flag so enforce_caps blocks real spend after the
+/// cycle, then enqueues one research job tagged with the cycle id. The
+/// downstream listing / publisher agents follow the normal pipeline.
+#[tauri::command]
+pub async fn cmd_start_smoke_test(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    use chrono::Utc;
+    let cycle_id = format!("smoke-{}", Utc::now().format("%Y%m%d%H%M%S"));
+    secrets::set("smoke_cycle_id", &cycle_id).map_err(|e| e.to_string())?;
+    let now_ts = Utc::now().timestamp().to_string();
+    secrets::set("smoke_started_at", &now_ts).map_err(|e| e.to_string())?;
+    // Set the pause flag so that once the cycle finishes, any further
+    // enforce_caps calls block until cmd_resume_from_smoke_test is called.
+    secrets::set("smoke_pause_until", "1").map_err(|e| e.to_string())?;
+    // Enqueue one research job; downstream listing/publisher follow the normal pipeline.
+    let payload = serde_json::json!({ "smoke": true, "cycle_id": cycle_id });
+    queue::enqueue(&state.pool, state.project_id, "research", payload)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(cycle_id)
+}
+
+/// Lift the smoke-test pause: clears smoke_pause_until, smoke_cycle_id, and
+/// smoke_started_at so that enforce_caps resumes normal cap checking.
+#[tauri::command]
+pub async fn cmd_resume_from_smoke_test() -> Result<(), String> {
+    secrets::delete("smoke_pause_until").map_err(|e| e.to_string())?;
+    secrets::delete("smoke_cycle_id").map_err(|e| e.to_string())?;
+    secrets::delete("smoke_started_at").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Phase-2 stub for the Regenerate button: drops the local etsy_publishes
 /// row for this listing and enqueues a fresh orchestrator cycle. We do NOT
 /// touch the real Etsy listing (it stays as a draft on Etsy's side) — the

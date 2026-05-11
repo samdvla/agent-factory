@@ -247,6 +247,8 @@ pub fn run() {
             commands::cmd_etsy_listing_review_info,
             commands::cmd_etsy_discard_draft,
             commands::cmd_budget_status,
+            commands::cmd_start_smoke_test,
+            commands::cmd_resume_from_smoke_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

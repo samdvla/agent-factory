@@ -126,6 +126,18 @@ pub async fn enforce_caps(
     caps: BudgetCaps,
     estimate_usd: f64,
 ) -> anyhow::Result<CapOutcome> {
+    if crate::secrets::get("smoke_pause_until")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .is_some()
+    {
+        return Ok(CapOutcome::Capped {
+            scope: BudgetCapScope::SmokePause,
+            spent_usd: 0.0,
+            cap_usd: 0.0,
+        });
+    }
     let hour = match spend_window(pool, project_id, 1).await {
         Ok(v) => v,
         Err(_) => return Ok(CapOutcome::Capped {
@@ -229,5 +241,28 @@ mod tests {
     fn cost_usd_matches_record_pricing_for_opus() {
         let usd = cost_usd("claude-opus-4-7", 0, 1_000_000);
         assert!((usd - 75.00).abs() < 1e-9, "expected 75.00, got {usd}");
+    }
+
+    /// Verify that enforce_caps short-circuits to Capped{SmokePause} when the
+    /// smoke_pause_until secret is non-empty. Uses set_cache_for_test so we
+    /// never touch the on-disk secrets file or the keychain.
+    #[tokio::test]
+    async fn enforce_caps_returns_smoke_pause_when_flag_set() {
+        let pool = setup_pool().await;
+        // Seed the in-memory secrets cache — avoids touching disk / keychain.
+        crate::secrets::set_cache_for_test("smoke_pause_until", Some("1"));
+        let caps = BudgetCaps::defaults();
+        let outcome = enforce_caps(&pool, 1, caps, 0.0).await.unwrap();
+        // Clear the cache entry so other tests are not affected.
+        crate::secrets::set_cache_for_test("smoke_pause_until", None);
+        match outcome {
+            CapOutcome::Capped { scope, .. } => {
+                assert!(
+                    matches!(scope, BudgetCapScope::SmokePause),
+                    "expected SmokePause scope, got {scope:?}"
+                );
+            }
+            _ => panic!("expected Capped(SmokePause), got Ok"),
+        }
     }
 }

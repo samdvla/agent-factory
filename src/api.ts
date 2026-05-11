@@ -133,4 +133,6 @@ export const api = {
   etsyDiscardDraft: (localListingId: number) =>
     invoke<void>("cmd_etsy_discard_draft", { localListingId }),
   budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
+  startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
+  resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
 };
