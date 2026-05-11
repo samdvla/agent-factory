@@ -180,6 +180,7 @@ async fn run_worker_loop(
                             bus.send(SupervisorEvent::BudgetCapped {
                                 spent_usd: spent,
                                 cap_usd: daily_cap_usd,
+                                scope: crate::events::BudgetCapScope::Day,
                             });
                             last_capped_day = Some(today);
                         }

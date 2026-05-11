@@ -3,6 +3,24 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetCapScope {
+    Hour,
+    Day,
+    Month,
+    DbError,
+    SmokePause,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmokeTestStatus {
+    Success,
+    TimedOut,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SupervisorEvent {
     AgentStarted { role: String },
@@ -13,7 +31,15 @@ pub enum SupervisorEvent {
     WorkerNotification { role: String, method: String, params: Value },
     BudgetTick { project_id: i64, usd_today: f64 },
     BudgetSpent { role: String, cost_usd: f64, tokens_in: u64, tokens_out: u64, model: String },
-    BudgetCapped { spent_usd: f64, cap_usd: f64 },
+    BudgetCapped { spent_usd: f64, cap_usd: f64, scope: BudgetCapScope },
+    BudgetUnreported { role: String, job_id: i64 },
+    SmokeTestCycleComplete {
+        cycle_id: String,
+        listing_id: Option<i64>,
+        spend_usd: f64,
+        duration_ms: u64,
+        status: SmokeTestStatus,
+    },
     AssetRasterized { job_id: i64, png_path: String, bytes: u64 },
     EtsyListingPublished {
         local_listing_id: i64,
