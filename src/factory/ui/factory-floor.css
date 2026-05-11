@@ -454,6 +454,10 @@ button.etsy-pill {
 .etsy-kill-button {
   width: 100%;
   height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 1px solid var(--accent-bad);
   border-radius: var(--radius);
   background: linear-gradient(
@@ -471,6 +475,7 @@ button.etsy-pill {
   transition: background 0.12s, box-shadow 0.12s;
   box-shadow: 0 0 0 1px rgba(239, 79, 90, 0.08) inset;
 }
+.etsy-kill-button svg { flex-shrink: 0; }
 .etsy-kill-button:hover {
   background: linear-gradient(
     180deg,
