@@ -120,7 +120,7 @@ pub async fn fetch_new_receipts(
     let resp = client
         .get(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", crate::etsy::api_key_header()?)
         .send()
         .await
         .context("fetch receipts GET failed")?;
@@ -155,7 +155,7 @@ pub async fn fetch_conversations(
     let resp = client
         .get(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", crate::etsy::api_key_header()?)
         .send()
         .await
         .context("fetch conversations GET failed")?;
@@ -186,7 +186,7 @@ pub async fn fetch_messages(
     let resp = client
         .get(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", crate::etsy::api_key_header()?)
         .send()
         .await
         .context("fetch messages GET failed")?;
@@ -263,7 +263,7 @@ pub async fn post_reply(
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", crate::etsy::api_key_header()?)
         .form(&[("message", text)])
         .send()
         .await
@@ -446,6 +446,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_new_receipts_filters_by_last_seen() {
+        crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
+        crate::secrets::set_cache_for_test("etsy_shared_secret", None);
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/shops/9999/receipts")
@@ -486,13 +488,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_reply_form_body() {
+        crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
+        crate::secrets::set_cache_for_test("etsy_shared_secret", None);
         let mut server = mockito::Server::new_async().await;
         // "hello world!" URL-encoded as "hello+world%21" — accept either +
         // or %20 for the space (reqwest uses application/x-www-form-urlencoded).
         let mock = server
             .mock("POST", "/shops/42/conversations/77/messages")
             .match_header("authorization", "Bearer tok123")
-            .match_header("x-api-key", "k")
+            .match_header("x-api-key", "KEY123")
             .match_header(
                 "content-type",
                 "application/x-www-form-urlencoded",

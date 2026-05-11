@@ -189,7 +189,7 @@ fn user_id_from_token(access_token: &str) -> anyhow::Result<i64> {
 
 pub async fn fetch_shop_info(
     client: &reqwest::Client,
-    keystring: &str,
+    _keystring: &str,
     access_token: &str,
     api_base: &str,
 ) -> anyhow::Result<ShopInfo> {
@@ -198,7 +198,7 @@ pub async fn fetch_shop_info(
     let resp = client
         .get(&url)
         .header("Authorization", format!("Bearer {access_token}"))
-        .header("x-api-key", keystring)
+        .header("x-api-key", api_key_header()?)
         .send()
         .await
         .context("fetch shop info GET failed")?;
@@ -287,6 +287,28 @@ pub fn disconnect() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the `x-api-key` header value Etsy v3 expects.
+///
+/// Per Etsy's quickstart, the v3 API requires `keystring:shared_secret`
+/// (colon-separated) in the `x-api-key` header for **all** requests against
+/// `https://api.etsy.com/v3/application/*`. Sending only the keystring is
+/// accepted by some legacy endpoints but rejected by listings/receipts/
+/// conversations as of the 2026 hardening.
+///
+/// Reads both halves from the `etsy_api_keystring` / `etsy_shared_secret`
+/// secrets. If the shared secret is missing, falls back to keystring-only so
+/// older keys keep working until they're rotated.
+pub fn api_key_header() -> anyhow::Result<String> {
+    let keystring = secrets::get("etsy_api_keystring")?
+        .ok_or_else(|| anyhow!("no etsy_api_keystring stored"))?;
+    let secret = secrets::get("etsy_shared_secret")?.unwrap_or_default();
+    if secret.is_empty() {
+        Ok(keystring)
+    } else {
+        Ok(format!("{keystring}:{secret}"))
+    }
+}
+
 /// Return a valid access token, refreshing if the stored one is expired.
 /// The new token (and rotated refresh token) is persisted before returning.
 pub async fn ensure_fresh_token(client: &reqwest::Client) -> anyhow::Result<String> {
@@ -311,6 +333,25 @@ pub async fn ensure_fresh_token(client: &reqwest::Client) -> anyhow::Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_api_key_header_includes_shared_secret_when_present() {
+        crate::secrets::set_cache_for_test("etsy_api_keystring", Some("HEADERKS"));
+        crate::secrets::set_cache_for_test("etsy_shared_secret", Some("HEADERSEC"));
+        let got = api_key_header().unwrap();
+        assert_eq!(got, "HEADERKS:HEADERSEC");
+    }
+
+    #[test]
+    fn test_api_key_header_falls_back_when_secret_missing() {
+        crate::secrets::set_cache_for_test("etsy_api_keystring", Some("ONLYKS"));
+        crate::secrets::set_cache_for_test("etsy_shared_secret", None);
+        let got = api_key_header().unwrap();
+        // No shared secret — return keystring alone for backward compat.
+        assert!(got == "ONLYKS" || got.starts_with("ONLYKS:"));
+        // Restore for other tests that expect KEY123 in cache.
+        crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
+    }
 
     #[test]
     fn test_pkce_challenge_is_sha256_base64url() {

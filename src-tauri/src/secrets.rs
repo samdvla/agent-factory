@@ -109,6 +109,17 @@ pub fn invalidate(key: &str) {
     cache().lock().unwrap().remove(key);
 }
 
+/// Test-only helper: seed the in-memory cache without touching the keychain or
+/// the on-disk debug secrets file. Used by integration tests that need to
+/// simulate "this secret is set" without polluting the user's real store.
+#[cfg(test)]
+pub fn set_cache_for_test(key: &str, value: Option<&str>) {
+    cache()
+        .lock()
+        .unwrap()
+        .insert(key.to_string(), value.map(String::from));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

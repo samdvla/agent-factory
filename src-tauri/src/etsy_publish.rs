@@ -105,7 +105,7 @@ async fn create_draft(
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", etsy::api_key_header()?)
         .form(&params)
         .send()
         .await
@@ -148,7 +148,7 @@ async fn upload_image(
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", etsy::api_key_header()?)
         .multipart(form)
         .send()
         .await
@@ -189,7 +189,7 @@ async fn upload_file(
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", etsy::api_key_header()?)
         .multipart(form)
         .send()
         .await
@@ -220,7 +220,7 @@ pub async fn activate_listing(
     let resp = client
         .put(&url)
         .bearer_auth(access_token)
-        .header("x-api-key", keystring)
+        .header("x-api-key", etsy::api_key_header()?)
         .form(&params)
         .send()
         .await
