@@ -79,6 +79,16 @@ export type ListingReviewInfo = {
   first_listing_review_count: number;
 };
 
+export interface BudgetStatus {
+  today_usd: number;
+  hour_usd: number;
+  month_usd: number;
+  hourly_cap_usd: number;
+  daily_cap_usd: number;
+  monthly_cap_usd: number;
+  burn_per_hour_usd: number;
+}
+
 export const api = {
   status: () => invoke<StatusReport>("cmd_status"),
   start: () => invoke<void>("cmd_start_supervisor"),
@@ -122,4 +132,5 @@ export const api = {
     }),
   etsyDiscardDraft: (localListingId: number) =>
     invoke<void>("cmd_etsy_discard_draft", { localListingId }),
+  budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
 };

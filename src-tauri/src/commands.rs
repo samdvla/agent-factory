@@ -601,6 +601,38 @@ pub async fn cmd_etsy_listing_review_info(
     Ok(info)
 }
 
+#[derive(serde::Serialize)]
+pub struct BudgetStatus {
+    pub today_usd: f64,
+    pub hour_usd: f64,
+    pub month_usd: f64,
+    pub hourly_cap_usd: f64,
+    pub daily_cap_usd: f64,
+    pub monthly_cap_usd: f64,
+    pub burn_per_hour_usd: f64,
+}
+
+#[tauri::command]
+pub async fn cmd_budget_status(state: State<'_, Arc<AppState>>) -> Result<BudgetStatus, String> {
+    let pool = &state.pool;
+    let pid = state.project_id;
+    let today_usd = budget::today_spend_usd(pool, pid).await.map_err(|e| e.to_string())?;
+    let hour_usd  = budget::spend_window(pool, pid, 1).await.map_err(|e| e.to_string())?;
+    let month_usd = budget::month_spend_usd(pool, pid).await.map_err(|e| e.to_string())?;
+    let read = |k: &str, default: f64| -> f64 {
+        secrets::get(k).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(default)
+    };
+    Ok(BudgetStatus {
+        today_usd,
+        hour_usd,
+        month_usd,
+        hourly_cap_usd: read("hourly_budget_usd", 0.50),
+        daily_cap_usd:  read("daily_budget_usd",  1.00),
+        monthly_cap_usd: read("monthly_budget_usd", 20.00),
+        burn_per_hour_usd: hour_usd,
+    })
+}
+
 /// Phase-2 stub for the Regenerate button: drops the local etsy_publishes
 /// row for this listing and enqueues a fresh orchestrator cycle. We do NOT
 /// touch the real Etsy listing (it stays as a draft on Etsy's side) — the
