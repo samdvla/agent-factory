@@ -412,6 +412,26 @@ function SiOutput({ result }: { result: any }) {
   );
 }
 
+function PodOutput({ result }: { result: any }) {
+  const title = result?.title ?? "(no title)";
+  const productId = result?.printify_product_id ?? "?";
+  const priceCents = typeof result?.price_cents === "number" ? result.price_cents : null;
+  const priceUsd = priceCents !== null ? (priceCents / 100).toFixed(2) : null;
+  return (
+    <div className="af-body">
+      <div className="af-title">{title}</div>
+      <div className="af-meta">
+        <span>Printify · sticker</span>
+        {priceUsd && <span>${priceUsd}</span>}
+        <span>product_id={productId}</span>
+      </div>
+      <div className="af-rationale">
+        Pushed to Etsy as a draft. Review + activate in Etsy Shop Manager → Listings → Drafts.
+      </div>
+    </div>
+  );
+}
+
 function FallbackOutput({ result }: { result: any }) {
   if (!result) return <div className="af-body is-empty">no result</div>;
   const ticker = typeof result.ticker_text === "string" ? result.ticker_text : null;
@@ -527,6 +547,8 @@ function JobCard({
         <OrchestratorOutput result={result} />
       ) : row.agent_role === "si" ? (
         <SiOutput result={result} />
+      ) : row.agent_role === "pod" ? (
+        <PodOutput result={result} />
       ) : (
         <FallbackOutput result={result} />
       )}

@@ -68,7 +68,18 @@ pub async fn handle_publisher_complete_pod(
         return;
     }
 
-    match run_pipeline(result).await {
+    let pipeline_outcome = run_pipeline(result).await;
+    // Always write a row to `jobs` so the Activity feed lists POD attempts
+    // alongside the other workers — without this, POD work was invisible
+    // except for the supervisor-event ticker.
+    let payload_json = serde_json::json!({
+        "source_publisher_job_id": job_id,
+        "title": result.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "price_usd": result.get("price_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "asset_path": result.get("asset_path").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+
+    match pipeline_outcome {
         Ok(out) => {
             // Record the publish so tomorrow's cap math is right. Best-effort —
             // log on failure but don't block the success path.
@@ -85,30 +96,68 @@ pub async fn handle_publisher_complete_pod(
             .execute(pool).await {
                 tracing::warn!("pod_publishes insert failed: {e}");
             }
-
+            let result_json = serde_json::json!({
+                "ok": true,
+                "printify_product_id": out.product_id,
+                "title": out.title,
+                "price_cents": out.price_cents,
+                "ticker_text": format!(
+                    "printify → etsy: \"{}\" product_id={}",
+                    out.title.chars().take(60).collect::<String>(),
+                    out.product_id,
+                ),
+            });
+            let _ = insert_job_row(pool, project_id, "pod", &payload_json, Some(&result_json), None).await;
             let _ = bus.send(SupervisorEvent::JobCompleted {
                 role: "pod".into(),
                 job_id,
-                result: serde_json::json!({
-                    "ok": true,
-                    "ticker_text": format!(
-                        "printify → etsy: \"{}\" product_id={}",
-                        out.title.chars().take(60).collect::<String>(),
-                        out.product_id,
-                    ),
-                    "printify_product_id": out.product_id,
-                }),
+                result: result_json,
             });
         }
         Err(e) => {
             tracing::warn!("pod_publish failed: {e:#}");
+            let err_msg = format!("{e}");
+            let _ = insert_job_row(pool, project_id, "pod", &payload_json, None, Some(&err_msg)).await;
             let _ = bus.send(SupervisorEvent::JobFailed {
                 role: "pod".into(),
                 job_id,
-                error: format!("{e}"),
+                error: err_msg,
             });
         }
     }
+}
+
+/// Write a finished POD job to the `jobs` table so the Activity feed
+/// (which is backed by `cmd_list_recent_jobs`) can surface it. Best-effort;
+/// failures are logged but don't break the pipeline.
+async fn insert_job_row(
+    pool: &SqlitePool,
+    project_id: i64,
+    role: &str,
+    payload: &Value,
+    result: Option<&Value>,
+    error: Option<&str>,
+) -> Result<()> {
+    let status = if error.is_some() { "errored" } else { "done" };
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let res = sqlx::query(
+        "INSERT INTO jobs (project_id, agent_role, payload_json, status, started_at, finished_at, result_json, error) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(project_id)
+    .bind(role)
+    .bind(payload.to_string())
+    .bind(status)
+    .bind(&now)
+    .bind(&now)
+    .bind(result.map(|v| v.to_string()))
+    .bind(error)
+    .execute(pool)
+    .await;
+    if let Err(e) = res {
+        tracing::warn!("insert pod job row failed: {e}");
+    }
+    Ok(())
 }
 
 struct PipelineOutcome {

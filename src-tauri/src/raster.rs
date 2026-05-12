@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub const DEFAULT_TARGET_PX: u32 = 2048;
 
@@ -8,12 +9,33 @@ pub const DEFAULT_TARGET_PX: u32 = 2048;
 /// up to 1800 to leave headroom for slightly larger sticker variants.
 pub const STICKER_PRINT_TARGET_PX: u32 = 1800;
 
+/// System fontdb loaded once at process start. Without this, usvg silently
+/// drops every `<text>` element on render (no fonts = no glyphs to lay out)
+/// and the resulting PNG shows just the shape primitives — that's why the
+/// initial e2e sticker came back as a circle on a square with no labels.
+fn fontdb() -> &'static std::sync::Arc<usvg::fontdb::Database> {
+    static DB: OnceLock<std::sync::Arc<usvg::fontdb::Database>> = OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        // Sane defaults for SVG `font-family: sans-serif|serif|monospace` —
+        // pick the first match that actually exists in the loaded fonts.
+        db.set_sans_serif_family("Helvetica");
+        db.set_serif_family("Times");
+        db.set_monospace_family("Menlo");
+        std::sync::Arc::new(db)
+    })
+}
+
 /// Render an SVG byte slice to a PNG byte vector. The output's longest edge
 /// is scaled to `target_px` while preserving aspect ratio. A solid white
 /// background is composited beneath the rendered SVG because Etsy listing
 /// thumbnails sometimes render transparent PNGs as black on dark themes.
 pub fn svg_to_png(svg_bytes: &[u8], target_px: u32) -> Result<Vec<u8>> {
-    let opt = usvg::Options::default();
+    let opt = usvg::Options {
+        fontdb: fontdb().clone(),
+        ..usvg::Options::default()
+    };
     let tree = usvg::Tree::from_data(svg_bytes, &opt).context("parse SVG")?;
     let size = tree.size();
     let max_dim = size.width().max(size.height());
