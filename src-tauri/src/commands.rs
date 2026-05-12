@@ -310,34 +310,51 @@ pub async fn cmd_enqueue(
 #[tauri::command]
 pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<u32, String> {
     use tauri::Manager;
-    let probes = [
-        SupervisorEvent::AgentStarted { role: "research".into() },
-        SupervisorEvent::JobStarted { role: "designer".into(), job_id: -1 },
-        SupervisorEvent::JobCompleted {
-            role: "publisher".into(),
-            job_id: -2,
-            result: serde_json::json!({"ok": true, "ticker_text": "synthetic probe"}),
-        },
-    ];
-    let mut sent = 0u32;
-    for p in probes {
+    // List all webview windows so we know what labels actually exist —
+    // capability "windows": ["main"] only applies if the real label is "main".
+    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    tracing::info!("cmd_emit_test: webview window labels = {labels:?}");
+
+    // Try a plain JSON map first to rule out SupervisorEvent serde issues,
+    // then a small SupervisorEvent, then the large variant with a nested
+    // serde_json::Value.
+    let probe_json = serde_json::json!({
+        "kind": "agent_started",
+        "role": "research"
+    });
+    let probe_small = SupervisorEvent::AgentStarted { role: "designer".into() };
+    let probe_big = SupervisorEvent::JobCompleted {
+        role: "publisher".into(),
+        job_id: -2,
+        result: serde_json::json!({"ok": true, "ticker_text": "synthetic probe"}),
+    };
+
+    fn try_emit_pair<T: serde::Serialize + Clone>(
+        app: &tauri::AppHandle,
+        labels: &[String],
+        tag: &str,
+        payload: &T,
+    ) -> bool {
         let mut ok = false;
-        match app.emit("supervisor.event", &p) {
-            Ok(()) => ok = true,
-            Err(e) => tracing::warn!("cmd_emit_test app.emit failed: {e}"),
+        match app.emit("supervisor.event", payload) {
+            Ok(()) => { ok = true; tracing::info!("cmd_emit_test[{tag}]: app.emit Ok"); }
+            Err(e) => tracing::warn!("cmd_emit_test[{tag}] app.emit failed: {e}"),
         }
-        if let Some(w) = app.get_webview_window("main") {
-            match w.emit("supervisor.event", &p) {
-                Ok(()) => ok = true,
-                Err(e) => tracing::warn!("cmd_emit_test main.emit failed: {e}"),
+        for label in labels {
+            if let Some(w) = app.get_webview_window(label) {
+                match w.emit("supervisor.event", payload) {
+                    Ok(()) => { ok = true; tracing::info!("cmd_emit_test[{tag}]: window({label}).emit Ok"); }
+                    Err(e) => tracing::warn!("cmd_emit_test[{tag}] window({label}).emit failed: {e}"),
+                }
             }
-        } else {
-            tracing::warn!("cmd_emit_test: main webview not found");
         }
-        if ok {
-            sent += 1;
-        }
+        ok
     }
+
+    let mut sent = 0u32;
+    if try_emit_pair(&app, &labels, "json", &probe_json) { sent += 1; }
+    if try_emit_pair(&app, &labels, "small", &probe_small) { sent += 1; }
+    if try_emit_pair(&app, &labels, "big", &probe_big) { sent += 1; }
     Ok(sent)
 }
 
