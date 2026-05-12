@@ -138,10 +138,21 @@ export default function SvgFactoryFloor() {
         const vbH = base.h / zoom;
         // Drag content with the cursor: pan moves opposite to cursor delta in
         // viewBox space.
-        setPan({
-          x: startPan.x - (dx * vbW) / containerW,
-          y: startPan.y - (dy * vbH) / containerH,
-        });
+        let nextPanX = startPan.x - (dx * vbW) / containerW;
+        let nextPanY = startPan.y - (dy * vbH) / containerH;
+        // Clamp pan so the viewport always overlaps the floor's bounding box.
+        // Without this, zooming in and dragging far could push every room
+        // outside the culling window — leaving an entirely blank canvas.
+        // Allow the viewport center to range up to half the base extent on
+        // each axis; that keeps at least the corresponding edge of the floor
+        // (or one of the perimeter rooms) inside the visible rect.
+        const maxPanX = base.w / 2;
+        const maxPanY = base.h / 2;
+        if (nextPanX > maxPanX) nextPanX = maxPanX;
+        else if (nextPanX < -maxPanX) nextPanX = -maxPanX;
+        if (nextPanY > maxPanY) nextPanY = maxPanY;
+        else if (nextPanY < -maxPanY) nextPanY = -maxPanY;
+        setPan({ x: nextPanX, y: nextPanY });
       };
       const onUp = () => {
         isDragging.current = false;

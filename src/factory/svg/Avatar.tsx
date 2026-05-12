@@ -162,7 +162,27 @@ export default function Avatar({
           <rect x={-torsoW / 2 - 1} y={-torsoH - 10} width={torsoW + 2} height={3} rx={0.5} fill="#0e1620" />
         )}
         {isLab && (
-          <rect x={-torsoW / 2 - 0.5} y={-torsoH - 8} width={torsoW + 1} height={torsoH - 4} rx={1.5} fill="#cdd5df" fillOpacity={0.85} />
+          <>
+            {/* Lab coat: a narrow center stripe + a slight collar shading,
+                instead of the previous full-torso white rect that read as a
+                white sticker rather than a coat at standard zoom. */}
+            <rect
+              x={-1.4}
+              y={-torsoH - 9}
+              width={2.8}
+              height={torsoH - 5}
+              rx={1}
+              fill="#e8edf2"
+              fillOpacity={0.55}
+            />
+            <path
+              d={`M ${-torsoW / 2 + 1.5} ${-torsoH - 9}
+                  L 0 ${-torsoH - 6}
+                  L ${torsoW / 2 - 1.5} ${-torsoH - 9} Z`}
+              fill="#e8edf2"
+              fillOpacity={0.4}
+            />
+          </>
         )}
         <circle cx={0} cy={-torsoH - 12 - headR - 0.5} r={headR} fill="#d8b894" />
         <path
