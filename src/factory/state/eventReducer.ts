@@ -281,13 +281,17 @@ export function applySupervisorEvent(
       if (typeof rev === "number" && rev > 0) {
         store.addRevenue("publisher", rev);
       }
-      // A real sale also rewards the roles that built the listing — gives
-      // visible stars without the boss having to thumbs-up every cycle.
-      // We don't track listing→roles attribution precisely yet, so the
-      // pipeline roles all earn a star on every real receipt.
-      ["publisher", "designer", "listing", "research"].forEach((r) => {
-        store.awardStar(r);
-      });
+      // A real sale awards reward-PROGRESS to every pipeline role that
+      // helped build the listing. We can't precisely attribute revenue
+      // across roles, so each gets a quarter share of the receipt total.
+      // Stars themselves are only granted when accumulated progress
+      // crosses a per-tier dollar threshold — see store.awardProgress.
+      if (typeof rev === "number" && rev > 0) {
+        const sharePerRole = rev / 4;
+        ["publisher", "designer", "listing", "research"].forEach((r) => {
+          store.awardProgress(r, sharePerRole);
+        });
+      }
       store.pushTicker({
         ts: Date.now(),
         source: "etsy",

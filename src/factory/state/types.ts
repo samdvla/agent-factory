@@ -160,9 +160,14 @@ export type FactoryStore = {
   /** Lifetime wealth per role, populated from cmd_list_wealth. */
   wealthByRole: Record<string, AgentWealth>;
   /** Reward stars rendered on each avatar's chest. Stars go 1..10 in the
-   *  current tier; awarding past 10 resets to 1 in the next tier color.
-   *  Tiers: 0 bronze → 1 silver → 2 gold → 3 platinum → 4 diamond. */
-  rewardsByRole: Record<string, { stars: number; tier: number }>;
+   *  current tier; reaching the 10-star threshold for that tier resets to
+   *  1 star in the next tier's color. Tiers: 0 bronze → 1 silver → 2 gold
+   *  → 3 platinum → 4 diamond. `progressUsd` accumulates sub-threshold
+   *  progress between star awards — stars are only granted when progress
+   *  crosses the per-tier dollar threshold (see TIER_STAR_USD in the
+   *  store). Diamond stars cost $500 of contribution each, so making it
+   *  to a single diamond star requires ≈ $1.8k of lifetime value. */
+  rewardsByRole: Record<string, { stars: number; tier: number; progressUsd: number }>;
   /** Monotonic counter bumped whenever Etsy publish state changes, so panels can refetch. */
   etsyPublishesRev: number;
   /** Last 5 receipts ingested via the real Etsy receipts poller. Newest first. */
@@ -205,10 +210,13 @@ export type FactoryStore = {
   bumpActivity: () => void;
   setAgentTravel: (roleId: string, target: FactoryStore["agentTravel"][string] | null) => void;
   addRevenue: (roleId: string, usd: number) => void;
-  /** Award one reward star to a role. At 10 stars + 1, the count resets to
-   *  1 and the tier advances; tier is capped at 4 (diamond). No-op for
-   *  unknown roles so callers don't have to pre-check. */
-  awardStar: (roleId: string) => void;
+  /** Add USD-denominated reward progress for a role. Stars are granted
+   *  when accumulated progress crosses the current tier's per-star
+   *  threshold; reaching 10 stars in a tier and crossing the next
+   *  threshold advances to the next tier with stars reset to 1.
+   *  Diamond tier (4) is the cap — overflow just keeps adding stars
+   *  within the diamond tier up to 10 and then idles. */
+  awardProgress: (roleId: string, usd: number) => void;
 
   fireHireEvent: (e: HireEvent) => void;
   dissolveAgent: (roleId: string, opts?: { force?: boolean }) => void;

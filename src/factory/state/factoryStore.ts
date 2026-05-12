@@ -120,14 +120,49 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     lastActivityAt: Date.now(),
   })),
 
-  awardStar: (roleId) => set((s) => {
-    if (!roleId) return {};
-    const cur = s.rewardsByRole[roleId] ?? { stars: 0, tier: 0 };
-    // 10 → 1 of next tier; otherwise just increment. Tier caps at 4 (diamond).
-    const next = cur.stars >= 10
-      ? { stars: 1, tier: Math.min(cur.tier + 1, 4) }
-      : { stars: cur.stars + 1, tier: cur.tier };
-    return { rewardsByRole: { ...s.rewardsByRole, [roleId]: next } };
+  awardProgress: (roleId, usd) => set((s) => {
+    if (!roleId || !Number.isFinite(usd) || usd <= 0) return {};
+    // Per-tier per-star dollar cost. Hard-coded scale: bronze stars are
+    // cheap, diamond stars are expensive. Reaching the FIRST diamond
+    // star costs ~$1,810 of contribution.
+    //   bronze $1 → silver $5 → gold $25 → platinum $100 → diamond $500
+    const TIER_STAR_USD = [1, 5, 25, 100, 500];
+    const cur = s.rewardsByRole[roleId] ?? { stars: 0, tier: 0, progressUsd: 0 };
+    let progress = cur.progressUsd + usd;
+    let stars = cur.stars;
+    let tier = cur.tier;
+    while (true) {
+      // 10 stars in this tier? Only advance if there's leftover progress
+      // to apply at the next tier's price — otherwise sit at "10 stars in
+      // tier T" until another reward arrives. Without this guard we'd
+      // eagerly bump to tier T+1 with 0 stars the instant the 10th star
+      // landed, which the boss would read as "they lost their tier."
+      if (stars >= 10) {
+        if (tier >= 4) {
+          // Diamond cap: 10 stars is the max. Drain leftover progress so
+          // it doesn't pool indefinitely.
+          progress = 0;
+          break;
+        }
+        if (progress <= 0) break;
+        tier += 1;
+        stars = 0;
+        continue;
+      }
+      // Buy another star at the current tier's price if we can afford it.
+      if (progress >= TIER_STAR_USD[tier]) {
+        progress -= TIER_STAR_USD[tier];
+        stars += 1;
+      } else {
+        break;
+      }
+    }
+    return {
+      rewardsByRole: {
+        ...s.rewardsByRole,
+        [roleId]: { stars, tier, progressUsd: progress },
+      },
+    };
   }),
 
   fireHireEvent: (e) => fireHireEventImpl(set, get, e),

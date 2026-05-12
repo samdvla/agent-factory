@@ -685,9 +685,12 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
           };
         }),
       );
-      // Thumbs-up earns the role a reward star. Down or null doesn't.
+      // Thumbs-up adds a small bit of reward progress for that role. It
+      // takes a lot of thumbs-ups to advance a star (4 → 1 bronze star,
+      // 200 → 1 silver star, etc.) so stars stay meaningful and the
+      // user can't trivially power-rate an agent to diamond.
       if (rating === "up" && ratedRole) {
-        useFactoryStore.getState().awardStar(ratedRole);
+        useFactoryStore.getState().awardProgress(ratedRole, 0.25);
       }
       try {
         await api.rateJob(jobId, rating, note ?? null);
