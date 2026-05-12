@@ -336,8 +336,6 @@ export default function TopBar({
         </span>
       </div>
 
-      <div className="topbar-spacer" />
-
       {/* Right: test job button + alerts + all-stop */}
       <button
         className="topbar-icon"

@@ -92,12 +92,17 @@ input, textarea { font: inherit; color: inherit; }
 .topbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
+  gap: 12px;
+  padding: 0 12px;
   background: var(--bg-1);
   border-bottom: 1px solid var(--line);
   z-index: 20;
   position: relative;
+  /* Without min-width: 0 the grid cell refuses to shrink below content,
+     pushing the right-edge controls (LIVE / ALL STOP) off-screen when the
+     rail is open at narrow widths. overflow: hidden is a safety net. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .brand {
@@ -127,7 +132,8 @@ input, textarea { font: inherit; color: inherit; }
   border-radius: var(--radius);
   background: var(--bg-2);
   cursor: pointer;
-  min-width: 200px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 .project-select:hover { background: var(--bg-3); border-color: var(--line-2); }
 .project-select .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ok); box-shadow: 0 0 8px var(--accent-ok); }
@@ -142,7 +148,8 @@ input, textarea { font: inherit; color: inherit; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg-2);
-  min-width: 320px;
+  min-width: 200px;
+  flex-shrink: 1;
 }
 .budget-label { font-size: 10px; color: var(--ink-2); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; }
 .budget-bar {
