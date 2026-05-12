@@ -89,8 +89,30 @@ export default function SvgFactoryFloor() {
   const zoomedH = base.h / zoom;
   const cx = base.minX + base.w / 2 + pan.x;
   const cy = base.minY + base.h / 2 + pan.y;
-  const vbMinX = cx - zoomedW / 2;
-  const vbMinY = cy - zoomedH / 2;
+  let vbMinX = cx - zoomedW / 2;
+  let vbMinY = cy - zoomedH / 2;
+  // Hard-clamp the viewBox itself so it always overlaps the floor's bounding
+  // box. Without this, dragging fast (especially at high zoom) could slide
+  // the viewBox completely off the floor → every room gets culled "hidden" →
+  // entirely blank canvas. Clamping pan alone wasn't enough because pan is
+  // not the only path to extreme viewBox values (HMR, room dissolves, base
+  // re-computes mid-drag, etc.). Allow the viewBox to slide until only a
+  // sliver of the floor edge remains visible, then stop.
+  const floorMinX = base.minX;
+  const floorMaxX = base.minX + base.w;
+  const floorMinY = base.minY;
+  const floorMaxY = base.minY + base.h;
+  const SLIVER = 40; // world units of floor that must remain visible
+  if (vbMinX + zoomedW < floorMinX + SLIVER) {
+    vbMinX = floorMinX + SLIVER - zoomedW;
+  } else if (vbMinX > floorMaxX - SLIVER) {
+    vbMinX = floorMaxX - SLIVER;
+  }
+  if (vbMinY + zoomedH < floorMinY + SLIVER) {
+    vbMinY = floorMinY + SLIVER - zoomedH;
+  } else if (vbMinY > floorMaxY - SLIVER) {
+    vbMinY = floorMaxY - SLIVER;
+  }
   const vb = `${vbMinX} ${vbMinY} ${zoomedW} ${zoomedH}`;
 
   // Viewport culling: re-derive detail levels only when the visible rectangle
@@ -138,21 +160,10 @@ export default function SvgFactoryFloor() {
         const vbH = base.h / zoom;
         // Drag content with the cursor: pan moves opposite to cursor delta in
         // viewBox space.
-        let nextPanX = startPan.x - (dx * vbW) / containerW;
-        let nextPanY = startPan.y - (dy * vbH) / containerH;
-        // Clamp pan so the viewport always overlaps the floor's bounding box.
-        // Without this, zooming in and dragging far could push every room
-        // outside the culling window — leaving an entirely blank canvas.
-        // Allow the viewport center to range up to half the base extent on
-        // each axis; that keeps at least the corresponding edge of the floor
-        // (or one of the perimeter rooms) inside the visible rect.
-        const maxPanX = base.w / 2;
-        const maxPanY = base.h / 2;
-        if (nextPanX > maxPanX) nextPanX = maxPanX;
-        else if (nextPanX < -maxPanX) nextPanX = -maxPanX;
-        if (nextPanY > maxPanY) nextPanY = maxPanY;
-        else if (nextPanY < -maxPanY) nextPanY = -maxPanY;
-        setPan({ x: nextPanX, y: nextPanY });
+        setPan({
+          x: startPan.x - (dx * vbW) / containerW,
+          y: startPan.y - (dy * vbH) / containerH,
+        });
       };
       const onUp = () => {
         isDragging.current = false;
