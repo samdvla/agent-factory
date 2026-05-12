@@ -79,6 +79,29 @@ pub fn run() {
                 }
             }
 
+            // Migrate old single-field bridge config to the split pair.
+            // If the user had anthropic_base_url set and anthropic_api_key
+            // starting with "brg_", move them into the new dedicated slots and
+            // delete the old keys. Idempotent: a second run finds the old keys
+            // absent and skips silently.
+            {
+                let old_url = secrets::get("anthropic_base_url").ok().flatten();
+                let old_key = secrets::get("anthropic_api_key").ok().flatten();
+                if let (Some(url), Some(key)) = (old_url, old_key) {
+                    if !url.is_empty() && key.starts_with("brg_") {
+                        if let Err(e) = secrets::set("anthropic_bridge_url", &url) {
+                            tracing::warn!("bridge migration: failed to set anthropic_bridge_url: {e}");
+                        } else if let Err(e) = secrets::set("anthropic_bridge_key", &key) {
+                            tracing::warn!("bridge migration: failed to set anthropic_bridge_key: {e}");
+                        } else {
+                            let _ = secrets::delete("anthropic_base_url");
+                            let _ = secrets::delete("anthropic_api_key");
+                            tracing::info!("bridge migration: moved anthropic_base_url + anthropic_api_key -> anthropic_bridge_url + anthropic_bridge_key");
+                        }
+                    }
+                }
+            }
+
             // Supervisor does NOT auto-start. The user must click Start in the
             // top bar, which calls cmd_start_supervisor. This keeps idle spend
             // at zero — no jobs are enqueued until the user explicitly acts.

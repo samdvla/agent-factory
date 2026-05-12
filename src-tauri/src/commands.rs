@@ -149,14 +149,17 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
     let mut guard = state.supervisor_handle.lock().await;
     if guard.is_some() { return Ok(()); }
 
-    let api_key = secrets::get("anthropic_api_key")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let base_url = secrets::get("anthropic_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let direct_key = secrets::get("anthropic_api_key").ok().flatten().unwrap_or_default();
+    let bridge_url = secrets::get("anthropic_bridge_url").ok().flatten()
+        .filter(|s| !s.is_empty());
+    let bridge_key = secrets::get("anthropic_bridge_key").ok().flatten()
+        .filter(|s| !s.is_empty());
+
+    let (effective_base_url, effective_key) = match (bridge_url.as_ref(), bridge_key.as_ref()) {
+        (Some(u), Some(k)) => (Some(u.clone()), k.clone()),
+        _ => (None, direct_key),
+    };
+
     // Read multi-tier USD budget caps from the secret store with defaults.
     let read_cap = |k: &str, default: f64| -> f64 {
         secrets::get(k)
@@ -170,17 +173,17 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         daily_usd:   read_cap("daily_budget_usd",   1.00),
         monthly_usd: read_cap("monthly_budget_usd", 20.00),
     };
-    let api_key_env: (String, String) = ("ANTHROPIC_API_KEY".into(), api_key.clone());
+    let api_key_env: (String, String) = ("ANTHROPIC_API_KEY".into(), effective_key.clone());
     let make_spec = {
         let api_key_env = api_key_env.clone();
-        let base_url = base_url.clone();
+        let effective_base_url = effective_base_url.clone();
         move |role: &str, worker_dir: &str| {
             let mut env = vec![
                 api_key_env.clone(),
                 ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
             ];
-            if !base_url.is_empty() {
-                env.push(("ANTHROPIC_BASE_URL".into(), base_url.clone()));
+            if let Some(ref u) = effective_base_url {
+                env.push(("ANTHROPIC_BASE_URL".into(), u.clone()));
             }
             supervisor::AgentSpec {
                 role: role.into(),
@@ -197,8 +200,8 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
                 api_key_env.clone(),
                 ("PYTHONPATH".into(), "workers/hello".into()),
             ];
-            if !base_url.is_empty() {
-                env.push(("ANTHROPIC_BASE_URL".into(), base_url.clone()));
+            if let Some(ref u) = effective_base_url {
+                env.push(("ANTHROPIC_BASE_URL".into(), u.clone()));
             }
             supervisor::AgentSpec {
                 role: "hello".into(),

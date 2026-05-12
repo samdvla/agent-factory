@@ -188,7 +188,7 @@ function CredentialRow({ label, placeholder, secretKey, validate, onSaveSuccess,
 }
 
 /* ------------------------------------------------------------------ */
-/*  BridgeUrlRow                                                          */
+/*  BridgeUrlRow — plain text input for a URL (not a password)          */
 /* ------------------------------------------------------------------ */
 
 function BridgeUrlRow() {
@@ -200,7 +200,7 @@ function BridgeUrlRow() {
 
   useEffect(() => {
     let cancelled = false;
-    api.getSecret("anthropic_base_url").then((v) => {
+    api.getSecret("anthropic_bridge_url").then((v) => {
       if (cancelled) return;
       setDraft(v ?? "");
       setLoaded(true);
@@ -212,7 +212,7 @@ function BridgeUrlRow() {
     setSaveState("saving");
     setSaveError(null);
     try {
-      await api.setSecret("anthropic_base_url", draft.trim());
+      await api.setSecret("anthropic_bridge_url", draft.trim());
       setSaveState("saved");
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setSaveState("idle"), 1500);
@@ -241,14 +241,6 @@ function BridgeUrlRow() {
             Save
           </button>
         </div>
-      </div>
-      <div className="settings-helper">
-        Optional. Set to route all Anthropic calls through a local proxy. Leave empty to use
-        https://api.anthropic.com directly. Paste the bridge's auth key into the Anthropic API Key
-        field above.
-      </div>
-      <div className="settings-helper" style={{ marginTop: 2 }}>
-        Restart the supervisor (Stop &rarr; Start) after changing this for it to apply.
       </div>
       <SaveFeedback state={saveState} error={saveError} />
     </div>
@@ -556,7 +548,7 @@ export default function SettingsModal({
               placeholder="sk-ant-…"
               secretKey="anthropic_api_key"
               onSaveSuccess={() => {}}
-              helperText="If using a bridge, paste the bridge's key here instead of an Anthropic API key."
+              helperText="Direct Anthropic API key (sk-ant-...). Ignored when a bridge is configured below."
             />
             <CredentialRow
               label="Etsy keystring"
@@ -710,7 +702,21 @@ export default function SettingsModal({
           {/* ---- Section 4: Anthropic bridge ---- */}
           <section className="settings-section">
             <div className="settings-section-title">Anthropic bridge</div>
+            <div className="settings-helper" style={{ marginBottom: 8 }}>
+              If both Bridge URL and Bridge key are set, workers call the bridge using the bridge
+              key. Otherwise they call api.anthropic.com using the Anthropic API key.
+            </div>
             <BridgeUrlRow />
+            <CredentialRow
+              label="Bridge key"
+              placeholder="brg_live_…"
+              secretKey="anthropic_bridge_key"
+              onSaveSuccess={() => {}}
+              helperText="Auth key sent to the bridge as x-api-key."
+            />
+            <div className="settings-helper" style={{ marginTop: 6 }}>
+              Restart the supervisor (Stop &rarr; Start) after changing bridge settings for them to apply.
+            </div>
           </section>
 
           {/* ---- Section 5: Autonomous behavior ---- */}

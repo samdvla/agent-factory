@@ -91,7 +91,7 @@ export default function OnboardingWizard({ open, onClose }: { open: boolean; onC
                 onChange={(e) => setAnthropicKey(e.target.value)}
                 placeholder="sk-ant-…"
               />
-              <p className="helper">Stored in your OS keychain — never written to disk in plaintext.</p>
+              <p className="helper">Direct Anthropic API key. If you're using a local bridge instead, leave this empty and configure it in Settings after onboarding.</p>
               {keySaved && <div className="ck ok">Key saved.</div>}
             </>
           )}
