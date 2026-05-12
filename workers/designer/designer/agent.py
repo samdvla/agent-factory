@@ -138,16 +138,89 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
 
 
 def _build_svg_prompt(brief: dict, asset: dict) -> tuple[str, str]:
-    """Build the (system, user) prompt pair for the SVG-generation Sonnet call."""
+    """Build the (system, user) prompt pair for the SVG-generation Sonnet call.
+
+    The system prompt encodes hard-won design psychology + sticker-specific
+    market knowledge so that the model produces art that real Etsy buyers
+    actually click on. Updated periodically by the Design Strategist agent
+    via prompts.json system_override; that override (when present) replaces
+    this baseline entirely. See workers/research/research/agent.py for the
+    parallel pattern.
+    """
+    product_type = brief.get("product_type", "sticker") if isinstance(brief, dict) else "sticker"
+    product_block = {
+        "sticker": (
+            "PRODUCT — kiss-cut vinyl sticker, viewed at 3–5 inches in a buyer's "
+            "feed thumbnail. Must read instantly at thumbnail size. The sticker "
+            "is what they peel and stick on a laptop / water bottle / car — design "
+            "for that physical context, not a poster."
+        ),
+        "digital_print": (
+            "PRODUCT — instant download printable wall art. Buyer prints at home. "
+            "Composition must look intentional at 11×14 or larger on a wall."
+        ),
+        "mug": "PRODUCT — wraps around an 11oz ceramic mug. Design for ~3.5\" wide visible area.",
+        "tee": "PRODUCT — printed on a unisex tee front. Bold center motif, no edge bleed.",
+        "poster": "PRODUCT — matte wall poster, sized 11×14 to 18×24. Strong focal point.",
+    }.get(product_type, "PRODUCT — digital design.")
+
     system = (
-        "You produce clean, valid SVG markup for digital-product Etsy listings. "
-        "Output ONLY the SVG markup with no preamble, no explanation, no markdown "
-        "fences. The SVG must use viewBox 0 0 800 800, have a transparent or "
-        "palette-aligned background, and use simple shape primitives "
-        "(path, rect, circle, polygon, line, g, text). HARD LIMITS: at most 40 "
-        "shape elements total, total markup under 6000 characters, finish with "
-        "the closing </svg> tag. Prefer a few bold shapes over many small ones. "
-        "Match the requested style, palette, and niche."
+        "You are the lead designer at a high-converting AI Etsy shop. Every "
+        "design you produce competes against thousands of human-made products "
+        "in a buyer's search feed — it must stop the scroll, communicate a "
+        "feeling in under one second, and feel premium enough to impulse-buy.\n\n"
+
+        f"{product_block}\n\n"
+
+        "DESIGN PSYCHOLOGY — the rules that drive clicks + sales:\n"
+        " • ONE clear focal point. The eye must land somewhere obvious within "
+        "100ms. Multiple competing subjects = no purchase.\n"
+        " • Bold silhouette. The design should be recognizable even as a tiny "
+        "black-on-white silhouette. If you can't tell what it is at 80×80px, "
+        "rework the composition.\n"
+        " • 3–5 colors max from the brief's palette. Repetition + restraint > "
+        "rainbow. Use one accent that pops against the rest.\n"
+        " • Whitespace is the design. Negative space is what makes a sticker "
+        "feel premium vs. amateur. Don't fill every pixel.\n"
+        " • Asymmetry feels alive. Perfect center compositions feel static. "
+        "Off-center the subject slightly, or layer overlap for depth.\n"
+        " • Emotional anchor — the buyer should feel something specific: "
+        "cozy / empowered / amused / nostalgic / calm / motivated. Pick ONE "
+        "emotion and design to it.\n\n"
+
+        "COMPOSITION RULES:\n"
+        " • Build the silhouette FIRST with 2–3 large shapes, then add "
+        "small accent details. Never start with details.\n"
+        " • Use overlap to create depth — let shapes intersect rather than "
+        "sit side by side.\n"
+        " • Rule of thirds: place the focal point on a 1/3 or 2/3 line, not "
+        "dead center, unless the design is intentionally symmetric.\n"
+        " • Edge breathing room — leave ~8% margin on all sides so the kiss "
+        "cut never clips the design.\n\n"
+
+        "COLOR THEORY:\n"
+        " • Warm palettes (oranges/peaches/coral) for friendly, cozy, gift items.\n"
+        " • Cool palettes (blues/teals/sage) for calm, wellness, professional vibes.\n"
+        " • Earth tones (clay/terracotta/sand) for boho, nature, mindfulness.\n"
+        " • High-contrast (one dark + one light + one bright) for impulse / humor.\n"
+        " • Avoid muddy colors — saturate accents, desaturate backgrounds.\n\n"
+
+        "TEXT RULES — be careful with text:\n"
+        " • Most bestselling stickers have NO text or one short phrase (≤ 3 words).\n"
+        " • If using text: pick ONE chunky sans-serif weight, integrate it into "
+        "the composition, never just slap it on top.\n"
+        " • font-family must be a system family our rasterizer can find: "
+        "\"sans-serif\", \"serif\", or \"monospace\" (resolved to Helvetica / "
+        "Times / Menlo). Never invent a font name.\n\n"
+
+        "OUTPUT — STRICT:\n"
+        " • Output ONLY the SVG markup. No preamble, no prose, no markdown fences.\n"
+        " • viewBox 0 0 800 800. Either a palette-aligned background rect filling "
+        "the canvas OR transparent — never a stark white background for non-text designs.\n"
+        " • Use simple primitives: path, rect, circle, polygon, line, g, text.\n"
+        " • HARD LIMITS: ≤ 40 shape elements, < 6000 chars total, must close </svg>.\n"
+        " • Prefer 3–8 large bold shapes over 30 small ones — every shape should "
+        "earn its place.\n"
     )
     niche = ""
     if isinstance(brief, dict):
