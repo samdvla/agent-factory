@@ -458,25 +458,47 @@ async fn run_worker_loop(
                                 // full no-op so the sandbox pipeline keeps
                                 // running unchanged.
                                 if role == "publisher" {
-                                    let real_enabled = crate::secrets::get("real_etsy_enabled")
-                                        .ok()
-                                        .flatten()
+                                    let pod_enabled = crate::secrets::get("pod_enabled")
+                                        .ok().flatten()
                                         .map(|v| v.eq_ignore_ascii_case("true"))
                                         .unwrap_or(false);
-                                    if real_enabled {
-                                        let bus_for_pub = bus.clone();
-                                        let pool_for_pub = pool.clone();
-                                        let project_id_for_pub = project_id;
+                                    let product_type = result.get("product_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let route_to_pod = pod_enabled && product_type == "sticker";
+
+                                    if route_to_pod {
+                                        // POD path: skip direct Etsy publish — Printify
+                                        // will create the Etsy draft on our behalf.
+                                        let bus_for_pod = bus.clone();
                                         let result_clone = result.clone();
                                         tokio::spawn(async move {
-                                            crate::etsy_publish::handle_publisher_complete(
-                                                &pool_for_pub,
-                                                project_id_for_pub,
-                                                &bus_for_pub,
+                                            crate::pod_publish::handle_publisher_complete_pod(
+                                                &bus_for_pod,
                                                 &result_clone,
                                             )
                                             .await;
                                         });
+                                    } else {
+                                        let real_enabled = crate::secrets::get("real_etsy_enabled")
+                                            .ok().flatten()
+                                            .map(|v| v.eq_ignore_ascii_case("true"))
+                                            .unwrap_or(false);
+                                        if real_enabled {
+                                            let bus_for_pub = bus.clone();
+                                            let pool_for_pub = pool.clone();
+                                            let project_id_for_pub = project_id;
+                                            let result_clone = result.clone();
+                                            tokio::spawn(async move {
+                                                crate::etsy_publish::handle_publisher_complete(
+                                                    &pool_for_pub,
+                                                    project_id_for_pub,
+                                                    &bus_for_pub,
+                                                    &result_clone,
+                                                )
+                                                .await;
+                                            });
+                                        }
                                     }
                                 }
 

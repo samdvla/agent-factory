@@ -47,6 +47,7 @@ def handle(method: str, params: dict) -> dict:
 
     print(f"[publisher] job_id={job_id} published listing_id={listing_id} title={title!r:.40}", file=sys.stderr, flush=True)
 
+    product_type = brief.get("product_type", "digital_print") if isinstance(brief, dict) else "digital_print"
     cfo_payload: dict = {
         "listing_id": listing_id,
         "price_usd": record["price_usd"],
@@ -68,15 +69,15 @@ def handle(method: str, params: dict) -> dict:
         "ok": True,
         "listing_id": listing_id,
         "ticker_text": f"publisher → cfo: listing #{listing_id} prepared",
-        # Etsy publish hook (Rust supervisor reads these when real_etsy_enabled).
-        # These are flat top-level fields so the Rust hook doesn't have to
-        # reach into the cfo handoff payload.
+        # Etsy / POD publish hooks (Rust supervisor reads these). Flat top-level
+        # fields so the supervisor doesn't have to reach into the cfo payload.
         "title": title,
         "description": listing.get("description", ""),
         "tags": listing.get("tags", []) or [],
         "price_usd": record["price_usd"],
         "niche": niche,
         "asset_path": asset_path,
+        "product_type": product_type,  # supervisor uses this to route to POD or direct-Etsy
         "job_id": job_id,
         "handoff": {
             "to_role": "cfo",

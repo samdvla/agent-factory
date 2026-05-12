@@ -10,6 +10,7 @@ pub mod heartbeat;
 pub mod llm;
 pub mod oauth_server;
 pub mod pnl;
+pub mod pod_publish;
 pub mod printify;
 pub mod prompts;
 pub mod queue;

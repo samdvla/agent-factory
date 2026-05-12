@@ -15,8 +15,18 @@ export type SupervisorEvent = {
   code?: number | null;
 };
 
-function visualRole(r: string | undefined): string | null {
+/** POD events arrive with role="pod" but the Printify Operator is hired
+ *  dynamically with a random role id. Find it by name. */
+function resolvePodRole(store: FactoryStore): string | null {
+  const match = Object.values(store.roles).find(
+    (r) => r.name === "Printify Operator",
+  );
+  return match?.id ?? null;
+}
+
+function visualRole(r: string | undefined, store: FactoryStore): string | null {
   if (!r) return null;
+  if (r === "pod") return resolvePodRole(store);
   return SUPERVISOR_ROLE_MAP[r] ?? r;
 }
 
@@ -36,7 +46,7 @@ export function applySupervisorEvent(
   store: FactoryStore,
   evt: SupervisorEvent
 ): void {
-  const r = visualRole(evt.role);
+  const r = visualRole(evt.role, store);
   // Fire a "real activity" timestamp on every supervisor event we can attach
   // to a role — AvatarLayer reads this to drive a high-visibility pulse so
   // the floor always reacts to live events, even for sub-second jobs and
