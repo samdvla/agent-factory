@@ -408,14 +408,15 @@ function PrintifySection() {
         <div className="settings-field-label-col">
           <span className="settings-field-label">Personal access token</span>
           <span className="settings-helper">
-            Generate in Printify → My account → Connections → API. Verifying
-            saves the token and the discovered Etsy shop_id.
+            {status.keyPresent
+              ? "Token already saved (hidden for security). Leave blank to keep it; paste a new one + Verify to replace."
+              : "Generate in Printify → My account → Connections → API. Verifying saves the token and the discovered Etsy shop_id."}
           </span>
         </div>
         <input
           type="password"
           className="settings-cred-input"
-          placeholder="Printify PAT"
+          placeholder={status.keyPresent ? "•••••• (saved)" : "Printify PAT"}
           value={keyDraft}
           onChange={(e) => setKeyDraft(e.target.value)}
           autoComplete="off"
@@ -427,7 +428,7 @@ function PrintifySection() {
           onClick={handleVerify}
           disabled={verifyState === "verifying" || !keyDraft.trim()}
         >
-          {verifyState === "verifying" ? "Verifying…" : "Verify"}
+          {verifyState === "verifying" ? "Verifying…" : status.keyPresent ? "Replace" : "Verify"}
         </button>
       </div>
       {verifyState === "ok" && (
@@ -499,12 +500,11 @@ function PodDailyCapRow() {
         type="number"
         min={1}
         max={50}
-        className="settings-inline-number"
+        className="settings-input settings-input-number"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={save}
         disabled={saving}
-        style={{ width: 60 }}
       />
     </div>
   );
