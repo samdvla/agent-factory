@@ -64,6 +64,11 @@ def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         "Title must be ≤140 chars. Exactly 13 tags. "
         "Description should be SEO-tuned and policy-compliant "
         "(digital download, no shipping, no custom work without explicit policy). "
+        "PRICING — the shop is brand new and has no reviews. Pick a price that "
+        "real buyers would impulse-purchase. Use brief.price_band_usd as your "
+        "guide; lean toward the LOWER end of that band, not the middle. Never "
+        "exceed brief.price_band_usd[1]. If no band is provided, price in the "
+        "$3–$8 range. Sub-$10 wins on a fresh shop. "
         "Return JSON only:\n"
         "{\n"
         '  "title": "<≤140 chars>",\n'
@@ -75,6 +80,39 @@ def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
     )
     user = json.dumps({"brief": brief, "asset": asset})
     return system, user
+
+
+# Hard ceiling used to clamp the model's price choice on a brand-new shop.
+# Until the SI loop learns from real Etsy sales (see project_north_star), the
+# safest policy is "cheap enough to actually impulse-buy from an unknown shop."
+NEW_SHOP_PRICE_CEILING_USD = 12.0
+
+
+def _clamp_price(price: float, brief: dict) -> float:
+    """Force the model's price into a sane band for a new, no-review shop.
+
+    Constraints, in order:
+      1. price <= brief.price_band_usd[1] when provided
+      2. price <= NEW_SHOP_PRICE_CEILING_USD always
+      3. price >= brief.price_band_usd[0] when provided (avoid free / loss leaders)
+      4. price >= 1.50 (Etsy floor for impulse digital)
+    """
+    band = brief.get("price_band_usd") if isinstance(brief, dict) else None
+    lo, hi = None, None
+    if isinstance(band, list) and len(band) >= 2:
+        try:
+            lo = float(band[0])
+            hi = float(band[1])
+        except (TypeError, ValueError):
+            lo, hi = None, None
+    capped = float(price)
+    if hi is not None:
+        capped = min(capped, hi)
+    capped = min(capped, NEW_SHOP_PRICE_CEILING_USD)
+    if lo is not None:
+        capped = max(capped, lo)
+    capped = max(capped, 1.50)
+    return round(capped, 2)
 
 
 def call_anthropic(api_key: str, brief: dict, asset: dict) -> tuple[dict, int, int]:
@@ -163,7 +201,14 @@ def handle(method: str, params: dict) -> dict:
                 "ticker_text": f"listing validation failed: {msg}",
             }
         title = listing.get("title", "")
-        price = listing.get("price_usd", 0)
+        raw_price = listing.get("price_usd", 0)
+        price = _clamp_price(raw_price, brief)
+        if price != raw_price:
+            print(
+                f"[listing] job_id={job_id} price clamped {raw_price} -> {price} (band={brief.get('price_band_usd')})",
+                file=sys.stderr, flush=True,
+            )
+            listing["price_usd"] = price
         print(f"[listing] job_id={job_id} done title={title!r:.40} in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
         handoff_payload: dict = {"listing": listing, "brief": brief, "asset": asset}
         if cycle_id:

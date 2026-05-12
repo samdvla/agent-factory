@@ -1,6 +1,11 @@
 import json
 
-from listing.agent import build_listing_prompt, validate_listing
+from listing.agent import (
+    build_listing_prompt,
+    validate_listing,
+    _clamp_price,
+    NEW_SHOP_PRICE_CEILING_USD,
+)
 
 
 def test_prompt_includes_title_constraint():
@@ -9,6 +14,31 @@ def test_prompt_includes_title_constraint():
     system, user = build_listing_prompt(brief, asset)
     assert "140" in system
     assert "13 tags" in system or "Exactly 13" in system
+
+
+def test_clamp_price_caps_at_band_upper():
+    brief = {"price_band_usd": [3, 8]}
+    assert _clamp_price(25, brief) == 8.0
+
+
+def test_clamp_price_caps_at_global_ceiling_when_no_band():
+    brief = {"niche": "x"}
+    assert _clamp_price(50, brief) == NEW_SHOP_PRICE_CEILING_USD
+
+
+def test_clamp_price_lifts_below_band_lower():
+    brief = {"price_band_usd": [5, 12]}
+    assert _clamp_price(0.50, brief) == 5.0
+
+
+def test_clamp_price_enforces_floor_when_band_lower_is_zero():
+    brief = {"price_band_usd": [0, 12]}
+    assert _clamp_price(0.50, brief) == 1.50
+
+
+def test_clamp_price_passthrough_in_band():
+    brief = {"price_band_usd": [3, 12]}
+    assert _clamp_price(6.99, brief) == 6.99
 
 
 def test_validate_listing_ok():
