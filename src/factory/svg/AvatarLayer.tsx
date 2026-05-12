@@ -272,6 +272,9 @@ export default function AvatarLayer({
         const isTraveling = !!(travel?.waypoints && travel.waypoints.length > 1);
         const lastEventAt = realActivityAt[role.id] ?? 0;
         const isPulsing = lastEventAt > 0 && Date.now() - lastEventAt < 1500;
+        // Round to 100ms buckets so back-to-back events still produce
+        // distinct keys, but rapid micro-events don't thrash React.
+        const pulseKey = lastEventAt > 0 ? Math.floor(lastEventAt / 100) : 0;
         // "shell" tier: avatar is off-screen but might be entering soon;
         // skip the smooth left/top transition so we don't waste compositor
         // time animating something the user can't see.
@@ -280,7 +283,8 @@ export default function AvatarLayer({
         return (
           <div
             key={role.id}
-            className={`avatar-anchor${moving || isTraveling ? " is-moving" : ""}${isPulsing ? " is-pulsing" : ""}`}
+            className={`avatar-anchor${moving || isTraveling ? " is-moving" : ""}`}
+            data-pulse={isPulsing ? pulseKey : undefined}
             style={{
               position: "absolute",
               left: pos.left - FOOT_X * zoom,
@@ -305,6 +309,17 @@ export default function AvatarLayer({
             )}
             {agent.state === "dissolving" && (
               <DissolveFx accent={role.hex} scale={zoom} />
+            )}
+            {isPulsing && (
+              // Keyed on event timestamp so back-to-back events remount this
+              // element and restart the CSS animation — without the key, the
+              // class persists and the keyframes never replay.
+              <span
+                key={`pulse-${pulseKey}`}
+                className="avatar-event-pulse"
+                style={{ "--role-color": role.hex } as React.CSSProperties}
+                aria-hidden
+              />
             )}
           </div>
         );

@@ -1,7 +1,13 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, createContext, useContext } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type JobRow } from "../../api";
+
+/** Context so deeply-nested role renderers can pop the SVG lightbox without prop drilling. */
+const SvgLightboxCtx = createContext<((svg: string, label: string) => void) | null>(null);
+function useOpenSvgLightbox() {
+  return useContext(SvgLightboxCtx);
+}
 
 /**
  * Activity feed — every completed job, in reverse chronological order, with
@@ -128,6 +134,34 @@ function ResearchOutput({ result }: { result: any }) {
   );
 }
 
+function SvgLightbox({ svg, label, onClose }: { svg: string; label: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+  return (
+    <div
+      className="svg-lightbox-back"
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <button type="button" className="svg-lightbox-close" onClick={onClose} aria-label="Close">×</button>
+      <div className="svg-lightbox-stage">
+        <img className="svg-lightbox-img" src={svgDataUri(svg)} alt={label} />
+        <div className="svg-lightbox-caption">{label}</div>
+      </div>
+    </div>
+  );
+}
+
 function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
   const asset = result?.asset ?? {};
   const palette: string[] = Array.isArray(asset.palette) ? asset.palette : [];
@@ -135,6 +169,7 @@ function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
   const style = asset.style ?? "";
   const briefForImage = asset.brief_for_image_gen ?? "";
   const hasAsset = typeof asset.asset_path === "string" && asset.asset_path.length > 0;
+  const openLightbox = useOpenSvgLightbox();
   const [svg, setSvg] = useState<string | null>(null);
   const [svgLoaded, setSvgLoaded] = useState(false);
   useEffect(() => {
@@ -160,11 +195,19 @@ function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
       <div className="af-preview">
         {hasAsset ? (
           svg ? (
-            <img
-              className="af-svg-tile"
-              src={svgDataUri(svg)}
-              alt="Designer SVG preview"
-            />
+            <button
+              type="button"
+              className="af-svg-tile-btn"
+              onClick={() => openLightbox?.(svg, `designer #${jobId} · ${dims || "preview"}`)}
+              title="Click to enlarge"
+            >
+              <img
+                className="af-svg-tile"
+                src={svgDataUri(svg)}
+                alt="Designer SVG preview"
+              />
+              <span className="af-svg-zoom-hint" aria-hidden>⤢</span>
+            </button>
           ) : svgLoaded ? (
             <div className="af-svg-tile is-empty">file missing</div>
           ) : (
@@ -231,6 +274,7 @@ function PublisherOutput({ result, jobId }: { result: any; jobId: number }) {
   const niche = typeof result?.niche === "string" ? result.niche : null;
   const description = typeof result?.description === "string" ? result.description : "";
   const hasAsset = typeof result?.asset_path === "string" && result.asset_path.length > 0;
+  const openLightbox = useOpenSvgLightbox();
   const [svg, setSvg] = useState<string | null>(null);
   const [svgLoaded, setSvgLoaded] = useState(false);
   useEffect(() => {
@@ -256,11 +300,19 @@ function PublisherOutput({ result, jobId }: { result: any; jobId: number }) {
       <div className="af-preview">
         {hasAsset ? (
           svg ? (
-            <img
-              className="af-svg-tile"
-              src={svgDataUri(svg)}
-              alt="Final product preview"
-            />
+            <button
+              type="button"
+              className="af-svg-tile-btn"
+              onClick={() => openLightbox?.(svg, `publisher #${jobId} · ${title || `Listing #${listingId}`}`)}
+              title="Click to enlarge"
+            >
+              <img
+                className="af-svg-tile"
+                src={svgDataUri(svg)}
+                alt="Final product preview"
+              />
+              <span className="af-svg-zoom-hint" aria-hidden>⤢</span>
+            </button>
           ) : svgLoaded ? (
             <div className="af-svg-tile is-empty">file missing</div>
           ) : (
@@ -566,6 +618,8 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>("all");
+  const [lightbox, setLightbox] = useState<{ svg: string; label: string } | null>(null);
+  const openLightbox = useCallback((svg: string, label: string) => setLightbox({ svg, label }), []);
   const refreshTimer = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -670,6 +724,7 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   }, [rows]);
 
   return (
+    <SvgLightboxCtx.Provider value={openLightbox}>
     <div className={`af-panel${alwaysOpen ? " is-always-open" : ""}${wide ? " is-wide" : ""}`}>
       <div className="af-controls">
         <div className="af-chip-row">
@@ -739,6 +794,10 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
           ))}
         </div>
       )}
+      {lightbox && (
+        <SvgLightbox svg={lightbox.svg} label={lightbox.label} onClose={() => setLightbox(null)} />
+      )}
     </div>
+    </SvgLightboxCtx.Provider>
   );
 }
