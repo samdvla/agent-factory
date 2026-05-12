@@ -52,7 +52,7 @@ export default function App() {
       ]);
       const hasDirect = !!direct && direct.length > 0;
       const hasBridge = !!bridgeUrl && bridgeUrl.length > 0 && !!bridgeKey && bridgeKey.length > 0;
-      if (!hasDirect && !hasBridge) setWizardOpen(true);
+      setWizardOpen(!hasDirect && !hasBridge);
     })();
   }, []);
 
