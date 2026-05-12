@@ -49,10 +49,10 @@ export function applySupervisorEvent(
     }
   }
   // Dev visibility: log every event so you can confirm in the devtools
-  // console that the supervisor.event channel is actually flowing.
+  // console that the supervisor:event channel is actually flowing.
   if (typeof window !== "undefined" && (import.meta as any).env?.DEV) {
     // eslint-disable-next-line no-console
-    console.debug("[supervisor.event]", evt.kind, evt.role, evt.job_id ?? "");
+    console.debug("[supervisor:event]", evt.kind, evt.role, evt.job_id ?? "");
   }
   switch (evt.kind) {
     case "agent_started":

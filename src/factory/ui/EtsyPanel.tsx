@@ -105,7 +105,7 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
 
   useEffect(() => {
     let unlisten: import("@tauri-apps/api/event").UnlistenFn | undefined;
-    listen<Record<string, unknown>>("supervisor.event", (e) => {
+    listen<Record<string, unknown>>("supervisor:event", (e) => {
       const evt = e.payload;
       switch (evt.kind) {
         case "job_completed":

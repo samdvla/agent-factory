@@ -12,7 +12,7 @@ type EmitProbeAttempt = {
 type EmitProbeReport = { labels: string[]; attempts: EmitProbeAttempt[]; sent: number };
 
 /**
- * Floating diagnostic chip on the floor. Subscribes to "supervisor.event"
+ * Floating diagnostic chip on the floor. Subscribes to "supervisor:event"
  * directly (independent of the store) and shows the most recent event so we
  * can see at a glance whether the IPC channel is actually delivering.
  *
@@ -34,7 +34,7 @@ export default function EventBeacon() {
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
-    listen<{ kind: string; role?: string }>("supervisor.event", (e) => {
+    listen<{ kind: string; role?: string }>("supervisor:event", (e) => {
       setLast({ kind: e.payload.kind, role: e.payload.role, ts: Date.now() });
       setCount((c) => c + 1);
     })

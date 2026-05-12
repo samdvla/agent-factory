@@ -649,7 +649,7 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
         refresh();
       }, 600);
     };
-    listen<{ kind: string }>("supervisor.event", (e) => {
+    listen<{ kind: string }>("supervisor:event", (e) => {
       if (
         e.payload.kind === "job_completed" ||
         e.payload.kind === "job_failed"

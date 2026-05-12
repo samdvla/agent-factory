@@ -324,7 +324,7 @@ pub struct EmitProbeWindowAttempt {
     pub error: Option<String>,
 }
 
-/// Diagnostic command: emits 3 synthetic `supervisor.event` payloads from an
+/// Diagnostic command: emits 3 synthetic `supervisor:event` payloads from an
 /// invoke handler so we can confirm the emit→listen channel itself works,
 /// independent of the spawned EventBus forwarder task. If listen() in the
 /// frontend doesn't receive these, the IPC is the problem; if it does
@@ -361,7 +361,7 @@ pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<EmitProbeReport, Str
         payload: &T,
     ) -> EmitProbeAttempt {
         let mut windows = Vec::new();
-        let (app_emit_ok, app_emit_error) = match app.emit("supervisor.event", payload) {
+        let (app_emit_ok, app_emit_error) = match app.emit("supervisor:event", payload) {
             Ok(()) => {
                 tracing::info!("cmd_emit_test[{shape}]: app.emit Ok");
                 (true, None)
@@ -374,7 +374,7 @@ pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<EmitProbeReport, Str
         };
         for label in labels {
             if let Some(w) = app.get_webview_window(label) {
-                match w.emit("supervisor.event", payload) {
+                match w.emit("supervisor:event", payload) {
                     Ok(()) => {
                         tracing::info!("cmd_emit_test[{shape}]: window({label}).emit Ok");
                         windows.push(EmitProbeWindowAttempt { label: label.clone(), ok: true, error: None });
@@ -412,12 +412,12 @@ pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
                     // emit to the "main" webview window to cover the case where
                     // app.emit() doesn't fan out before the window is fully
                     // mounted. If either fails, log so debug builds surface it.
-                    if let Err(e) = app.emit("supervisor.event", &evt) {
-                        tracing::warn!("app.emit supervisor.event failed: {e}");
+                    if let Err(e) = app.emit("supervisor:event", &evt) {
+                        tracing::warn!("app.emit supervisor:event failed: {e}");
                     }
                     if let Some(w) = app.get_webview_window("main") {
-                        if let Err(e) = w.emit("supervisor.event", &evt) {
-                            tracing::warn!("main.emit supervisor.event failed: {e}");
+                        if let Err(e) = w.emit("supervisor:event", &evt) {
+                            tracing::warn!("main.emit supervisor:event failed: {e}");
                         }
                     }
                 }
@@ -425,7 +425,7 @@ pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
                 // — losing the entire forwarder for the session over a backlog
                 // burst was the original "agents stay still" bug.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("supervisor.event forwarder lagged {n} msgs; resuming");
+                    tracing::warn!("supervisor:event forwarder lagged {n} msgs; resuming");
                     continue;
                 }
                 // Channel closed — no senders left. Exit the task.

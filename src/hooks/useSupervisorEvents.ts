@@ -9,7 +9,7 @@ import {
 export function useSupervisorEventsToStore() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
-    listen<SupervisorEvent>("supervisor.event", (e) => {
+    listen<SupervisorEvent>("supervisor:event", (e) => {
       applySupervisorEvent(useFactoryStore.getState(), e.payload);
     }).then((fn) => {
       unlisten = fn;

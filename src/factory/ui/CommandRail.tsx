@@ -528,7 +528,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     refreshUnratedCount();
     const id = setInterval(refreshUnratedCount, 15000);
     let unlisten: UnlistenFn | undefined;
-    listen<{ kind: string }>("supervisor.event", (e) => {
+    listen<{ kind: string }>("supervisor:event", (e) => {
       if (
         e.payload.kind === "job_completed" ||
         e.payload.kind === "job_failed"

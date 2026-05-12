@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useFactoryStore } from "../factoryStore";
 import { applySupervisorEvent } from "../eventReducer";
 
-/** End-to-end-ish: simulate the supervisor.event payloads the Rust backend
+/** End-to-end-ish: simulate the supervisor:event payloads the Rust backend
  *  emits and verify the store mutations that drive the floor animations. */
 
 describe("supervisor events drive the floor", () => {
