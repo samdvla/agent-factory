@@ -305,8 +305,21 @@ pub async fn cmd_enqueue(
 pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
     let mut rx = bus.subscribe();
     tauri::async_runtime::spawn(async move {
-        while let Ok(evt) = rx.recv().await {
-            let _ = app.emit("supervisor.event", evt);
+        loop {
+            match rx.recv().await {
+                Ok(evt) => {
+                    let _ = app.emit("supervisor.event", evt);
+                }
+                // Receiver is behind. Re-subscribe transparently and keep going
+                // — losing the entire forwarder for the session over a backlog
+                // burst was the real "agents stay still" bug.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("supervisor.event forwarder lagged {n} msgs; resuming");
+                    continue;
+                }
+                // Channel closed — no senders left. Exit the task.
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 }
@@ -978,7 +991,7 @@ pub async fn cmd_list_recent_jobs(
         sql.push_str(" AND j.agent_role = ?");
     }
     if since_unix.is_some() {
-        sql.push_str(" AND (strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ?");
+        sql.push_str(" AND CAST(strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ?");
     }
     sql.push_str(" ORDER BY j.id DESC LIMIT ?");
 
@@ -1118,7 +1131,7 @@ pub async fn cmd_unrated_job_count(state: State<'_, Arc<AppState>>) -> Result<i6
         "SELECT COUNT(*) FROM jobs j \
          LEFT JOIN job_feedback f ON f.job_id = j.id AND f.rater = 'operator' \
          WHERE j.project_id = ? AND j.status IN ('done','errored') \
-         AND (strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ? \
+         AND CAST(strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ? \
          AND f.id IS NULL",
     )
     .bind(state.project_id)
