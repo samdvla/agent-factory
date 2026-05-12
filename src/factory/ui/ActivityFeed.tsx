@@ -166,12 +166,14 @@ function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
               alt="Designer SVG preview"
             />
           ) : svgLoaded ? (
-            <div className="af-svg-tile is-empty">missing</div>
+            <div className="af-svg-tile is-empty">file missing</div>
           ) : (
             <div className="af-svg-tile is-loading">…</div>
           )
         ) : (
-          <div className="af-svg-tile is-empty">text only</div>
+          <div className="af-svg-tile is-empty" title="The designer's SVG step failed or was truncated; only the text brief was produced">
+            no svg yet
+          </div>
         )}
       </div>
       <div className="af-meta-block">
@@ -221,16 +223,75 @@ function ListingOutput({ result }: { result: any }) {
   );
 }
 
-function PublisherOutput({ result }: { result: any }) {
+function PublisherOutput({ result, jobId }: { result: any; jobId: number }) {
   const listingId = result?.listing_id ?? "—";
   const title = result?.title ?? "";
   const price = result?.price_usd;
+  const tags: string[] = Array.isArray(result?.tags) ? result.tags : [];
+  const niche = typeof result?.niche === "string" ? result.niche : null;
+  const description = typeof result?.description === "string" ? result.description : "";
+  const hasAsset = typeof result?.asset_path === "string" && result.asset_path.length > 0;
+  const [svg, setSvg] = useState<string | null>(null);
+  const [svgLoaded, setSvgLoaded] = useState(false);
+  useEffect(() => {
+    if (!hasAsset) return;
+    let cancelled = false;
+    api
+      .readJobSvg(jobId)
+      .then((v) => {
+        if (!cancelled) {
+          setSvg(v);
+          setSvgLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSvgLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, hasAsset]);
   return (
-    <div className="af-body">
-      <div className="af-title">{title || `Listing #${listingId}`}</div>
-      <div className="af-meta">
-        <span>local #{listingId}</span>
-        {typeof price === "number" && <span>${price.toFixed(2)}</span>}
+    <div className="af-body af-body--designer">
+      <div className="af-preview">
+        {hasAsset ? (
+          svg ? (
+            <img
+              className="af-svg-tile"
+              src={svgDataUri(svg)}
+              alt="Final product preview"
+            />
+          ) : svgLoaded ? (
+            <div className="af-svg-tile is-empty">file missing</div>
+          ) : (
+            <div className="af-svg-tile is-loading">…</div>
+          )
+        ) : (
+          <div className="af-svg-tile is-empty" title="Listing published without an SVG asset (text-only listing)">
+            no svg
+          </div>
+        )}
+      </div>
+      <div className="af-meta-block">
+        <div className="af-title">{title || `Listing #${listingId}`}</div>
+        <div className="af-meta">
+          <span>local #{listingId}</span>
+          {typeof price === "number" && <span>${price.toFixed(2)}</span>}
+          {niche && <span>{niche}</span>}
+        </div>
+        {description && <div className="af-desc">{description}</div>}
+        {tags.length > 0 && (
+          <div className="af-chips">
+            {tags.slice(0, 8).map((t, i) => (
+              <span key={i} className="af-chip">
+                {t}
+              </span>
+            ))}
+            {tags.length > 8 && (
+              <span className="af-chip is-dim">+{tags.length - 8}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -404,7 +465,7 @@ function JobCard({
       ) : row.agent_role === "listing" ? (
         <ListingOutput result={result} />
       ) : row.agent_role === "publisher" ? (
-        <PublisherOutput result={result} />
+        <PublisherOutput result={result} jobId={row.id} />
       ) : row.agent_role === "cs" ? (
         <CsOutput result={result} />
       ) : row.agent_role === "cfo" ? (
@@ -495,9 +556,11 @@ const JobCardMemo = memo(JobCard);
 
 export interface ActivityFeedProps {
   alwaysOpen?: boolean;
+  /** Use the wide modal layout (bigger SVG tiles, larger type, more breathing room). */
+  wide?: boolean;
 }
 
-export default function ActivityFeed({ alwaysOpen }: ActivityFeedProps) {
+export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   const [rows, setRows] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -607,7 +670,7 @@ export default function ActivityFeed({ alwaysOpen }: ActivityFeedProps) {
   }, [rows]);
 
   return (
-    <div className={`af-panel${alwaysOpen ? " is-always-open" : ""}`}>
+    <div className={`af-panel${alwaysOpen ? " is-always-open" : ""}${wide ? " is-wide" : ""}`}>
       <div className="af-controls">
         <div className="af-chip-row">
           {ROLE_FILTERS.map((f) => (

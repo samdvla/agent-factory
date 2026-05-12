@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { JobRow } from "../../../api";
 
-const listRecentJobs = vi.fn();
-const rateJob = vi.fn(async () => undefined);
-const readJobSvg = vi.fn(async () => null);
+const listRecentJobs = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const rateJob = vi.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined);
+const readJobSvg = vi.fn<(...args: unknown[]) => Promise<string | null>>().mockResolvedValue(null);
 
 vi.mock("../../../api", () => ({
   api: {
@@ -154,6 +154,36 @@ describe("ActivityFeed", () => {
     await waitFor(() => {
       expect(screen.queryByText("good niche")).toBeNull();
       expect(screen.getByText("needs review")).toBeTruthy();
+    });
+  });
+
+  it("renders a publisher card with the final-product SVG, title, and tags", async () => {
+    readJobSvg.mockResolvedValue("<svg><path/></svg>");
+    listRecentJobs.mockResolvedValue([
+      row({
+        id: 20,
+        agent_role: "publisher",
+        result_json: JSON.stringify({
+          listing_id: 9999,
+          title: "Aesthetic Study Planner",
+          price_usd: 6.99,
+          tags: ["study", "planner", "printable"],
+          asset_path: "/tmp/20.svg",
+          niche: "study",
+          description: "Printable planner for students",
+        }),
+      }),
+    ]);
+    const { container } = render(<ActivityFeed />);
+    await waitFor(() => expect(readJobSvg).toHaveBeenCalledWith(20));
+    expect(screen.getByText("Aesthetic Study Planner")).toBeTruthy();
+    expect(screen.getByText("local #9999")).toBeTruthy();
+    expect(screen.getByText("planner")).toBeTruthy();
+    expect(screen.getByText("printable")).toBeTruthy();
+    await waitFor(() => {
+      const img = container.querySelector("img.af-svg-tile");
+      expect(img).toBeTruthy();
+      expect((img as HTMLImageElement).src).toMatch(/^data:image\/svg\+xml;base64,/);
     });
   });
 

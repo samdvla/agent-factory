@@ -4,7 +4,7 @@ import EtsyPanel from "./EtsyPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
-import ActivityFeed from "./ActivityFeed";
+import ActivityModal from "./ActivityModal";
 import { useFactoryStore } from "../state/factoryStore";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -464,6 +464,9 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   // Unrated jobs in the last 24h — drives the Activity badge
   const [unratedCount, setUnratedCount] = useState(0);
 
+  // ActivityModal open state
+  const [activityOpen, setActivityOpen] = useState(false);
+
   // Which card to scroll to after expanding
   const [pendingFocus, setPendingFocus] = useState<FocusTarget>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -567,6 +570,11 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   }, [pendingFocus, collapsed]);
 
   const handleFocusExpand = (target: FocusTarget) => {
+    // Activity is a modal, not a rail row — open it directly regardless of collapsed state.
+    if (target === "activity") {
+      setActivityOpen(true);
+      return;
+    }
     onToggle(false);
     if (target) {
       setPendingFocus(target);
@@ -575,15 +583,18 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
 
   if (collapsed) {
     return (
-      <CollapsedStrip
-        onFocusExpand={handleFocusExpand}
-        budget={budget}
-        etsyStatus={etsyStatus}
-        cycleCount={cycleCount}
-        promptOverrideCount={promptOverrideCount}
-        wealthCount={wealthCount}
-        unratedCount={unratedCount}
-      />
+      <>
+        <CollapsedStrip
+          onFocusExpand={handleFocusExpand}
+          budget={budget}
+          etsyStatus={etsyStatus}
+          cycleCount={cycleCount}
+          promptOverrideCount={promptOverrideCount}
+          wealthCount={wealthCount}
+          unratedCount={unratedCount}
+        />
+        <ActivityModal open={activityOpen} onClose={() => setActivityOpen(false)} />
+      </>
     );
   }
 
@@ -617,17 +628,36 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       {/* Etsy card */}
       <EtsyCard />
 
-      {/* Activity row — every job's output, ratable for training */}
-      <PanelRow
-        id="rail-activity"
-        label="Activity"
-        count={unratedCount}
-        accentColor="#b393f5"
-        emptyMessage="No outputs to review — start the supervisor or run a smoke-test cycle."
-        alwaysRenderChildren
-      >
-        <ActivityFeed alwaysOpen />
-      </PanelRow>
+      {/* Activity row — opens a full modal so cards have room to breathe */}
+      <div id="rail-activity" className="rail-panel-row-wrap">
+        <button
+          type="button"
+          className="rail-panel-row"
+          onClick={() => setActivityOpen(true)}
+          title="Open the Activity review"
+        >
+          <span className="rail-card-accent" style={{ background: "#b393f5" }} />
+          <span className="rail-panel-row-label">Activity</span>
+          <span
+            className={`rail-panel-row-count${unratedCount > 0 ? " is-live" : " is-zero"}`}
+          >
+            {unratedCount > 99 ? "99+" : unratedCount}
+          </span>
+          <svg
+            className="rail-panel-row-caret"
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            aria-hidden="true"
+          >
+            <polyline points="7 17 17 7" />
+            <polyline points="7 7 17 7 17 17" />
+          </svg>
+        </button>
+      </div>
 
       {/* Cycles row */}
       <PanelRow
@@ -661,6 +691,8 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       >
         <WealthLeaderboard alwaysOpen />
       </PanelRow>
+
+      <ActivityModal open={activityOpen} onClose={() => setActivityOpen(false)} />
     </aside>
   );
 }
