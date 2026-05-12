@@ -62,6 +62,21 @@ export type PromptHistoryEntry = {
   source?: string | null;
 };
 
+export type JobRow = {
+  id: number;
+  agent_role: string;
+  status: "done" | "errored";
+  payload_json: string;
+  result_json: string | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  scheduled_at: string;
+  rating: "up" | "down" | null;
+  rating_note: string | null;
+  rated_at: number | null;
+};
+
 export type ListingReviewInfo = {
   state: string;
   title: string;
@@ -137,4 +152,21 @@ export const api = {
   budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
   startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
   resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
+  listRecentJobs: (opts?: {
+    limit?: number;
+    role?: string | null;
+    sinceUnix?: number | null;
+  }): Promise<JobRow[]> =>
+    invoke("cmd_list_recent_jobs", {
+      limit: opts?.limit ?? 50,
+      role: opts?.role ?? null,
+      sinceUnix: opts?.sinceUnix ?? null,
+    }),
+  rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>
+    invoke<void>("cmd_rate_job", {
+      args: { job_id: jobId, rating, note: note ?? null },
+    }),
+  readJobSvg: (jobId: number): Promise<string | null> =>
+    invoke("cmd_read_job_svg", { jobId }),
+  unratedJobCount: (): Promise<number> => invoke("cmd_unrated_job_count"),
 };

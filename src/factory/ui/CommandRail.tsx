@@ -4,7 +4,9 @@ import EtsyPanel from "./EtsyPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
+import ActivityFeed from "./ActivityFeed";
 import { useFactoryStore } from "../state/factoryStore";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /* ─── Budget helpers ─────────────────────────────────────────────────── */
 function fmt(v: number) {
@@ -115,13 +117,14 @@ function EtsyCard() {
   );
 }
 
-/* ─── Rail row for Cycles / Prompts / Wealth ─────────────────────────── */
+/* ─── Rail row for Cycles / Prompts / Wealth / Activity ──────────────── */
 function PanelRow({
   id,
   label,
   count,
   accentColor,
   emptyMessage,
+  alwaysRenderChildren,
   children,
 }: {
   id: string;
@@ -129,6 +132,9 @@ function PanelRow({
   count: number;
   accentColor: string;
   emptyMessage: string;
+  /** If true, always render `children` regardless of count. The badge still
+   *  shows count, but the panel body uses the children's own empty state. */
+  alwaysRenderChildren?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -173,7 +179,7 @@ function PanelRow({
       </button>
       {open && (
         <div className="rail-panel-row-popover">
-          {count === 0 ? (
+          {count === 0 && !alwaysRenderChildren ? (
             <div className="rail-panel-empty-state">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" />
@@ -193,7 +199,7 @@ function PanelRow({
 
 /* ─── Collapsed icon strip ───────────────────────────────────────────── */
 
-type FocusTarget = "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null;
+type FocusTarget = "budget" | "etsy" | "activity" | "cycles" | "prompts" | "wealth" | null;
 
 interface CollapsedStripProps {
   onFocusExpand: (target: FocusTarget) => void;
@@ -202,6 +208,7 @@ interface CollapsedStripProps {
   cycleCount: number;
   promptOverrideCount: number;
   wealthCount: number;
+  unratedCount: number;
 }
 
 function CollapsedStrip({
@@ -211,6 +218,7 @@ function CollapsedStrip({
   cycleCount,
   promptOverrideCount,
   wealthCount,
+  unratedCount,
 }: CollapsedStripProps) {
   const budgetTone = budget ? tone(budget.today_usd, budget.daily_cap_usd) : "ok";
   const budgetPct = budget ? pct(budget.today_usd, budget.daily_cap_usd) : 0;
@@ -299,6 +307,36 @@ function CollapsedStrip({
           aria-hidden="true"
         />
         <span className="rail-tip">{etsyTip}</span>
+      </button>
+
+      {/* Activity — count badge for unrated outputs */}
+      <button
+        type="button"
+        className="rail-strip-btn"
+        onClick={() => onFocusExpand("activity")}
+        aria-label="Activity"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          aria-hidden="true"
+        >
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </svg>
+        {unratedCount > 0 && (
+          <span className="rail-strip-badge" aria-label={`${unratedCount} unrated`}>
+            {unratedCount > 99 ? "99+" : unratedCount}
+          </span>
+        )}
+        <span className="rail-tip">
+          {unratedCount > 0
+            ? `${unratedCount} output${unratedCount === 1 ? "" : "s"} waiting for review`
+            : "No new outputs to review"}
+        </span>
       </button>
 
       {/* Cycles — count badge */}
@@ -423,11 +461,11 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   const [etsyStatus, setEtsyStatus] = useState<EtsyStatus | null>(null);
   // Prompt override count
   const [promptOverrideCount, setPromptOverrideCount] = useState(0);
+  // Unrated jobs in the last 24h — drives the Activity badge
+  const [unratedCount, setUnratedCount] = useState(0);
 
   // Which card to scroll to after expanding
-  const [pendingFocus, setPendingFocus] = useState<
-    "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null
-  >(null);
+  const [pendingFocus, setPendingFocus] = useState<FocusTarget>(null);
   const railRef = useRef<HTMLElement>(null);
 
   // Poll budget every 5s
@@ -474,6 +512,35 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     return () => clearInterval(id);
   }, [refreshPromptCount]);
 
+  // Unrated count: poll every 15s AND bump on job_completed/job_failed.
+  const refreshUnratedCount = useCallback(async () => {
+    try {
+      const n = await api.unratedJobCount();
+      setUnratedCount(n);
+    } catch {
+      // Silent during boot / non-Tauri
+    }
+  }, []);
+  useEffect(() => {
+    refreshUnratedCount();
+    const id = setInterval(refreshUnratedCount, 15000);
+    let unlisten: UnlistenFn | undefined;
+    listen<{ kind: string }>("supervisor.event", (e) => {
+      if (
+        e.payload.kind === "job_completed" ||
+        e.payload.kind === "job_failed"
+      ) {
+        refreshUnratedCount();
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      clearInterval(id);
+      unlisten?.();
+    };
+  }, [refreshUnratedCount]);
+
   // When pendingFocus is set and rail is expanded, scroll + flash the target
   useEffect(() => {
     if (!pendingFocus || collapsed) return;
@@ -482,6 +549,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       const idMap: Record<string, string> = {
         budget: "rail-budget",
         etsy: "rail-etsy",
+        activity: "rail-activity",
         cycles: "rail-cycles",
         prompts: "rail-prompts",
         wealth: "rail-wealth",
@@ -498,7 +566,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     return () => cancelAnimationFrame(raf);
   }, [pendingFocus, collapsed]);
 
-  const handleFocusExpand = (target: "budget" | "etsy" | "cycles" | "prompts" | "wealth" | null) => {
+  const handleFocusExpand = (target: FocusTarget) => {
     onToggle(false);
     if (target) {
       setPendingFocus(target);
@@ -514,6 +582,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
         cycleCount={cycleCount}
         promptOverrideCount={promptOverrideCount}
         wealthCount={wealthCount}
+        unratedCount={unratedCount}
       />
     );
   }
@@ -547,6 +616,18 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
 
       {/* Etsy card */}
       <EtsyCard />
+
+      {/* Activity row — every job's output, ratable for training */}
+      <PanelRow
+        id="rail-activity"
+        label="Activity"
+        count={unratedCount}
+        accentColor="#b393f5"
+        emptyMessage="No outputs to review — start the supervisor or run a smoke-test cycle."
+        alwaysRenderChildren
+      >
+        <ActivityFeed alwaysOpen />
+      </PanelRow>
 
       {/* Cycles row */}
       <PanelRow

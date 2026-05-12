@@ -8,7 +8,7 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 600
 
 SVG_MODEL = "claude-sonnet-4-6"
-SVG_MAX_TOKENS = 4000
+SVG_MAX_TOKENS = 16000
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
@@ -128,7 +128,9 @@ def _build_svg_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         "Output ONLY the SVG markup with no preamble, no explanation, no markdown "
         "fences. The SVG must use viewBox 0 0 800 800, have a transparent or "
         "palette-aligned background, and use simple shape primitives "
-        "(path, rect, circle, polygon, line, g, text). Keep it under 100 elements. "
+        "(path, rect, circle, polygon, line, g, text). HARD LIMITS: at most 40 "
+        "shape elements total, total markup under 6000 characters, finish with "
+        "the closing </svg> tag. Prefer a few bold shapes over many small ones. "
         "Match the requested style, palette, and niche."
     )
     niche = ""

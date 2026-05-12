@@ -9,6 +9,23 @@ use std::time::Duration;
 use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 
+/// Resolve the absolute path to the workspace's `workers/` directory.
+/// In dev the Tauri binary runs with CWD=src-tauri (cargo package root), so
+/// `workers/` lives one level up. In a normal run (CWD=project root) it's
+/// just `./workers`. We probe both and return the first one that exists; if
+/// neither does we fall back to `./workers` so the error message stays
+/// recognizable.
+fn workers_root_path() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let candidates = [cwd.join("workers"), cwd.join("..").join("workers")];
+    for c in &candidates {
+        if c.is_dir() {
+            return c.canonicalize().unwrap_or_else(|_| c.clone());
+        }
+    }
+    cwd.join("workers")
+}
+
 pub struct AppState {
     pub pool: SqlitePool,
     pub bus: EventBus,
@@ -174,13 +191,19 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         monthly_usd: read_cap("monthly_budget_usd", 20.00),
     };
     let api_key_env: (String, String) = ("ANTHROPIC_API_KEY".into(), effective_key.clone());
+    // Resolve the absolute path to the `workers/` dir. The Tauri dev binary
+    // runs with CWD=src-tauri (cargo's package root), so relative
+    // "workers/foo" would resolve to src-tauri/workers/foo and fail with
+    // "No module named foo". Anchor to the project root instead.
+    let workers_root = workers_root_path();
     let make_spec = {
         let api_key_env = api_key_env.clone();
         let effective_base_url = effective_base_url.clone();
+        let workers_root = workers_root.clone();
         move |role: &str, worker_dir: &str| {
             let mut env = vec![
                 api_key_env.clone(),
-                ("PYTHONPATH".into(), format!("workers/{}", worker_dir)),
+                ("PYTHONPATH".into(), workers_root.join(worker_dir).to_string_lossy().into_owned()),
             ];
             if let Some(ref u) = effective_base_url {
                 env.push(("ANTHROPIC_BASE_URL".into(), u.clone()));
@@ -198,7 +221,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         {
             let mut env = vec![
                 api_key_env.clone(),
-                ("PYTHONPATH".into(), "workers/hello".into()),
+                ("PYTHONPATH".into(), workers_root.join("hello").to_string_lossy().into_owned()),
             ];
             if let Some(ref u) = effective_base_url {
                 env.push(("ANTHROPIC_BASE_URL".into(), u.clone()));
@@ -825,6 +848,10 @@ pub async fn cmd_start_smoke_test(
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     use chrono::Utc;
+    // Clear any lingering pause flag from a previous cycle that timed out or
+    // wasn't manually resumed — without this, enforce_caps would cap every
+    // worker on SmokePause and no job would ever claim.
+    let _ = secrets::delete("smoke_pause_until");
     // Force a clean supervisor restart so workers are guaranteed alive.
     // The stored handle can be stale (workers crashed but handle wasn't
     // cleared) — short-circuiting on is_some() in cmd_start_supervisor
@@ -903,4 +930,201 @@ pub async fn cmd_etsy_discard_draft(
             reason: "discarded by user (regenerate requested)".into(),
         });
     Ok(())
+}
+
+// ─── Activity feed: jobs + per-job ratings ──────────────────────────────
+
+#[derive(Serialize)]
+pub struct JobRow {
+    pub id: i64,
+    pub agent_role: String,
+    pub status: String,
+    pub payload_json: String,
+    pub result_json: Option<String>,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub scheduled_at: String,
+    /// Operator rating ('up' | 'down'), if any.
+    pub rating: Option<String>,
+    pub rating_note: Option<String>,
+    pub rated_at: Option<i64>,
+}
+
+/// Recent jobs for the Activity feed. Returns done/errored jobs newest-first,
+/// optionally filtered by role and a `since_unix` timestamp (seconds).
+/// Joined with `job_feedback` so the UI can show each row's current rating
+/// in one round trip.
+#[tauri::command]
+pub async fn cmd_list_recent_jobs(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+    role: Option<String>,
+    since_unix: Option<i64>,
+) -> Result<Vec<JobRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    // Build the query with optional WHERE filters. We always restrict to
+    // terminal states so the feed only shows things the operator can
+    // meaningfully rate.
+    let mut sql = String::from(
+        "SELECT j.id, j.agent_role, j.status, j.payload_json, j.result_json, j.error, \
+         j.started_at, j.finished_at, j.scheduled_at, \
+         f.rating, f.note, f.created_at \
+         FROM jobs j \
+         LEFT JOIN job_feedback f ON f.job_id = j.id AND f.rater = 'operator' \
+         WHERE j.project_id = ? AND j.status IN ('done','errored')",
+    );
+    if role.is_some() {
+        sql.push_str(" AND j.agent_role = ?");
+    }
+    if since_unix.is_some() {
+        sql.push_str(" AND (strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ?");
+    }
+    sql.push_str(" ORDER BY j.id DESC LIMIT ?");
+
+    let mut q = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        ),
+    >(&sql)
+    .bind(state.project_id);
+    if let Some(r) = role.as_ref() {
+        q = q.bind(r);
+    }
+    if let Some(s) = since_unix {
+        q = q.bind(s);
+    }
+    q = q.bind(limit);
+
+    let rows = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| JobRow {
+            id: r.0,
+            agent_role: r.1,
+            status: r.2,
+            payload_json: r.3,
+            result_json: r.4,
+            error: r.5,
+            started_at: r.6,
+            finished_at: r.7,
+            scheduled_at: r.8,
+            rating: r.9,
+            rating_note: r.10,
+            rated_at: r.11,
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+pub struct RateJobArgs {
+    pub job_id: i64,
+    /// "up", "down", or null to clear the rating.
+    pub rating: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Upsert a rating on a completed job. Pass `rating: null` to clear.
+/// `rater` is fixed to 'operator' for now; a future boss-agent can use a
+/// different value.
+#[tauri::command]
+pub async fn cmd_rate_job(
+    state: State<'_, Arc<AppState>>,
+    args: RateJobArgs,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().timestamp();
+    match args.rating.as_deref() {
+        Some("up") | Some("down") => {
+            let rating = args.rating.unwrap();
+            sqlx::query(
+                "INSERT INTO job_feedback (job_id, rating, note, rater, created_at) \
+                 VALUES (?, ?, ?, 'operator', ?) \
+                 ON CONFLICT(job_id, rater) DO UPDATE SET \
+                   rating = excluded.rating, note = excluded.note, created_at = excluded.created_at",
+            )
+            .bind(args.job_id)
+            .bind(rating)
+            .bind(args.note)
+            .bind(now)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        None => {
+            sqlx::query("DELETE FROM job_feedback WHERE job_id = ? AND rater = 'operator'")
+                .bind(args.job_id)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Some(other) => return Err(format!("invalid rating '{other}' — must be 'up' or 'down'")),
+    }
+    Ok(())
+}
+
+/// Read the SVG asset produced by a designer job, looked up by job id.
+/// The designer worker stores the path in its result JSON at
+/// `asset.asset_path` and (for top-level publisher handoffs) `asset_path`.
+/// Returns `None` if the job has no recorded asset, the file is missing,
+/// or the job isn't a designer/publisher one.
+#[tauri::command]
+pub async fn cmd_read_job_svg(
+    state: State<'_, Arc<AppState>>,
+    job_id: i64,
+) -> Result<Option<String>, String> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
+    )
+    .bind(job_id)
+    .bind(state.project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some((Some(result_json),)) = row else { return Ok(None) };
+    let value: serde_json::Value = match serde_json::from_str(&result_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let path = value
+        .get("asset")
+        .and_then(|a| a.get("asset_path"))
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("asset_path").and_then(|v| v.as_str()));
+    let Some(path) = path else { return Ok(None) };
+    match std::fs::read_to_string(path) {
+        Ok(svg) => Ok(Some(svg)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Count of jobs in the last 24 h that don't yet have an operator rating —
+/// used by the CommandRail badge to nudge the boss to review new outputs.
+#[tauri::command]
+pub async fn cmd_unrated_job_count(state: State<'_, Arc<AppState>>) -> Result<i64, String> {
+    let cutoff = chrono::Utc::now().timestamp() - 24 * 3600;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM jobs j \
+         LEFT JOIN job_feedback f ON f.job_id = j.id AND f.rater = 'operator' \
+         WHERE j.project_id = ? AND j.status IN ('done','errored') \
+         AND (strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ? \
+         AND f.id IS NULL",
+    )
+    .bind(state.project_id)
+    .bind(cutoff)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(count)
 }

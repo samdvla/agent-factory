@@ -12,10 +12,11 @@ use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 
 /// Default Etsy taxonomy id used when the worker doesn't supply one.
-/// 68887 corresponds to "Art & Collectibles > Prints > Digital Prints" — a
+/// 2078 corresponds to "Art & Collectibles > Prints > Digital Prints" — a
 /// reasonable home for the digital-download products this pipeline currently
-/// produces.
-pub const DEFAULT_TAXONOMY_ID: i64 = 68887;
+/// produces. (Verified live against Etsy's seller-taxonomy endpoint —
+/// 68887 was the legacy id and is now rejected with `Invalid taxonomy_id`.)
+pub const DEFAULT_TAXONOMY_ID: i64 = 2078;
 
 /// Default daily cap on real Etsy publishes per project.
 pub const DEFAULT_DAILY_CAP: i64 = 3;

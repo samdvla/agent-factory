@@ -140,6 +140,10 @@ pub fn run() {
             commands::cmd_budget_status,
             commands::cmd_start_smoke_test,
             commands::cmd_resume_from_smoke_test,
+            commands::cmd_list_recent_jobs,
+            commands::cmd_rate_job,
+            commands::cmd_read_job_svg,
+            commands::cmd_unrated_job_count,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
