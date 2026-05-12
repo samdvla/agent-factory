@@ -30,6 +30,31 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
     if (occupants.includes("awaiting")) return "awaiting";
     return "idle";
   });
+
+  // ALL hooks must run before any early return — React requires a stable
+  // hook order across renders. Previously these two hooks sat below the
+  // `if (detailLevel === "hidden") return null` guard, so toggling a room
+  // in/out of the viewport during drag changed the hook count between
+  // renders and threw "Rendered fewer hooks than expected" — taking down
+  // the entire React tree and blanking the whole window.
+  const [, force] = useState({});
+  const createdAt = room?.createdAt ?? 0;
+  const isDissolving = room?.dissolving ?? false;
+  useEffect(() => {
+    if (!createdAt || isDissolving) return;
+    let raf = 0;
+    const tick = () => {
+      if (Date.now() - createdAt >= 600) {
+        force({});
+        return;
+      }
+      force({});
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [createdAt, isDissolving]);
+
   if (!room) return null;
   // Off-viewport rooms render as nothing — saves all SVG paint for the cell.
   if (detailLevel === "hidden") return null;
@@ -117,28 +142,6 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
   const age = room.createdAt ? now - room.createdAt : Infinity;
   const isSpawning = age < 600 && !room.dissolving && room.createdAt !== 0;
   const opacity = room.dissolving ? 0 : (isSpawning ? 0 : 1);
-
-  // Spawn fade-in: keep re-rendering until `age` crosses 600ms so isSpawning
-  // can flip to false on its own. The previous one-shot setTimeout fired once
-  // then the [isSpawning] effect never re-armed (value unchanged across
-  // renders), which left dynamically-hired rooms stuck at opacity 0 — the
-  // Printify Operator's "Ops Bay" was invisible because of this.
-  const [, force] = useState({});
-  useEffect(() => {
-    if (!room.createdAt || room.dissolving) return;
-    const start = room.createdAt;
-    let raf = 0;
-    const tick = () => {
-      if (Date.now() - start >= 600) {
-        force({});
-        return;
-      }
-      force({});
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [room.createdAt, room.dissolving]);
 
   return (
     <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
