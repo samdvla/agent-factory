@@ -4553,3 +4553,59 @@ button.etsy-pill {
   letter-spacing: 0.04em;
   text-transform: lowercase;
 }
+
+/* Floating diagnostic: shows whether supervisor.event is actually reaching
+   the webview. Lives top-right of the floor, monotone unless an event just
+   landed (then it flashes green for 2s). */
+.event-beacon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(7, 9, 12, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: 11px/1 var(--font-mono);
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  transition: border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+.event-beacon.is-fresh {
+  border-color: var(--accent-ok);
+  color: var(--ink-0);
+  box-shadow: 0 0 24px rgba(94, 208, 168, 0.45);
+}
+.event-beacon-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.event-beacon.is-fresh .event-beacon-dot {
+  background: var(--accent-ok);
+  box-shadow: 0 0 8px var(--accent-ok);
+}
+.event-beacon-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+}
+.event-beacon.is-fresh .event-beacon-label { color: var(--accent-ok); }
+.event-beacon-count {
+  background: var(--bg-3);
+  color: var(--ink-0);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+.event-beacon-status {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.event-beacon.is-fresh .event-beacon-status { color: var(--ink-0); }

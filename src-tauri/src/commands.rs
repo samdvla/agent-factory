@@ -303,16 +303,28 @@ pub async fn cmd_enqueue(
 }
 
 pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
+    use tauri::Manager;
     let mut rx = bus.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(evt) => {
-                    let _ = app.emit("supervisor.event", evt);
+                    // Emit to ALL listeners (frontend, plugins). Also explicitly
+                    // emit to the "main" webview window to cover the case where
+                    // app.emit() doesn't fan out before the window is fully
+                    // mounted. If either fails, log so debug builds surface it.
+                    if let Err(e) = app.emit("supervisor.event", &evt) {
+                        tracing::warn!("app.emit supervisor.event failed: {e}");
+                    }
+                    if let Some(w) = app.get_webview_window("main") {
+                        if let Err(e) = w.emit("supervisor.event", &evt) {
+                            tracing::warn!("main.emit supervisor.event failed: {e}");
+                        }
+                    }
                 }
                 // Receiver is behind. Re-subscribe transparently and keep going
                 // — losing the entire forwarder for the session over a backlog
-                // burst was the real "agents stay still" bug.
+                // burst was the original "agents stay still" bug.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!("supervisor.event forwarder lagged {n} msgs; resuming");
                     continue;
