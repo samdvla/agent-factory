@@ -281,6 +281,13 @@ export function applySupervisorEvent(
       if (typeof rev === "number" && rev > 0) {
         store.addRevenue("publisher", rev);
       }
+      // A real sale also rewards the roles that built the listing — gives
+      // visible stars without the boss having to thumbs-up every cycle.
+      // We don't track listing→roles attribution precisely yet, so the
+      // pipeline roles all earn a star on every real receipt.
+      ["publisher", "designer", "listing", "research"].forEach((r) => {
+        store.awardStar(r);
+      });
       store.pushTicker({
         ts: Date.now(),
         source: "etsy",

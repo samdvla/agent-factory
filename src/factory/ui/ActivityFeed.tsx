@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, createContext,
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type JobRow } from "../../api";
+import { useFactoryStore } from "../state/factoryStore";
 
 /** Context so deeply-nested role renderers can pop the SVG lightbox without prop drilling. */
 const SvgLightboxCtx = createContext<((svg: string, label: string) => void) | null>(null);
@@ -671,18 +672,23 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   const rate = useCallback(
     async (jobId: number, rating: "up" | "down" | null, note?: string | null) => {
       // Optimistic update: patch the row, then call backend, then refetch.
+      let ratedRole: string | null = null;
       setRows((prev) =>
-        prev.map((r) =>
-          r.id === jobId
-            ? {
-                ...r,
-                rating,
-                rating_note: note ?? r.rating_note ?? null,
-                rated_at: Math.floor(Date.now() / 1000),
-              }
-            : r,
-        ),
+        prev.map((r) => {
+          if (r.id !== jobId) return r;
+          ratedRole = r.agent_role;
+          return {
+            ...r,
+            rating,
+            rating_note: note ?? r.rating_note ?? null,
+            rated_at: Math.floor(Date.now() / 1000),
+          };
+        }),
       );
+      // Thumbs-up earns the role a reward star. Down or null doesn't.
+      if (rating === "up" && ratedRole) {
+        useFactoryStore.getState().awardStar(ratedRole);
+      }
       try {
         await api.rateJob(jobId, rating, note ?? null);
       } catch (e) {

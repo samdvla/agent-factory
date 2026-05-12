@@ -159,6 +159,10 @@ export type FactoryStore = {
   recentCycles: CycleSummary[];
   /** Lifetime wealth per role, populated from cmd_list_wealth. */
   wealthByRole: Record<string, AgentWealth>;
+  /** Reward stars rendered on each avatar's chest. Stars go 1..10 in the
+   *  current tier; awarding past 10 resets to 1 in the next tier color.
+   *  Tiers: 0 bronze → 1 silver → 2 gold → 3 platinum → 4 diamond. */
+  rewardsByRole: Record<string, { stars: number; tier: number }>;
   /** Monotonic counter bumped whenever Etsy publish state changes, so panels can refetch. */
   etsyPublishesRev: number;
   /** Last 5 receipts ingested via the real Etsy receipts poller. Newest first. */
@@ -201,6 +205,10 @@ export type FactoryStore = {
   bumpActivity: () => void;
   setAgentTravel: (roleId: string, target: FactoryStore["agentTravel"][string] | null) => void;
   addRevenue: (roleId: string, usd: number) => void;
+  /** Award one reward star to a role. At 10 stars + 1, the count resets to
+   *  1 and the tier advances; tier is capped at 4 (diamond). No-op for
+   *  unknown roles so callers don't have to pre-check. */
+  awardStar: (roleId: string) => void;
 
   fireHireEvent: (e: HireEvent) => void;
   dissolveAgent: (roleId: string, opts?: { force?: boolean }) => void;

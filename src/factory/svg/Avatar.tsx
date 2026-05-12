@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Role, AgentVisualState } from "../state/types";
 
 function RoleWorkFx({ roleId }: { roleId: string }) {
@@ -88,8 +89,30 @@ const STATE_GLYPH: Record<AgentVisualState, string> = {
 const W = 32;
 const H = 44;
 
+// 5 tiers × 2 (filled vs empty slot). Empty slots are barely visible so the
+// chest layout stays consistent as stars accumulate.
+const TIER_COLORS = ["#cd7f32", "#c0c0c0", "#ffd700", "#b9f2ff", "#d8b4ff"];
+const TIER_NAMES = ["bronze", "silver", "gold", "platinum", "diamond"];
+
+/**
+ * 5-point star SVG path. Even points at radius `r`, odd points at `r*0.42`.
+ * Pre-rotated so the top point is straight up.
+ */
+function starPath(cx: number, cy: number, r: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (i * Math.PI) / 5 - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.42;
+    const x = cx + rad * Math.cos(a);
+    const y = cy + rad * Math.sin(a);
+    pts.push(`${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`);
+  }
+  pts.push("Z");
+  return pts.join(" ");
+}
+
 export default function Avatar({
-  role, state, onClick, sizeScale = 1, lifetimeNet,
+  role, state, onClick, sizeScale = 1, lifetimeNet, rewards,
 }: {
   role: Role;
   state: AgentVisualState;
@@ -97,6 +120,8 @@ export default function Avatar({
   sizeScale?: number;
   /** Lifetime net P&L for this role, surfaced in the hover tooltip. */
   lifetimeNet?: number;
+  /** Current reward state — drives the chest stars + tier color. */
+  rewards?: { stars: number; tier: number };
 }) {
   if (state === "killed") return null;
 
@@ -158,6 +183,36 @@ export default function Avatar({
         <rect x={0.8}  y={-12} width={2.2} height={14} rx={1} fill="#1f2a37" />
         <rect x={-torsoW / 2}       y={-torsoH - 12} width={torsoW}     height={torsoH + 2} rx={2.5} fill="#2a3849" />
         <rect x={-torsoW / 2 + 1.5} y={-torsoH - 9}  width={torsoW - 3} height={torsoH - 6} rx={1.5} fill={c} fillOpacity={0.85} />
+        {rewards && rewards.stars > 0 && (() => {
+          // 5×2 grid centered in the chest rect. Chest spans x ∈
+          // [-torsoW/2+1.5, torsoW/2-1.5] and y ∈ [-torsoH-9, -15]; star
+          // size + spacing keeps everything inside that with a small inset.
+          const STAR_R = 0.45;
+          const COL_W = (torsoW - 4) / 5;
+          const ROW_H = 1.5;
+          const x0 = -torsoW / 2 + 2 + COL_W / 2;
+          const cyTop = -torsoH - 7 + ROW_H / 2;
+          const color = TIER_COLORS[Math.min(rewards.tier, TIER_COLORS.length - 1)];
+          const slots: ReactNode[] = [];
+          for (let i = 0; i < 10; i++) {
+            const col = i % 5;
+            const row = Math.floor(i / 5);
+            const sx = x0 + col * COL_W;
+            const sy = cyTop + row * ROW_H;
+            const filled = i < rewards.stars;
+            slots.push(
+              <path
+                key={i}
+                d={starPath(sx, sy, STAR_R)}
+                fill={filled ? color : "#0e1620"}
+                fillOpacity={filled ? 0.95 : 0.5}
+                stroke={filled ? color : "#1f2a37"}
+                strokeWidth={0.08}
+              />
+            );
+          }
+          return <g aria-label={`${rewards.stars} ${TIER_NAMES[Math.min(rewards.tier, TIER_NAMES.length - 1)]} stars`}>{slots}</g>;
+        })()}
         {isAuth && (
           <rect x={-torsoW / 2 - 1} y={-torsoH - 10} width={torsoW + 2} height={3} rx={0.5} fill="#0e1620" />
         )}

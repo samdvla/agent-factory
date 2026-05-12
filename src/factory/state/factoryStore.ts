@@ -37,6 +37,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   budgetCapped: false,
   revenueTodayUsd: 0,
   revenueByRole: {},
+  rewardsByRole: {},
   handoffs: [],
   lastActivityAt: 0,
   realActivityAt: {},
@@ -118,6 +119,16 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     },
     lastActivityAt: Date.now(),
   })),
+
+  awardStar: (roleId) => set((s) => {
+    if (!roleId) return {};
+    const cur = s.rewardsByRole[roleId] ?? { stars: 0, tier: 0 };
+    // 10 → 1 of next tier; otherwise just increment. Tier caps at 4 (diamond).
+    const next = cur.stars >= 10
+      ? { stars: 1, tier: Math.min(cur.tier + 1, 4) }
+      : { stars: cur.stars + 1, tier: cur.tier };
+    return { rewardsByRole: { ...s.rewardsByRole, [roleId]: next } };
+  }),
 
   fireHireEvent: (e) => fireHireEventImpl(set, get, e),
   dissolveAgent: (roleId, opts) => dissolveAgentImpl(set, get, roleId, opts),

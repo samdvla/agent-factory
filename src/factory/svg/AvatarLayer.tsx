@@ -39,6 +39,7 @@ export default function AvatarLayer({
   const selectAgent = useFactoryStore((s) => s.selectAgent);
   const roles = useFactoryStore((s) => s.roles);
   const wealthByRole = useFactoryStore((s) => s.wealthByRole);
+  const rewardsByRole = useFactoryStore((s) => s.rewardsByRole);
   const layerRef = useRef<HTMLDivElement>(null);
   const [, force] = useState<object>({});
 
@@ -283,6 +284,7 @@ export default function AvatarLayer({
               state={moving || isTraveling ? "walking" : agent.state}
               sizeScale={zoom}
               lifetimeNet={wealthByRole[role.id]?.lifetime_net_usd}
+              rewards={rewardsByRole[role.id]}
               onClick={() => selectAgent(role.id)}
             />
             {agent.state === "materializing" && (
