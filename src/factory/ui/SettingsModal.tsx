@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type EtsyStatus } from "../../api";
+import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                                */
@@ -374,6 +375,11 @@ function PrintifySection() {
     const next = !status.podEnabled;
     await api.setSecret("pod_enabled", String(next));
     setStatus((s) => ({ ...s, podEnabled: next }));
+    // Toggling POD materializes (or dissolves) the Printify Operator on the
+    // floor. The dynamic hire system places a fresh "Ops Bay" room automatically
+    // via placeNewRoom (up to the 10×10 grid limit).
+    if (next) hirePrintifyOperator();
+    else dissolvePrintifyOperator();
   };
 
   return (

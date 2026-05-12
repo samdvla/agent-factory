@@ -56,6 +56,37 @@ describe("hire resolver", () => {
     expect(useFactoryStore.getState().rooms.strategy?.dissolving).toBeFalsy();
   });
 
+  it("force: true bypasses permanence — used by user-toggle unhire (e.g. Printify off)", () => {
+    // Hire a founding-reason specialist; resolver marks it permanent.
+    useFactoryStore.getState().fireHireEvent({
+      id: "printify-test",
+      ts: Date.now(),
+      roleSpec: {
+        name: "Printify Operator",
+        title: "POD",
+        primaryTag: "ops",
+        archetype: "office",
+        model: "Sonnet",
+      },
+      justification: { reason: "founding", metric: "test" },
+    });
+    const role = Object.values(useFactoryStore.getState().roles).find(
+      (r) => r.name === "Printify Operator",
+    );
+    expect(role).toBeDefined();
+    expect(role!.permanent).toBe(true);
+
+    // Plain dissolveAgent: no-op (permanent guard).
+    useFactoryStore.getState().dissolveAgent(role!.id);
+    vi.advanceTimersByTime(1500);
+    expect(useFactoryStore.getState().roles[role!.id]).toBeDefined();
+
+    // force: true bypasses the guard.
+    useFactoryStore.getState().dissolveAgent(role!.id, { force: true });
+    vi.advanceTimersByTime(2000);
+    expect(useFactoryStore.getState().roles[role!.id]).toBeUndefined();
+  });
+
   // === Slice J.B: founding-8 + wealth-aware dissolution ===
 
   it("dissolution_protects_founding_8", () => {

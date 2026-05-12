@@ -9,6 +9,7 @@ import OnboardingWizard from "./factory/ui/OnboardingWizard";
 import SettingsModal from "./factory/ui/SettingsModal";
 import CommandRail from "./factory/ui/CommandRail";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
+import { usePrintifyOperatorBoot } from "./hooks/usePrintifyOperator";
 import { useDemoFloor } from "./hooks/useDemoFloor";
 import { useFactoryStore } from "./factory/state/factoryStore";
 import { api } from "./api";
@@ -19,6 +20,7 @@ const RAIL_STORAGE_KEY = "agentFactory.rail.collapsed";
 
 export default function App() {
   useSupervisorEventsToStore();
+  usePrintifyOperatorBoot();
   const sandbox = useFactoryStore((s) => s.sandbox);
   useDemoFloor(sandbox);
 

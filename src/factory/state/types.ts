@@ -203,7 +203,7 @@ export type FactoryStore = {
   addRevenue: (roleId: string, usd: number) => void;
 
   fireHireEvent: (e: HireEvent) => void;
-  dissolveAgent: (roleId: string) => void;
+  dissolveAgent: (roleId: string, opts?: { force?: boolean }) => void;
   idleDissolveTick: (now: number, idleThresholdMs?: number) => void;
 
   setRecentCycles: (cycles: CycleSummary[]) => void;

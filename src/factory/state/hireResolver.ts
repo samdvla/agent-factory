@@ -153,11 +153,16 @@ export function fireHireEvent(set: SetFn, get: GetFn, e: HireEvent): void {
   }, 600);
 }
 
-export function dissolveAgent(set: SetFn, get: GetFn, roleId: string): void {
+export function dissolveAgent(
+  set: SetFn,
+  get: GetFn,
+  roleId: string,
+  opts: { force?: boolean } = {},
+): void {
   const state = get();
   const role = state.roles[roleId];
   if (!role) return;
-  if (role.permanent) return;
+  if (role.permanent && !opts.force) return;
 
   set((s) => ({
     agents: {

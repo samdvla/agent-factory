@@ -120,7 +120,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   })),
 
   fireHireEvent: (e) => fireHireEventImpl(set, get, e),
-  dissolveAgent: (roleId) => dissolveAgentImpl(set, get, roleId),
+  dissolveAgent: (roleId, opts) => dissolveAgentImpl(set, get, roleId, opts),
   idleDissolveTick: (now, idleThresholdMs) => idleDissolveTickImpl(set, get, now, idleThresholdMs),
 
   setRecentCycles: (cycles) => set({ recentCycles: cycles }),
