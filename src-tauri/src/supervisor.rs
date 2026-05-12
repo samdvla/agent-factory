@@ -352,6 +352,36 @@ async fn run_worker_loop(
                                             }
                                         });
                                     }
+
+                                    // Continuous-cycle hook: when autonomous loops are
+                                    // enabled and a CFO cycle just closed, queue the
+                                    // next orchestrator job after a small dwell so the
+                                    // floor never goes idle. Smoke-test cycles set
+                                    // `smoke_cycle_id` and intentionally pause after
+                                    // one cycle — we honor that and skip re-firing.
+                                    let auto_on = crate::secrets::get("autonomous_loops_enabled")
+                                        .ok().flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    let in_smoke = crate::secrets::get("smoke_cycle_id")
+                                        .ok().flatten()
+                                        .filter(|v| !v.is_empty())
+                                        .is_some();
+                                    if auto_on && !in_smoke {
+                                        let pool_next = pool.clone();
+                                        let project_id_next = project_id;
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                                            if let Err(e) = queue::enqueue(
+                                                &pool_next,
+                                                project_id_next,
+                                                "orchestrator",
+                                                json!({"trigger": "continuous"}),
+                                            ).await {
+                                                tracing::warn!("continuous orchestrator enqueue failed: {e}");
+                                            }
+                                        });
+                                    }
                                 }
 
                                 // CS auto-reply: if a CS job completed with a `reply` +

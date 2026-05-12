@@ -149,9 +149,17 @@ export default function TopBar({
 
   const onStartStop = async () => {
     if (status?.running) {
+      // Disable autonomous loops BEFORE stopping the supervisor so no new
+      // jobs sneak in during shutdown.
+      await api.setSecret("autonomous_loops_enabled", "false").catch(() => {});
       await api.stop();
       setAllStop(true);
     } else {
+      // START === "run the factory" — flip on autonomous loops so the boot
+      // orchestrator fires once, and the continuous-cycle hook keeps queueing
+      // the next orchestrator after each CFO close. Without this the workers
+      // would spawn and immediately go idle, which reads as "nothing works".
+      await api.setSecret("autonomous_loops_enabled", "true").catch(() => {});
       await api.start();
       setAllStop(false);
     }
