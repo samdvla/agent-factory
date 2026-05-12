@@ -114,13 +114,10 @@ export function applySupervisorEvent(
         });
         // Mark real activity so the demo loop suppresses its mock ticker for this role.
         store.markRealActivity(r);
-        // CFO net_usd drives the Revenue pill.
-        if (evt.role === "cfo" && result) {
-          const net = result["net_usd"];
-          if (typeof net === "number" && net > 0) {
-            store.addRevenue(r, net);
-          }
-        }
+        // NB: CFO produces a Sonnet-simulated `net_usd` from a synthetic
+        // buyer panel — it's a prediction, not money. Real revenue is
+        // wired in the `etsy_receipt_ingested` branch below so the pill
+        // reflects actual sales only.
       }
       break;
     }
@@ -268,6 +265,12 @@ export function applySupervisorEvent(
         txns: typeof txns === "number" ? txns : 0,
         ts: Date.now(),
       });
+      // Real money in. Bumps the topbar Revenue/Net pill in real time.
+      // Attributed to publisher since that's the role that put the
+      // listing live; the global revenueTodayUsd is what the pill reads.
+      if (typeof rev === "number" && rev > 0) {
+        store.addRevenue("publisher", rev);
+      }
       store.pushTicker({
         ts: Date.now(),
         source: "etsy",
