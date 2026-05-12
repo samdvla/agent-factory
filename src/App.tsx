@@ -41,11 +41,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Open onboarding on cold start if no Anthropic key set
+  // Open onboarding on cold start if no Anthropic credentials at all —
+  // either a direct key OR a complete bridge pair (url + key).
   useEffect(() => {
-    api.getSecret("anthropic_api_key").then((v) => {
-      if (!v) setWizardOpen(true);
-    });
+    (async () => {
+      const [direct, bridgeUrl, bridgeKey] = await Promise.all([
+        api.getSecret("anthropic_api_key").catch(() => null),
+        api.getSecret("anthropic_bridge_url").catch(() => null),
+        api.getSecret("anthropic_bridge_key").catch(() => null),
+      ]);
+      const hasDirect = !!direct && direct.length > 0;
+      const hasBridge = !!bridgeUrl && bridgeUrl.length > 0 && !!bridgeKey && bridgeKey.length > 0;
+      if (!hasDirect && !hasBridge) setWizardOpen(true);
+    })();
   }, []);
 
   const handleRailToggle = (collapsed: boolean) => {
