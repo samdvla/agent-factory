@@ -20,11 +20,22 @@ use crate::events::{EventBus, SupervisorEvent};
 use crate::{printify, raster, secrets};
 use anyhow::{Context, Result};
 use serde_json::Value;
+use sqlx::SqlitePool;
 use std::path::PathBuf;
+
+/// New-shop velocity cap. Research recommends 1–2 sticker publishes per day
+/// for the first 14 days to dodge Etsy's auto-suspension on volume spikes.
+/// User can override via the `pod_daily_cap` secret.
+const DEFAULT_POD_DAILY_CAP: i64 = 2;
 
 /// Top-level entry. Reads everything it needs from the publisher result blob
 /// and the secrets store. Never panics; emits events on every outcome.
-pub async fn handle_publisher_complete_pod(bus: &EventBus, result: &Value) {
+pub async fn handle_publisher_complete_pod(
+    pool: &SqlitePool,
+    project_id: i64,
+    bus: &EventBus,
+    result: &Value,
+) {
     let job_id = result.get("job_id").and_then(|v| v.as_i64()).unwrap_or(0);
 
     let _ = bus.send(SupervisorEvent::JobStarted {
@@ -32,8 +43,49 @@ pub async fn handle_publisher_complete_pod(bus: &EventBus, result: &Value) {
         job_id,
     });
 
+    // Velocity cap: count today's pod_publishes rows and bail before any
+    // Printify calls if we're already at the cap.
+    let cap: i64 = secrets::get("pod_daily_cap")
+        .ok().flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_POD_DAILY_CAP);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let count: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pod_publishes WHERE project_id = ? AND day = ?",
+    )
+    .bind(project_id)
+    .bind(&today)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if count >= cap {
+        tracing::info!("pod_publish skipped: daily cap reached ({count}/{cap})");
+        let _ = bus.send(SupervisorEvent::JobFailed {
+            role: "pod".into(),
+            job_id,
+            error: format!("daily POD cap reached ({count}/{cap}). Raise pod_daily_cap to allow more sticker publishes today."),
+        });
+        return;
+    }
+
     match run_pipeline(result).await {
         Ok(out) => {
+            // Record the publish so tomorrow's cap math is right. Best-effort —
+            // log on failure but don't block the success path.
+            let now = chrono::Utc::now().timestamp();
+            if let Err(e) = sqlx::query(
+                "INSERT INTO pod_publishes (project_id, printify_product_id, title, price_cents, published_at, day) VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            .bind(project_id)
+            .bind(&out.product_id)
+            .bind(&out.title)
+            .bind(out.price_cents)
+            .bind(now)
+            .bind(&today)
+            .execute(pool).await {
+                tracing::warn!("pod_publishes insert failed: {e}");
+            }
+
             let _ = bus.send(SupervisorEvent::JobCompleted {
                 role: "pod".into(),
                 job_id,
@@ -62,6 +114,7 @@ pub async fn handle_publisher_complete_pod(bus: &EventBus, result: &Value) {
 struct PipelineOutcome {
     product_id: String,
     title: String,
+    price_cents: i64,
 }
 
 async fn run_pipeline(result: &Value) -> Result<PipelineOutcome> {
@@ -119,7 +172,7 @@ async fn run_pipeline(result: &Value) -> Result<PipelineOutcome> {
     // Step 5 — publish to Etsy.
     printify::publish_product(&api_key, shop_id, &created.id).await?;
 
-    Ok(PipelineOutcome { product_id: created.id, title })
+    Ok(PipelineOutcome { product_id: created.id, title, price_cents })
 }
 
 /// Look up the cached sticker SKU triplet (blueprint/provider/variants) from

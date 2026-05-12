@@ -458,7 +458,55 @@ function PrintifySection() {
           {status.podEnabled ? "ON" : "OFF"}
         </button>
       </div>
+
+      <PodDailyCapRow />
     </section>
+  );
+}
+
+function PodDailyCapRow() {
+  const [draft, setDraft] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.getSecret("pod_daily_cap").then((v) => {
+      const num = parseInt(v ?? "", 10);
+      setDraft(Number.isFinite(num) && num > 0 ? String(num) : "2");
+    }).catch(() => setDraft("2"));
+  }, []);
+
+  const save = async () => {
+    const num = parseInt(draft, 10);
+    if (!Number.isFinite(num) || num < 1) return;
+    setSaving(true);
+    try {
+      await api.setSecret("pod_daily_cap", String(num));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="settings-field-row">
+      <div className="settings-field-label-col">
+        <span className="settings-field-label">POD daily cap</span>
+        <span className="settings-helper">
+          Max sticker publishes per day. Default 2 — Etsy auto-suspends new
+          shops that publish too fast. Raise to ~5 after the first 10 reviews.
+        </span>
+      </div>
+      <input
+        type="number"
+        min={1}
+        max={50}
+        className="settings-inline-number"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        disabled={saving}
+        style={{ width: 60 }}
+      />
+    </div>
   );
 }
 

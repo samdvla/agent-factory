@@ -471,9 +471,13 @@ async fn run_worker_loop(
                                         // POD path: skip direct Etsy publish — Printify
                                         // will create the Etsy draft on our behalf.
                                         let bus_for_pod = bus.clone();
+                                        let pool_for_pod = pool.clone();
+                                        let project_id_for_pod = project_id;
                                         let result_clone = result.clone();
                                         tokio::spawn(async move {
                                             crate::pod_publish::handle_publisher_complete_pod(
+                                                &pool_for_pod,
+                                                project_id_for_pod,
                                                 &bus_for_pod,
                                                 &result_clone,
                                             )
