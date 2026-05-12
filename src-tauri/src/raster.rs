@@ -3,6 +3,11 @@ use std::path::Path;
 
 pub const DEFAULT_TARGET_PX: u32 = 2048;
 
+/// Print-resolution target for Printify stickers (kiss-cut, up to ~5"). The
+/// Printify recommendation is 300 DPI, so 5" * 300 = 1500 px / edge. We round
+/// up to 1800 to leave headroom for slightly larger sticker variants.
+pub const STICKER_PRINT_TARGET_PX: u32 = 1800;
+
 /// Render an SVG byte slice to a PNG byte vector. The output's longest edge
 /// is scaled to `target_px` while preserving aspect ratio. A solid white
 /// background is composited beneath the rendered SVG because Etsy listing
@@ -40,6 +45,23 @@ pub fn rasterize_to_sibling(svg_path: &Path) -> Result<Option<std::path::PathBuf
     let png = svg_to_png(&svg_bytes, DEFAULT_TARGET_PX)?;
     std::fs::write(&png_path, png).context("write png")?;
     Ok(Some(png_path))
+}
+
+/// Print-resolution sibling for Printify uploads. Writes to `<stem>.print.png`
+/// alongside the source SVG so the regular `.png` thumbnail (used for the Etsy
+/// listing image) is left untouched. Idempotent.
+pub fn rasterize_print_sibling(svg_path: &Path, target_px: u32) -> Result<std::path::PathBuf> {
+    let stem = svg_path.file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("svg_path has no stem: {:?}", svg_path))?;
+    let print_path = svg_path.with_file_name(format!("{stem}.print.png"));
+    if print_path.exists() {
+        return Ok(print_path);
+    }
+    let svg_bytes = std::fs::read(svg_path).context("read svg")?;
+    let png = svg_to_png(&svg_bytes, target_px)?;
+    std::fs::write(&print_path, png).context("write print png")?;
+    Ok(print_path)
 }
 
 #[cfg(test)]
@@ -112,5 +134,33 @@ mod tests {
     fn test_malformed_svg_returns_error() {
         let result = svg_to_png(b"not svg", DEFAULT_TARGET_PX);
         assert!(result.is_err(), "garbage input should error");
+    }
+
+    #[test]
+    fn test_rasterize_print_sibling_writes_print_png_and_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let svg_path = dir.path().join("42.svg");
+        std::fs::write(&svg_path, red_square_svg()).expect("write svg");
+
+        let first = rasterize_print_sibling(&svg_path, STICKER_PRINT_TARGET_PX)
+            .expect("first print rasterize");
+        assert!(first.exists());
+        assert_eq!(first.file_name().unwrap().to_str().unwrap(), "42.print.png");
+        // Doesn't clobber the regular .png — it lives next to it.
+        assert!(!svg_path.with_extension("png").exists());
+
+        let decoded = tiny_skia::Pixmap::decode_png(&std::fs::read(&first).unwrap())
+            .expect("decode print png");
+        assert_eq!(decoded.width(), STICKER_PRINT_TARGET_PX);
+
+        let written_at = std::fs::metadata(&first).unwrap().modified().unwrap();
+        let second = rasterize_print_sibling(&svg_path, STICKER_PRINT_TARGET_PX)
+            .expect("second print rasterize");
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::metadata(&second).unwrap().modified().unwrap(),
+            written_at,
+            "second call should not rewrite the file",
+        );
     }
 }
