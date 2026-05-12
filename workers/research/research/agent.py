@@ -61,17 +61,34 @@ JSON_SHAPE = (
     '  "niche": "<short specific niche, e.g. \'minimalist line art prints\'>",\n'
     '  "keywords": ["<10-15 SEO keywords>"],\n'
     '  "price_band_usd": [<low>, <high>],\n'
+    '  "product_type": "<sticker|digital_print|mug|tee|poster>",\n'
     '  "competition": "<low|medium|high>",\n'
     '  "rationale": "<one sentence reasoning>"\n'
     "}"
 )
+
+# Default product when the model omits product_type (older briefs, etc.).
+# Stickers are the only POD product with positive margin at our $12 retail
+# cap — see project-pod-integration memory for the economics.
+DEFAULT_PRODUCT_TYPE = "sticker"
+VALID_PRODUCT_TYPES = {"sticker", "digital_print", "mug", "tee", "poster"}
+
+
+def _normalize_product_type(brief: dict) -> None:
+    """Mutate brief in-place so downstream workers always see a valid product_type."""
+    pt = brief.get("product_type")
+    if not isinstance(pt, str) or pt not in VALID_PRODUCT_TYPES:
+        brief["product_type"] = DEFAULT_PRODUCT_TYPE
 
 
 def build_demand_brief_prompt(niche_seed: str | None = None, rationale: str | None = None) -> tuple[str, str]:
     system = (
         "You are a Market Research Analyst at an AI-run digital products Etsy shop. "
         "Your job is to identify a profitable niche and return a structured JSON Demand Brief. "
-        "Be concise and specific. Only return valid JSON, no prose, no markdown."
+        "Be concise and specific. Only return valid JSON, no prose, no markdown. "
+        "For product_type, pick the physical format that fits the niche best — "
+        "default to 'sticker' for cheap impulse-buy designs (best margin on a new shop), "
+        "'digital_print' for downloadable wall art, 'mug'/'tee'/'poster' for everything else."
     )
     if niche_seed:
         seed_text = niche_seed
@@ -128,6 +145,7 @@ def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str |
         text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
 
     brief = json.loads(text)
+    _normalize_product_type(brief)
     return brief, tokens_in, tokens_out
 
 
