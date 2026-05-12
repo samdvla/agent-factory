@@ -159,6 +159,32 @@ fn spawn_autonomous_loops(pool: SqlitePool, project_id: i64, bus: EventBus) {
             }
         }
     });
+
+    // Design Strategist loop — every 15 min, run the strategist to refresh
+    // the designer's system prompt based on recent outcomes + current
+    // design trends. Gated on `strategist_loop_enabled` secret (default
+    // true once the user has at least MIN_OUTCOMES designs to learn from).
+    let pool_for_strategist = pool.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            let enabled = secrets::get("strategist_loop_enabled")
+                .ok()
+                .flatten()
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true); // default on — see project_north_star
+            if !enabled {
+                continue;
+            }
+            let payload = serde_json::json!({"trigger": "strategist_loop"});
+            if let Err(e) = queue::enqueue(&pool_for_strategist, project_id, "strategist", payload).await {
+                tracing::warn!("strategist loop enqueue failed: {e}");
+            }
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -306,6 +332,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         make_spec("cfo", "cfo"),
         make_spec("cs", "cs"),
         make_spec("si", "si"),
+        make_spec("strategist", "strategist"),
     ];
 
     let handle = supervisor::start(state.pool.clone(), state.bus.clone(), agents, state.project_id, caps)
