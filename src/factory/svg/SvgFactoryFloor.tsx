@@ -89,30 +89,8 @@ export default function SvgFactoryFloor() {
   const zoomedH = base.h / zoom;
   const cx = base.minX + base.w / 2 + pan.x;
   const cy = base.minY + base.h / 2 + pan.y;
-  let vbMinX = cx - zoomedW / 2;
-  let vbMinY = cy - zoomedH / 2;
-  // Hard-clamp the viewBox itself so it always overlaps the floor's bounding
-  // box. Without this, dragging fast (especially at high zoom) could slide
-  // the viewBox completely off the floor → every room gets culled "hidden" →
-  // entirely blank canvas. Clamping pan alone wasn't enough because pan is
-  // not the only path to extreme viewBox values (HMR, room dissolves, base
-  // re-computes mid-drag, etc.). Allow the viewBox to slide until only a
-  // sliver of the floor edge remains visible, then stop.
-  const floorMinX = base.minX;
-  const floorMaxX = base.minX + base.w;
-  const floorMinY = base.minY;
-  const floorMaxY = base.minY + base.h;
-  const SLIVER = 40; // world units of floor that must remain visible
-  if (vbMinX + zoomedW < floorMinX + SLIVER) {
-    vbMinX = floorMinX + SLIVER - zoomedW;
-  } else if (vbMinX > floorMaxX - SLIVER) {
-    vbMinX = floorMaxX - SLIVER;
-  }
-  if (vbMinY + zoomedH < floorMinY + SLIVER) {
-    vbMinY = floorMinY + SLIVER - zoomedH;
-  } else if (vbMinY > floorMaxY - SLIVER) {
-    vbMinY = floorMaxY - SLIVER;
-  }
+  const vbMinX = cx - zoomedW / 2;
+  const vbMinY = cy - zoomedH / 2;
   const vb = `${vbMinX} ${vbMinY} ${zoomedW} ${zoomedH}`;
 
   // Viewport culling: re-derive detail levels only when the visible rectangle
@@ -120,41 +98,14 @@ export default function SvgFactoryFloor() {
   // skipped entirely. The "shell" tier gets a 1-cell margin in iso units so
   // panning doesn't reveal blank cells before they upgrade.
   const detailLevels = useMemo(
-    () => {
-      const roomList = Object.values(rooms);
-      const levels = detailLevelsFor(
-        roomList,
-        { minX: vbMinX, minY: vbMinY, maxX: vbMinX + zoomedW, maxY: vbMinY + zoomedH },
-        0,
-        // ROOM_W * TW/2 ≈ 192px per room horizontally in iso; one-cell margin
-        // is comfortably covered by 220 world units.
-        220,
-      );
-      // Safety net: if culling would hide every room (user dragged into a
-      // corridor or pure void at high zoom), promote the room nearest to the
-      // viewport center to "full" so something is always on screen. Without
-      // this, the user gets a completely blank canvas with no way back.
-      const allHidden = roomList.length > 0
-        && roomList.every((r) => levels.get(r.id) === "hidden");
-      if (allHidden) {
-        const vcx = vbMinX + zoomedW / 2;
-        const vcy = vbMinY + zoomedH / 2;
-        let nearest = roomList[0];
-        let bestD = Infinity;
-        for (const r of roomList) {
-          const x0 = r.col * (ROOM_W + GAP);
-          const y0 = r.row * (ROOM_H + GAP);
-          const c = iso(x0 + ROOM_W / 2, y0 + ROOM_H / 2);
-          const d = (c.x - vcx) ** 2 + (c.y - vcy) ** 2;
-          if (d < bestD) {
-            bestD = d;
-            nearest = r;
-          }
-        }
-        levels.set(nearest.id, "full");
-      }
-      return levels;
-    },
+    () => detailLevelsFor(
+      Object.values(rooms),
+      { minX: vbMinX, minY: vbMinY, maxX: vbMinX + zoomedW, maxY: vbMinY + zoomedH },
+      0,
+      // ROOM_W * TW/2 ≈ 192px per room horizontally in iso; one-cell margin
+      // is comfortably covered by 220 world units.
+      220,
+    ),
     [rooms, vbMinX, vbMinY, zoomedW, zoomedH],
   );
 
@@ -187,10 +138,19 @@ export default function SvgFactoryFloor() {
         const vbH = base.h / zoom;
         // Drag content with the cursor: pan moves opposite to cursor delta in
         // viewBox space.
-        setPan({
-          x: startPan.x - (dx * vbW) / containerW,
-          y: startPan.y - (dy * vbH) / containerH,
-        });
+        let nextX = startPan.x - (dx * vbW) / containerW;
+        let nextY = startPan.y - (dy * vbH) / containerH;
+        // Limit how far the camera center can wander from the room hull. The
+        // base bbox includes 60 units of padding; clamping to (base.w/2 - 60)
+        // keeps the viewport center inside the actual room area, which means
+        // at least half of every viewport always contains floor. Without
+        // this, dragging past the rooms made the SVG render the empty
+        // padding area — looked blank.
+        const maxX = base.w / 2 - 60;
+        const maxY = base.h / 2 - 60;
+        if (maxX > 0) nextX = Math.max(-maxX, Math.min(maxX, nextX));
+        if (maxY > 0) nextY = Math.max(-maxY, Math.min(maxY, nextY));
+        setPan({ x: nextX, y: nextY });
       };
       const onUp = () => {
         isDragging.current = false;
