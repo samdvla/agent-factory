@@ -57,13 +57,46 @@ def _load_system_override(role: str) -> str | None:
     return None
 
 
+# Mandatory disclosure language for Etsy's 2025 Creativity Standards: every
+# AI-generated listing must surface it. Listing worker appends this to the
+# model's description verbatim so it can't be paraphrased away. Keep it short
+# and friendly — buyers see it.
+AI_DISCLOSURE_TEXT = (
+    "\n\n— About this design —\n"
+    "This artwork was created in our AI-assisted design studio. We curate, "
+    "review, and select every design before publishing. Custom requests welcome."
+)
+
+# Materials list per product_type. Used to override the generic
+# ["digital download"] default when the brief targets a physical product.
+PRODUCT_MATERIALS = {
+    "sticker": ["vinyl", "kiss-cut sticker", "made to order"],
+    "digital_print": ["digital download"],
+    "mug": ["ceramic", "made to order"],
+    "tee": ["cotton", "made to order"],
+    "poster": ["paper", "made to order"],
+}
+
+
 def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
+    product_type = brief.get("product_type", "digital_print")
+    product_guide = {
+        "sticker": "Kiss-cut vinyl sticker, made-to-order, ships from a US print partner. "
+                   "Mention durability + indoor/outdoor use in description.",
+        "digital_print": "Instant digital download — buyer prints at home. Mention file "
+                         "formats and recommended print sizes.",
+        "mug": "11oz ceramic mug, made-to-order, dishwasher safe. Mention gift-giving angle.",
+        "tee": "Unisex cotton tee, made-to-order, multiple sizes. Mention fabric and fit.",
+        "poster": "Matte paper poster, made-to-order, multiple sizes. Mention frame-ready.",
+    }.get(product_type, "Digital download.")
+
     system = (
-        "You are the Listing Copywriter at an AI-run digital-products Etsy shop. "
+        "You are the Listing Copywriter at an AI-run Etsy shop selling "
+        f"{product_type.replace('_', ' ')}s. "
         "Given a Demand Brief and an Asset Description, produce a complete Etsy listing draft. "
         "Title must be ≤140 chars. Exactly 13 tags. "
-        "Description should be SEO-tuned and policy-compliant "
-        "(digital download, no shipping, no custom work without explicit policy). "
+        "Description should be SEO-tuned and policy-compliant. "
+        f"PRODUCT — {product_guide} "
         "PRICING — the shop is brand new and has no reviews. Pick a price that "
         "real buyers would impulse-purchase. Use brief.price_band_usd as your "
         "guide; lean toward the LOWER end of that band, not the middle. Never "
@@ -74,12 +107,24 @@ def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         '  "title": "<≤140 chars>",\n'
         '  "tags": ["<exactly 13 tags>"],\n'
         '  "description": "<200-400 word listing description>",\n'
-        '  "materials": ["digital download"],\n'
+        '  "materials": [<list of materials>],\n'
         '  "price_usd": <number>\n'
         "}"
     )
     user = json.dumps({"brief": brief, "asset": asset})
     return system, user
+
+
+def _augment_listing(listing: dict, brief: dict) -> dict:
+    """Apply post-model adjustments that policy requires, regardless of what
+    the model returned: AI disclosure paragraph and product-aware materials."""
+    desc = listing.get("description", "") or ""
+    if AI_DISCLOSURE_TEXT.strip() not in desc:
+        listing["description"] = desc + AI_DISCLOSURE_TEXT
+    product_type = brief.get("product_type")
+    if product_type in PRODUCT_MATERIALS:
+        listing["materials"] = PRODUCT_MATERIALS[product_type]
+    return listing
 
 
 # Hard ceiling used to clamp the model's price choice on a brand-new shop.
@@ -209,6 +254,10 @@ def handle(method: str, params: dict) -> dict:
                 file=sys.stderr, flush=True,
             )
             listing["price_usd"] = price
+        # Etsy 2025 Creativity Standards require AI-disclosure in every
+        # listing; we also override materials per product_type. Apply
+        # AFTER the model + clamp so neither can drop these.
+        _augment_listing(listing, brief)
         print(f"[listing] job_id={job_id} done title={title!r:.40} in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
         handoff_payload: dict = {"listing": listing, "brief": brief, "asset": asset}
         if cycle_id:

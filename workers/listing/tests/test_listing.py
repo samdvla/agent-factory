@@ -4,6 +4,9 @@ from listing.agent import (
     build_listing_prompt,
     validate_listing,
     _clamp_price,
+    _augment_listing,
+    AI_DISCLOSURE_TEXT,
+    PRODUCT_MATERIALS,
     NEW_SHOP_PRICE_CEILING_USD,
 )
 
@@ -39,6 +42,39 @@ def test_clamp_price_enforces_floor_when_band_lower_is_zero():
 def test_clamp_price_passthrough_in_band():
     brief = {"price_band_usd": [3, 12]}
     assert _clamp_price(6.99, brief) == 6.99
+
+
+def test_augment_listing_appends_ai_disclosure():
+    listing = {"description": "Cute sticker design.", "materials": ["digital download"]}
+    _augment_listing(listing, {"product_type": "sticker"})
+    assert AI_DISCLOSURE_TEXT.strip() in listing["description"]
+    assert listing["description"].startswith("Cute sticker design.")
+
+
+def test_augment_listing_is_idempotent_on_disclosure():
+    """Re-running augment must not append the disclosure paragraph twice."""
+    listing = {"description": "Cute design.", "materials": []}
+    _augment_listing(listing, {"product_type": "sticker"})
+    _augment_listing(listing, {"product_type": "sticker"})
+    assert listing["description"].count(AI_DISCLOSURE_TEXT.strip()) == 1
+
+
+def test_augment_listing_overrides_materials_for_sticker():
+    listing = {"description": "x", "materials": ["digital download"]}
+    _augment_listing(listing, {"product_type": "sticker"})
+    assert listing["materials"] == PRODUCT_MATERIALS["sticker"]
+
+
+def test_augment_listing_leaves_materials_alone_when_product_type_unknown():
+    listing = {"description": "x", "materials": ["whatever"]}
+    _augment_listing(listing, {"product_type": "mystery_box"})
+    assert listing["materials"] == ["whatever"]
+
+
+def test_listing_prompt_includes_product_type_guidance():
+    system, _ = build_listing_prompt({"product_type": "sticker"}, {})
+    assert "sticker" in system.lower()
+    assert "kiss-cut" in system.lower() or "vinyl" in system.lower()
 
 
 def test_validate_listing_ok():
