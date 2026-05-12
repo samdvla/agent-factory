@@ -93,6 +93,20 @@ export default function SvgFactoryFloor() {
   const vbMinY = cy - zoomedH / 2;
   const vb = `${vbMinX} ${vbMinY} ${zoomedW} ${zoomedH}`;
 
+  // TEMP DIAG: log viewport + zoom + pan + room count every render. If the
+  // canvas goes blank, the user reads the last few lines off the console and
+  // we can see exactly what state the floor is in.
+  if (typeof window !== "undefined" && (import.meta as any).env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[floor]", {
+      zoom: zoom.toFixed(2),
+      pan: { x: pan.x.toFixed(0), y: pan.y.toFixed(0) },
+      vb,
+      base: { minX: base.minX.toFixed(0), minY: base.minY.toFixed(0), w: base.w.toFixed(0), h: base.h.toFixed(0) },
+      rooms: Object.keys(rooms).length,
+    });
+  }
+
   // Viewport culling: re-derive detail levels only when the visible rectangle
   // or the rooms list changes. Off-viewport rooms drop down to "shell" or get
   // skipped entirely. The "shell" tier gets a 1-cell margin in iso units so
