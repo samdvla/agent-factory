@@ -302,13 +302,38 @@ pub async fn cmd_enqueue(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+pub struct EmitProbeReport {
+    pub labels: Vec<String>,
+    pub attempts: Vec<EmitProbeAttempt>,
+    pub sent: u32,
+}
+
+#[derive(Serialize)]
+pub struct EmitProbeAttempt {
+    pub shape: String,
+    pub app_emit_ok: bool,
+    pub app_emit_error: Option<String>,
+    pub windows: Vec<EmitProbeWindowAttempt>,
+}
+
+#[derive(Serialize)]
+pub struct EmitProbeWindowAttempt {
+    pub label: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
 /// Diagnostic command: emits 3 synthetic `supervisor.event` payloads from an
 /// invoke handler so we can confirm the emit→listen channel itself works,
 /// independent of the spawned EventBus forwarder task. If listen() in the
 /// frontend doesn't receive these, the IPC is the problem; if it does
 /// receive these but not real supervisor events, the bus forwarder is.
+///
+/// Returns a structured report so the UI can show the real error messages
+/// without needing to read the terminal.
 #[tauri::command]
-pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<u32, String> {
+pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<EmitProbeReport, String> {
     use tauri::Manager;
     // List all webview windows so we know what labels actually exist —
     // capability "windows": ["main"] only applies if the real label is "main".
@@ -329,33 +354,51 @@ pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<u32, String> {
         result: serde_json::json!({"ok": true, "ticker_text": "synthetic probe"}),
     };
 
-    fn try_emit_pair<T: serde::Serialize + Clone>(
+    fn try_emit<T: serde::Serialize>(
         app: &tauri::AppHandle,
         labels: &[String],
-        tag: &str,
+        shape: &str,
         payload: &T,
-    ) -> bool {
-        let mut ok = false;
-        match app.emit("supervisor.event", payload) {
-            Ok(()) => { ok = true; tracing::info!("cmd_emit_test[{tag}]: app.emit Ok"); }
-            Err(e) => tracing::warn!("cmd_emit_test[{tag}] app.emit failed: {e}"),
-        }
+    ) -> EmitProbeAttempt {
+        let mut windows = Vec::new();
+        let (app_emit_ok, app_emit_error) = match app.emit("supervisor.event", payload) {
+            Ok(()) => {
+                tracing::info!("cmd_emit_test[{shape}]: app.emit Ok");
+                (true, None)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!("cmd_emit_test[{shape}] app.emit failed: {msg}");
+                (false, Some(msg))
+            }
+        };
         for label in labels {
             if let Some(w) = app.get_webview_window(label) {
                 match w.emit("supervisor.event", payload) {
-                    Ok(()) => { ok = true; tracing::info!("cmd_emit_test[{tag}]: window({label}).emit Ok"); }
-                    Err(e) => tracing::warn!("cmd_emit_test[{tag}] window({label}).emit failed: {e}"),
+                    Ok(()) => {
+                        tracing::info!("cmd_emit_test[{shape}]: window({label}).emit Ok");
+                        windows.push(EmitProbeWindowAttempt { label: label.clone(), ok: true, error: None });
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        tracing::warn!("cmd_emit_test[{shape}] window({label}).emit failed: {msg}");
+                        windows.push(EmitProbeWindowAttempt { label: label.clone(), ok: false, error: Some(msg) });
+                    }
                 }
             }
         }
-        ok
+        EmitProbeAttempt { shape: shape.into(), app_emit_ok, app_emit_error, windows }
     }
 
-    let mut sent = 0u32;
-    if try_emit_pair(&app, &labels, "json", &probe_json) { sent += 1; }
-    if try_emit_pair(&app, &labels, "small", &probe_small) { sent += 1; }
-    if try_emit_pair(&app, &labels, "big", &probe_big) { sent += 1; }
-    Ok(sent)
+    let attempts = vec![
+        try_emit(&app, &labels, "json", &probe_json),
+        try_emit(&app, &labels, "small", &probe_small),
+        try_emit(&app, &labels, "big", &probe_big),
+    ];
+    let sent = attempts.iter()
+        .filter(|a| a.app_emit_ok || a.windows.iter().any(|w| w.ok))
+        .count() as u32;
+    Ok(EmitProbeReport { labels, attempts, sent })
 }
 
 pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {

@@ -22,8 +22,15 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Default to `info` so app-level tracing::info/warn/error always reach the
+    // terminal in dev — without RUST_LOG, the prior `from_default_env()` was
+    // an empty filter and our diagnostic messages went nowhere. RUST_LOG
+    // still overrides this when set.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,agent_factory_lib=debug")),
+        )
         .init();
 
     tauri::Builder::default()
