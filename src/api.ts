@@ -169,4 +169,18 @@ export const api = {
   readJobSvg: (jobId: number): Promise<string | null> =>
     invoke("cmd_read_job_svg", { jobId }),
   unratedJobCount: (): Promise<number> => invoke("cmd_unrated_job_count"),
+  printifyVerify: (apiKey: string): Promise<PrintifyVerifyOk> =>
+    invoke("cmd_printify_verify", { apiKey }),
+  printifyStatus: (): Promise<PrintifyStatus> => invoke("cmd_printify_status"),
+};
+
+export type PrintifyVerifyOk = {
+  shop_id: number;
+  shop_title: string;
+  channel: string;
+};
+export type PrintifyStatus = {
+  key_present: boolean;
+  shop_id: number | null;
+  pod_enabled: boolean;
 };

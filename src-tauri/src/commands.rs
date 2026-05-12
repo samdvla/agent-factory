@@ -1,4 +1,4 @@
-use crate::{budget, etsy, etsy_polling, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, prompts, queue, secrets, supervisor};
+use crate::{budget, etsy, etsy_polling, etsy_publish, events::{EventBus, SupervisorEvent}, oauth_server, pnl, printify, prompts, queue, secrets, supervisor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -159,6 +159,71 @@ fn spawn_autonomous_loops(pool: SqlitePool, project_id: i64, bus: EventBus) {
             }
         }
     });
+}
+
+#[derive(Serialize)]
+pub struct PrintifyVerifyOk {
+    pub shop_id: i64,
+    pub shop_title: String,
+    pub channel: String,
+}
+
+/// Verify the Printify Personal Access Token by listing connected shops. On
+/// success, persist the picked Etsy shop's id so the rest of the pipeline can
+/// publish without re-discovery. Returns the shop info for UI display.
+#[tauri::command]
+pub async fn cmd_printify_verify(api_key: String) -> Result<PrintifyVerifyOk, String> {
+    if api_key.trim().is_empty() {
+        return Err("Printify API key is empty".to_string());
+    }
+    let shops = printify::list_shops(&api_key)
+        .await
+        .map_err(|e| format!("Printify verify failed: {e}"))?;
+    if shops.is_empty() {
+        return Err("Printify account has no connected shops — connect SabiWabiGifts in the Printify dashboard first.".to_string());
+    }
+    let etsy = printify::pick_etsy_shop(&shops)
+        .ok_or_else(|| format!(
+            "No Etsy shop connected to this Printify account. Found: {}",
+            shops.iter().map(|s| format!("{} ({})", s.title, s.sales_channel)).collect::<Vec<_>>().join(", ")
+        ))?;
+    // Persist the discovered shop_id so workers can use it without re-listing.
+    secrets::set("printify_api_key", &api_key)
+        .map_err(|e| format!("save printify_api_key: {e}"))?;
+    secrets::set("printify_shop_id", &etsy.id.to_string())
+        .map_err(|e| format!("save printify_shop_id: {e}"))?;
+    Ok(PrintifyVerifyOk {
+        shop_id: etsy.id,
+        shop_title: etsy.title.clone(),
+        channel: etsy.sales_channel.clone(),
+    })
+}
+
+#[derive(Serialize)]
+pub struct PrintifyStatus {
+    pub key_present: bool,
+    pub shop_id: Option<i64>,
+    pub pod_enabled: bool,
+}
+
+/// Report current Printify config without exposing the PAT itself.
+#[tauri::command]
+pub async fn cmd_printify_status() -> Result<PrintifyStatus, String> {
+    let key_present = secrets::get("printify_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let shop_id = secrets::get("printify_shop_id")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i64>().ok());
+    let pod_enabled = secrets::get("pod_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    Ok(PrintifyStatus { key_present, shop_id, pod_enabled })
 }
 
 #[tauri::command]

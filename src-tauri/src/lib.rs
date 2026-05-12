@@ -10,6 +10,7 @@ pub mod heartbeat;
 pub mod llm;
 pub mod oauth_server;
 pub mod pnl;
+pub mod printify;
 pub mod prompts;
 pub mod queue;
 pub mod raster;
@@ -151,6 +152,8 @@ pub fn run() {
             commands::cmd_rate_job,
             commands::cmd_read_job_svg,
             commands::cmd_unrated_job_count,
+            commands::cmd_printify_verify,
+            commands::cmd_printify_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

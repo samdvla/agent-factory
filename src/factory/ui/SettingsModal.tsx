@@ -325,6 +325,138 @@ function BudgetRow({ label, secretKey, defaultValue, helper }: BudgetRowProps) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  PrintifySection: enter PAT, verify, shows connected Etsy shop        */
+/* ------------------------------------------------------------------ */
+
+function PrintifySection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    keyPresent: boolean;
+    shopId: number | null;
+    shopTitle: string | null;
+    podEnabled: boolean;
+  }>({ keyPresent: false, shopId: null, shopTitle: null, podEnabled: false });
+
+  useEffect(() => {
+    api.printifyStatus().then((s) => {
+      setStatus({
+        keyPresent: s.key_present,
+        shopId: s.shop_id,
+        shopTitle: null,
+        podEnabled: s.pod_enabled,
+      });
+    }).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setVerifyError(null);
+    try {
+      const result = await api.printifyVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setStatus((s) => ({
+        ...s,
+        keyPresent: true,
+        shopId: result.shop_id,
+        shopTitle: result.shop_title,
+      }));
+      setKeyDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setVerifyError(String(e));
+    }
+  };
+
+  const handleTogglePod = async () => {
+    const next = !status.podEnabled;
+    await api.setSecret("pod_enabled", String(next));
+    setStatus((s) => ({ ...s, podEnabled: next }));
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Print-on-demand (Printify)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        When on, sticker designs route through Printify → Etsy instead of being
+        digital-download drafts. Requires a Printify account with SabiWabiGifts
+        connected as an Etsy sales channel, and a production-partner declared in
+        Etsy Seller Dashboard. Etsy also requires AI-design disclosure in every
+        listing — added automatically.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Printify status</span>
+          <span className="settings-helper">
+            {status.keyPresent && status.shopId
+              ? `Connected · shop_id=${status.shopId}${status.shopTitle ? ` · ${status.shopTitle}` : ""}`
+              : "Not connected"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Personal access token</span>
+          <span className="settings-helper">
+            Generate in Printify → My account → Connections → API. Verifying
+            saves the token and the discovered Etsy shop_id.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder="Printify PAT"
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — token saved.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {verifyError}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">POD pipeline</span>
+          <span className="settings-helper">
+            Off until verified. When on, sticker jobs go through Printify; other
+            product types still go through the existing digital pipeline.
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.podEnabled ? " is-on" : ""}`}
+          onClick={handleTogglePod}
+          disabled={!status.keyPresent || !status.shopId}
+        >
+          {status.podEnabled ? "ON" : "OFF"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main SettingsModal                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -781,6 +913,9 @@ export default function SettingsModal({
               </button>
             </div>
           </section>
+
+          {/* ---- Section: Print-on-demand (Printify) ---- */}
+          <PrintifySection />
 
           {/* ---- Section 6: Diagnostics ---- */}
           <section className="settings-section settings-section-diagnostics">
