@@ -144,6 +144,7 @@ pub fn run() {
             commands::cmd_rate_job,
             commands::cmd_read_job_svg,
             commands::cmd_unrated_job_count,
+            commands::cmd_emit_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

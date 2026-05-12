@@ -302,6 +302,45 @@ pub async fn cmd_enqueue(
         .map_err(|e| e.to_string())
 }
 
+/// Diagnostic command: emits 3 synthetic `supervisor.event` payloads from an
+/// invoke handler so we can confirm the emit→listen channel itself works,
+/// independent of the spawned EventBus forwarder task. If listen() in the
+/// frontend doesn't receive these, the IPC is the problem; if it does
+/// receive these but not real supervisor events, the bus forwarder is.
+#[tauri::command]
+pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<u32, String> {
+    use tauri::Manager;
+    let probes = [
+        SupervisorEvent::AgentStarted { role: "research".into() },
+        SupervisorEvent::JobStarted { role: "designer".into(), job_id: -1 },
+        SupervisorEvent::JobCompleted {
+            role: "publisher".into(),
+            job_id: -2,
+            result: serde_json::json!({"ok": true, "ticker_text": "synthetic probe"}),
+        },
+    ];
+    let mut sent = 0u32;
+    for p in probes {
+        let mut ok = false;
+        match app.emit("supervisor.event", &p) {
+            Ok(()) => ok = true,
+            Err(e) => tracing::warn!("cmd_emit_test app.emit failed: {e}"),
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            match w.emit("supervisor.event", &p) {
+                Ok(()) => ok = true,
+                Err(e) => tracing::warn!("cmd_emit_test main.emit failed: {e}"),
+            }
+        } else {
+            tracing::warn!("cmd_emit_test: main webview not found");
+        }
+        if ok {
+            sent += 1;
+        }
+    }
+    Ok(sent)
+}
+
 pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
     use tauri::Manager;
     let mut rx = bus.subscribe();

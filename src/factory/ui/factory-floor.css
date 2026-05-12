@@ -4609,3 +4609,24 @@ button.etsy-pill {
   white-space: nowrap;
 }
 .event-beacon.is-fresh .event-beacon-status { color: var(--ink-0); }
+.event-beacon-probe {
+  appearance: none;
+  margin-left: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--ink-1);
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.event-beacon-probe:hover { background: var(--bg-3); color: var(--accent); border-color: var(--accent); }
+.event-beacon-probe-report {
+  color: var(--ink-2);
+  white-space: nowrap;
+  font-size: 10px;
+  font-style: italic;
+}

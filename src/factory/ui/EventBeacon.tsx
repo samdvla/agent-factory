@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Floating diagnostic chip on the floor. Subscribes to "supervisor.event"
@@ -9,20 +10,38 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
  * If this stays "no events received" forever while the backend is producing
  * jobs (see the Activity rail count), the Rust→webview emit path is broken
  * (capability missing, window-not-found, etc.) — not the animation code.
+ *
+ * The "Test" button invokes a backend command that synthesizes 3 supervisor
+ * events from inside an invoke handler — that bypasses the spawned bus
+ * forwarder so we can isolate whether listen() works at all.
  */
 export default function EventBeacon() {
   const [last, setLast] = useState<{ kind: string; role?: string; ts: number } | null>(null);
   const [count, setCount] = useState(0);
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
+  const [probeReport, setProbeReport] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     listen<{ kind: string; role?: string }>("supervisor.event", (e) => {
       setLast({ kind: e.payload.kind, role: e.payload.role, ts: Date.now() });
       setCount((c) => c + 1);
-    }).then((fn) => {
-      unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        unlisten = fn;
+        // Listener is now registered — fire a one-shot probe so we know
+        // immediately whether the channel works. If counter doesn't reach 3
+        // within a second, the IPC is dead.
+        setTimeout(async () => {
+          try {
+            const sent = await invoke<number>("cmd_emit_test");
+            setProbeReport(`probe: backend sent ${sent}/3`);
+          } catch (e) {
+            setProbeReport(`probe failed: ${String(e).slice(0, 80)}`);
+          }
+        }, 250);
+      })
+      .catch((e) => setProbeReport(`listen failed: ${String(e).slice(0, 80)}`));
     return () => {
       unlisten?.();
     };
@@ -33,7 +52,16 @@ export default function EventBeacon() {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
-  void tick;
+
+  const onProbe = async () => {
+    setProbeReport("probing…");
+    try {
+      const sent = await invoke<number>("cmd_emit_test");
+      setProbeReport(`probe: backend sent ${sent}/3`);
+    } catch (e) {
+      setProbeReport(`probe failed: ${String(e).slice(0, 80)}`);
+    }
+  };
 
   const status = last
     ? `${last.kind}${last.role ? ` · ${last.role}` : ""} · ${Math.max(0, Math.floor((Date.now() - last.ts) / 1000))}s ago`
@@ -46,6 +74,15 @@ export default function EventBeacon() {
       <span className="event-beacon-label">events</span>
       <span className="event-beacon-count">{count}</span>
       <span className="event-beacon-status">{status}</span>
+      <button
+        type="button"
+        className="event-beacon-probe"
+        onClick={onProbe}
+        title="Fire 3 synthetic events from backend to verify IPC"
+      >
+        probe
+      </button>
+      {probeReport && <span className="event-beacon-probe-report">{probeReport}</span>}
     </div>
   );
 }
