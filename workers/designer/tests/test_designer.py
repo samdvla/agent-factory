@@ -75,6 +75,45 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     assert captured["body"]["system"] == default_system
 
 
+def test_brief_parse_ignores_trailing_prose(monkeypatch, tmp_path):
+    """Sonnet sometimes appends an explanation after the JSON object. Job #670
+    failed with `Extra data: line 9 column 1 (char 872)` because json.loads()
+    refused to parse JSON-followed-by-text. The parser must tolerate it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    asset_json = {
+        "asset_type": "printable",
+        "style": "boho",
+        "palette": ["#a3", "#b2", "#c1"],
+        "dimensions": "8.5x11",
+        "mockup_count": 1,
+        "brief_for_image_gen": "boho print",
+    }
+    raw_text = (
+        "```json\n"
+        + json.dumps(asset_json, indent=2)
+        + "\n```\n\n"
+        + "Here's a quick rationale for the choices above — boho palettes…"
+    )
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *a):
+            return False
+
+        def read(self_inner):
+            return json.dumps({
+                "content": [{"type": "text", "text": raw_text}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }).encode("utf-8")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp())
+    from designer.agent import call_anthropic
+    parsed, _, _ = call_anthropic("k-test", {"niche": "boho"})
+    assert parsed == asset_json
+
+
 # --- Slice G: real SVG asset generation ---
 
 

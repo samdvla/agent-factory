@@ -46,6 +46,28 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
     raise RuntimeError("retry: unreachable")
 
 
+def _parse_loose_json_object(text: str) -> dict:
+    """Parse the first JSON object out of `text`, tolerating fences and trailing prose.
+
+    Models occasionally append explanatory text after the JSON, or wrap it in
+    ```json fences with extra paragraphs underneath. Stripping fences naively
+    and then calling json.loads() blows up with "Extra data: line N col 1".
+    Instead, locate the first '{', call JSONDecoder.raw_decode(), and ignore
+    everything after the matching closing brace.
+    """
+    s = text.strip()
+    if s.startswith("```"):
+        nl = s.find("\n")
+        s = s[nl + 1 :] if nl != -1 else s
+    start = s.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in response")
+    obj, _end = json.JSONDecoder().raw_decode(s[start:])
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected JSON object, got {type(obj).__name__}")
+    return obj
+
+
 def _load_system_override(role: str) -> str | None:
     """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
     path = os.path.expanduser("~/.agent-factory/prompts.json")
@@ -111,13 +133,7 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
 
-    # Strip markdown code fences if present
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-
-    data = json.loads(text)
+    data = _parse_loose_json_object(text)
     return data, tokens_in, tokens_out
 
 
