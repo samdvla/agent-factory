@@ -8,7 +8,6 @@ import GateModal from "./factory/ui/GateModal";
 import OnboardingWizard from "./factory/ui/OnboardingWizard";
 import SettingsModal from "./factory/ui/SettingsModal";
 import CommandRail from "./factory/ui/CommandRail";
-import EventBeacon from "./factory/ui/EventBeacon";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { useDemoFloor } from "./hooks/useDemoFloor";
 import { useFactoryStore } from "./factory/state/factoryStore";
@@ -80,7 +79,6 @@ export default function App() {
           </div>
         )}
         <SvgFactoryFloor />
-        <EventBeacon />
       </div>
       <Ticker />
       <SideDrawer />

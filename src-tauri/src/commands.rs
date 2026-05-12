@@ -302,133 +302,17 @@ pub async fn cmd_enqueue(
         .map_err(|e| e.to_string())
 }
 
-#[derive(Serialize)]
-pub struct EmitProbeReport {
-    pub labels: Vec<String>,
-    pub attempts: Vec<EmitProbeAttempt>,
-    pub sent: u32,
-}
-
-#[derive(Serialize)]
-pub struct EmitProbeAttempt {
-    pub shape: String,
-    pub app_emit_ok: bool,
-    pub app_emit_error: Option<String>,
-    pub windows: Vec<EmitProbeWindowAttempt>,
-}
-
-#[derive(Serialize)]
-pub struct EmitProbeWindowAttempt {
-    pub label: String,
-    pub ok: bool,
-    pub error: Option<String>,
-}
-
-/// Diagnostic command: emits 3 synthetic `supervisor:event` payloads from an
-/// invoke handler so we can confirm the emit→listen channel itself works,
-/// independent of the spawned EventBus forwarder task. If listen() in the
-/// frontend doesn't receive these, the IPC is the problem; if it does
-/// receive these but not real supervisor events, the bus forwarder is.
-///
-/// Returns a structured report so the UI can show the real error messages
-/// without needing to read the terminal.
-#[tauri::command]
-pub async fn cmd_emit_test(app: tauri::AppHandle) -> Result<EmitProbeReport, String> {
-    use tauri::Manager;
-    // List all webview windows so we know what labels actually exist —
-    // capability "windows": ["main"] only applies if the real label is "main".
-    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
-    tracing::info!("cmd_emit_test: webview window labels = {labels:?}");
-
-    // Try a plain JSON map first to rule out SupervisorEvent serde issues,
-    // then a small SupervisorEvent, then the large variant with a nested
-    // serde_json::Value.
-    let probe_json = serde_json::json!({
-        "kind": "agent_started",
-        "role": "research"
-    });
-    let probe_small = SupervisorEvent::AgentStarted { role: "designer".into() };
-    let probe_big = SupervisorEvent::JobCompleted {
-        role: "publisher".into(),
-        job_id: -2,
-        result: serde_json::json!({"ok": true, "ticker_text": "synthetic probe"}),
-    };
-
-    fn try_emit<T: serde::Serialize>(
-        app: &tauri::AppHandle,
-        labels: &[String],
-        shape: &str,
-        payload: &T,
-    ) -> EmitProbeAttempt {
-        let mut windows = Vec::new();
-        let (app_emit_ok, app_emit_error) = match app.emit("supervisor:event", payload) {
-            Ok(()) => {
-                tracing::info!("cmd_emit_test[{shape}]: app.emit Ok");
-                (true, None)
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                tracing::warn!("cmd_emit_test[{shape}] app.emit failed: {msg}");
-                (false, Some(msg))
-            }
-        };
-        for label in labels {
-            if let Some(w) = app.get_webview_window(label) {
-                match w.emit("supervisor:event", payload) {
-                    Ok(()) => {
-                        tracing::info!("cmd_emit_test[{shape}]: window({label}).emit Ok");
-                        windows.push(EmitProbeWindowAttempt { label: label.clone(), ok: true, error: None });
-                    }
-                    Err(e) => {
-                        let msg = e.to_string();
-                        tracing::warn!("cmd_emit_test[{shape}] window({label}).emit failed: {msg}");
-                        windows.push(EmitProbeWindowAttempt { label: label.clone(), ok: false, error: Some(msg) });
-                    }
-                }
-            }
-        }
-        EmitProbeAttempt { shape: shape.into(), app_emit_ok, app_emit_error, windows }
-    }
-
-    let attempts = vec![
-        try_emit(&app, &labels, "json", &probe_json),
-        try_emit(&app, &labels, "small", &probe_small),
-        try_emit(&app, &labels, "big", &probe_big),
-    ];
-    let sent = attempts.iter()
-        .filter(|a| a.app_emit_ok || a.windows.iter().any(|w| w.ok))
-        .count() as u32;
-    Ok(EmitProbeReport { labels, attempts, sent })
-}
-
 pub fn forward_events_to_window(app: tauri::AppHandle, bus: EventBus) {
-    use tauri::Manager;
     let mut rx = bus.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(evt) => {
-                    // Emit to ALL listeners (frontend, plugins). Also explicitly
-                    // emit to the "main" webview window to cover the case where
-                    // app.emit() doesn't fan out before the window is fully
-                    // mounted. If either fails, log so debug builds surface it.
-                    if let Err(e) = app.emit("supervisor:event", &evt) {
-                        tracing::warn!("app.emit supervisor:event failed: {e}");
-                    }
-                    if let Some(w) = app.get_webview_window("main") {
-                        if let Err(e) = w.emit("supervisor:event", &evt) {
-                            tracing::warn!("main.emit supervisor:event failed: {e}");
-                        }
-                    }
+                    let _ = app.emit("supervisor:event", &evt);
                 }
-                // Receiver is behind. Re-subscribe transparently and keep going
-                // — losing the entire forwarder for the session over a backlog
-                // burst was the original "agents stay still" bug.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("supervisor:event forwarder lagged {n} msgs; resuming");
-                    continue;
-                }
-                // Channel closed — no senders left. Exit the task.
+                // Receiver is behind — keep the forwarder alive; losing it over
+                // a backlog burst was the original "agents stay still" bug.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
