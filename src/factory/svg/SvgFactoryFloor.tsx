@@ -93,19 +93,15 @@ export default function SvgFactoryFloor() {
   const vbMinY = cy - zoomedH / 2;
   const vb = `${vbMinX} ${vbMinY} ${zoomedW} ${zoomedH}`;
 
-  // TEMP DIAG: log viewport + zoom + pan + room count every render. If the
-  // canvas goes blank, the user reads the last few lines off the console and
-  // we can see exactly what state the floor is in.
-  if (typeof window !== "undefined" && (import.meta as any).env?.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("[floor]", {
-      zoom: zoom.toFixed(2),
-      pan: { x: pan.x.toFixed(0), y: pan.y.toFixed(0) },
-      vb,
-      base: { minX: base.minX.toFixed(0), minY: base.minY.toFixed(0), w: base.w.toFixed(0), h: base.h.toFixed(0) },
-      rooms: Object.keys(rooms).length,
-    });
-  }
+  // TEMP DIAG: on-screen HUD so the user can see floor state even when the
+  // canvas blanks (Tauri ⌘⌥J doesn't open browser devtools the usual way).
+  // Updated every render — when blanks happen, screenshot and we'll see why.
+  const diagText = [
+    `zoom ${zoom.toFixed(2)} · rooms ${Object.keys(rooms).length}`,
+    `pan  ${pan.x.toFixed(0)}, ${pan.y.toFixed(0)}`,
+    `vb   ${vbMinX.toFixed(0)}, ${vbMinY.toFixed(0)}  ${zoomedW.toFixed(0)}×${zoomedH.toFixed(0)}`,
+    `base ${base.minX.toFixed(0)}, ${base.minY.toFixed(0)}  ${base.w.toFixed(0)}×${base.h.toFixed(0)}`,
+  ].join("\n");
 
   // Viewport culling: re-derive detail levels only when the visible rectangle
   // or the rooms list changes. Off-viewport rooms drop down to "shell" or get
@@ -224,6 +220,25 @@ export default function SvgFactoryFloor() {
       </svg>
       <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} detailLevels={detailLevels} />
       <HandoffLayer svgRef={svgRef} zoom={zoom} />
+      {/* TEMP DIAG HUD — survives a blank canvas so we can see state */}
+      <pre
+        style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          margin: 0,
+          padding: "6px 10px",
+          background: "rgba(0,0,0,0.7)",
+          color: "#5fd4f0",
+          font: "11px/1.4 ui-monospace, monospace",
+          pointerEvents: "none",
+          zIndex: 999,
+          whiteSpace: "pre",
+          borderRadius: 4,
+        }}
+      >
+        {diagText}
+      </pre>
       <ZoomControls
         zoom={zoom}
         onZoomIn={zoomIn}
