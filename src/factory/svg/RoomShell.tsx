@@ -118,13 +118,27 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
   const isSpawning = age < 600 && !room.dissolving && room.createdAt !== 0;
   const opacity = room.dissolving ? 0 : (isSpawning ? 0 : 1);
 
+  // Spawn fade-in: keep re-rendering until `age` crosses 600ms so isSpawning
+  // can flip to false on its own. The previous one-shot setTimeout fired once
+  // then the [isSpawning] effect never re-armed (value unchanged across
+  // renders), which left dynamically-hired rooms stuck at opacity 0 — the
+  // Printify Operator's "Ops Bay" was invisible because of this.
   const [, force] = useState({});
   useEffect(() => {
-    if (isSpawning) {
-      const t = setTimeout(() => force({}), 50);
-      return () => clearTimeout(t);
-    }
-  }, [isSpawning]);
+    if (!room.createdAt || room.dissolving) return;
+    const start = room.createdAt;
+    let raf = 0;
+    const tick = () => {
+      if (Date.now() - start >= 600) {
+        force({});
+        return;
+      }
+      force({});
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [room.createdAt, room.dissolving]);
 
   return (
     <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
