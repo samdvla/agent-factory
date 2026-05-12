@@ -1403,6 +1403,40 @@ button.etsy-pill {
 .avatar-anchor.is-moving {
   z-index: 3; /* lift the walker over still co-workers */
 }
+/* Live-event pulse — fires for ~1.5s after every supervisor event that lands
+   on a role, so even single-station rooms and sub-second jobs are visibly
+   alive. The bounce and ring radiate from the avatar's feet. */
+.avatar-anchor.is-pulsing {
+  z-index: 3;
+  animation: avatar-event-bounce 1.5s ease-out;
+}
+.avatar-anchor.is-pulsing::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-ok);
+  background: rgba(94, 208, 168, 0.18);
+  transform-origin: center;
+  pointer-events: none;
+  animation: avatar-event-ring 1.5s ease-out forwards;
+}
+@keyframes avatar-event-bounce {
+  0%   { transform: translateY(0); }
+  18%  { transform: translateY(-6px); }
+  34%  { transform: translateY(0); }
+  50%  { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+@keyframes avatar-event-ring {
+  0%   { opacity: 1;   transform: scale(0.4); }
+  60%  { opacity: 0.6; transform: scale(2.6); }
+  100% { opacity: 0;   transform: scale(3.8); }
+}
 
 /* ============== Avatar figure styles ============== */
 .avatar {

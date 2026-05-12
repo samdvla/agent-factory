@@ -39,8 +39,21 @@ export default function AvatarLayer({
   const selectAgent = useFactoryStore((s) => s.selectAgent);
   const roles = useFactoryStore((s) => s.roles);
   const wealthByRole = useFactoryStore((s) => s.wealthByRole);
+  const realActivityAt = useFactoryStore((s) => s.realActivityAt);
   const layerRef = useRef<HTMLDivElement>(null);
   const [, force] = useState<object>({});
+
+  // Tick at 250ms while any agent's pulse window (1500ms after last real
+  // event) is active, so the `.is-pulsing` class drops cleanly when it
+  // expires without waiting for the next event.
+  useEffect(() => {
+    const anyRecent = Object.values(realActivityAt).some(
+      (t) => t && Date.now() - t < 1500,
+    );
+    if (!anyRecent) return;
+    const id = setInterval(() => force({}), 250);
+    return () => clearInterval(id);
+  }, [realActivityAt]);
 
   const [stationByRole, setStationByRole] = useState<Record<string, number>>(
     () => {
@@ -257,6 +270,8 @@ export default function AvatarLayer({
         if (!pos) return null;
         const moving = movingRoles.has(role.id);
         const isTraveling = !!(travel?.waypoints && travel.waypoints.length > 1);
+        const lastEventAt = realActivityAt[role.id] ?? 0;
+        const isPulsing = lastEventAt > 0 && Date.now() - lastEventAt < 1500;
         // "shell" tier: avatar is off-screen but might be entering soon;
         // skip the smooth left/top transition so we don't waste compositor
         // time animating something the user can't see.
@@ -265,7 +280,7 @@ export default function AvatarLayer({
         return (
           <div
             key={role.id}
-            className={`avatar-anchor${moving || isTraveling ? " is-moving" : ""}`}
+            className={`avatar-anchor${moving || isTraveling ? " is-moving" : ""}${isPulsing ? " is-pulsing" : ""}`}
             style={{
               position: "absolute",
               left: pos.left - FOOT_X * zoom,

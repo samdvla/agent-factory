@@ -1,5 +1,5 @@
 import { FactoryStore } from "./factoryStore";
-import { SUPERVISOR_ROLE_MAP } from "./fixtures";
+import { ROLES, SUPERVISOR_ROLE_MAP } from "./fixtures";
 import { api } from "../../api";
 
 export type SupervisorEvent = {
@@ -20,11 +20,40 @@ function visualRole(r: string | undefined): string | null {
   return SUPERVISOR_ROLE_MAP[r] ?? r;
 }
 
+/** Friendly label for the doc-sprite flying between rooms, by source role. */
+const HANDOFF_LABEL_BY_FROM: Record<string, string> = {
+  research: "demand brief",
+  orchestrator: "design ticket",
+  designer: "asset bundle",
+  listing: "listing draft",
+  publisher: "ledger entry",
+  cfo: "P&L close",
+  cs: "reply draft",
+  si: "prompt tweak",
+};
+
 export function applySupervisorEvent(
   store: FactoryStore,
   evt: SupervisorEvent
 ): void {
   const r = visualRole(evt.role);
+  // Fire a "real activity" timestamp on every supervisor event we can attach
+  // to a role — AvatarLayer reads this to drive a high-visibility pulse so
+  // the floor always reacts to live events, even for sub-second jobs and
+  // single-station rooms where the slower station-rotation never kicks in.
+  if (r) {
+    try {
+      store.markRealActivity(r);
+    } catch {
+      /* ignore */
+    }
+  }
+  // Dev visibility: log every event so you can confirm in the devtools
+  // console that the supervisor.event channel is actually flowing.
+  if (typeof window !== "undefined" && (import.meta as any).env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.debug("[supervisor.event]", evt.kind, evt.role, evt.job_id ?? "");
+  }
   switch (evt.kind) {
     case "agent_started":
       if (r) {
@@ -119,15 +148,42 @@ export function applySupervisorEvent(
         });
       }
       break;
-    case "worker_notification":
-      if (r && evt.method) {
-        store.pushTicker({
-          ts: Date.now(),
-          source: r,
-          text: `note: ${evt.method}`,
-        });
+    case "worker_notification": {
+      if (!r || !evt.method) break;
+      // enqueue_handoff is the supervisor's signal that one role's output is
+      // being passed to another role's queue. Animate it as a doc-sprite
+      // flying through the corridors so the floor stays visibly alive.
+      if (evt.method === "enqueue_handoff" && evt.params && typeof evt.params === "object") {
+        const params = evt.params as Record<string, unknown>;
+        const toRoleRaw = typeof params.to_role === "string" ? params.to_role : null;
+        const toRole = toRoleRaw ? (SUPERVISOR_ROLE_MAP[toRoleRaw] ?? toRoleRaw) : null;
+        const fromRoleSpec = ROLES[r];
+        const toRoleSpec = toRole ? ROLES[toRole] : null;
+        if (fromRoleSpec && toRoleSpec && fromRoleSpec.room !== toRoleSpec.room) {
+          store.pushHandoff({
+            id: `live-${r}-${toRole}-${Date.now()}-${Math.random().toFixed(3)}`,
+            fromRoom: fromRoleSpec.room,
+            toRoom: toRoleSpec.room,
+            color: fromRoleSpec.hex,
+            label: HANDOFF_LABEL_BY_FROM[r] ?? `${r} → ${toRole}`,
+            startedAt: Date.now(),
+            durationMs: 1400,
+          });
+          store.pushTicker({
+            ts: Date.now(),
+            source: r,
+            text: `→ ${toRole}: ${HANDOFF_LABEL_BY_FROM[r] ?? "handoff"}`,
+          });
+          break;
+        }
       }
+      store.pushTicker({
+        ts: Date.now(),
+        source: r,
+        text: `note: ${evt.method}`,
+      });
       break;
+    }
     case "budget_tick":
       if (typeof evt.usd_today === "number") {
         store.setBudget(evt.usd_today);
