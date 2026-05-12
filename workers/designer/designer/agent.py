@@ -223,8 +223,10 @@ def _build_svg_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         "earn its place.\n"
     )
     niche = ""
+    design_direction = ""
     if isinstance(brief, dict):
         niche = brief.get("niche", "") or ""
+        design_direction = brief.get("design_direction", "") or ""
     style = asset.get("style", "") if isinstance(asset, dict) else ""
     palette = asset.get("palette", []) if isinstance(asset, dict) else []
     if isinstance(palette, list):
@@ -233,13 +235,18 @@ def _build_svg_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         palette_str = str(palette)
     image_brief = asset.get("brief_for_image_gen", "") if isinstance(asset, dict) else ""
 
-    user = (
-        f"Niche: {niche}\n"
-        f"Style: {style}\n"
-        f"Palette: {palette_str}\n"
-        f"Image brief: {image_brief}\n"
-        "Generate the complete SVG markup now."
-    )
+    parts = [f"Niche: {niche}"]
+    if design_direction:
+        # The Research agent already did the aesthetic homework — surface it
+        # prominently so this overrides any generic palette hint below.
+        parts.append(f"Design direction (from Research): {design_direction}")
+    parts.extend([
+        f"Style: {style}",
+        f"Palette: {palette_str}",
+        f"Image brief: {image_brief}",
+        "Generate the complete SVG markup now.",
+    ])
+    user = "\n".join(parts)
     return system, user
 
 

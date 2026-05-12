@@ -62,6 +62,11 @@ JSON_SHAPE = (
     '  "keywords": ["<10-15 SEO keywords>"],\n'
     '  "price_band_usd": [<low>, <high>],\n'
     '  "product_type": "<sticker|digital_print|mug|tee|poster>",\n'
+    '  "design_direction": "<one-paragraph aesthetic playbook: style anchors '
+    '(flat-vector / risograph / line-art / Y2K / cottagecore), palette '
+    'recommendation, typography hint if any, and 2-3 specific composition '
+    "ideas. Treat this as a Midjourney-style prompt the Designer will lean "
+    'on.>",\n'
     '  "competition": "<low|medium|high>",\n'
     '  "rationale": "<one sentence reasoning>"\n'
     "}"
@@ -84,11 +89,20 @@ def _normalize_product_type(brief: dict) -> None:
 def build_demand_brief_prompt(niche_seed: str | None = None, rationale: str | None = None) -> tuple[str, str]:
     system = (
         "You are a Market Research Analyst at an AI-run digital products Etsy shop. "
-        "Your job is to identify a profitable niche and return a structured JSON Demand Brief. "
-        "Be concise and specific. Only return valid JSON, no prose, no markdown. "
+        "Your job is to identify a profitable niche AND lay down the design direction "
+        "the Designer agent will inherit. Return a structured JSON Demand Brief. "
+        "Be concise and specific. Only return valid JSON, no prose, no markdown.\n\n"
+
         "For product_type, pick the physical format that fits the niche best — "
         "default to 'sticker' for cheap impulse-buy designs (best margin on a new shop), "
-        "'digital_print' for downloadable wall art, 'mug'/'tee'/'poster' for everything else."
+        "'digital_print' for downloadable wall art, 'mug'/'tee'/'poster' for everything else.\n\n"
+
+        "For design_direction, lean on what you already know about the prompt-engineering "
+        "patterns that work in the AI-art world (Midjourney style anchors, Stable Diffusion "
+        "modifier stacks, Etsy bestseller aesthetics for this niche). Steal mercilessly — "
+        "if 'flat vector, pastel risograph, soft grain' is the proven pattern for boho "
+        "stickers, say so. The Designer reads this verbatim and uses it to shape the SVG, "
+        "so be opinionated and concrete: name the style, the palette, the composition idea."
     )
     if niche_seed:
         seed_text = niche_seed
