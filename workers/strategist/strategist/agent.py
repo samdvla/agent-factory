@@ -21,7 +21,11 @@ import urllib.request
 import urllib.error
 
 MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 2500
+# Sized to comfortably emit a 10k-char `improved_system_prompt` + a ~500-char
+# rationale + the JSON envelope (each is ~25% extra tokens after escaping).
+# Previous 2500 hit Sonnet's max_tokens mid-string and the JSON parser
+# rejected the truncated payload, wasting the call.
+MAX_TOKENS = 4000
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 # Minimum number of completed designer cycles before we'll attempt a tweak.
@@ -31,9 +35,11 @@ TAIL_LIMIT = 30
 
 # A safe size envelope for any prompt the strategist writes. Anything outside
 # this band is rejected (likely a model hallucination or empty response) and
-# the override is left untouched.
+# the override is left untouched. Cap bumped from 5000 → 10000 to match the
+# richer 3D-aware designer baseline (which is ~5400 chars on its own, so the
+# strategist's tuned variants legitimately run 6-9k chars).
 SYSTEM_MIN_LEN = 400
-SYSTEM_MAX_LEN = 5000
+SYSTEM_MAX_LEN = 10000
 
 
 def _data_dir() -> str:
@@ -323,7 +329,10 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         '  "improved_system_prompt": "<the new full system prompt for the Designer>",\n'
         '  "rationale": "<2-3 sentences: what you noticed, what you changed, expected effect>"\n'
         "}\n"
-        f"The improved prompt must be between {SYSTEM_MIN_LEN} and {SYSTEM_MAX_LEN} characters.\n"
+        f"The improved prompt must be between {SYSTEM_MIN_LEN} and {SYSTEM_MAX_LEN} characters. "
+        "Aim for ~7000 characters — leave headroom; do not max out the cap. "
+        "Trim any section that doesn't materially change what gets generated; "
+        "the budget is for substance, not padding.\n"
     )
 
     cur = current_override or "(no override — Designer is using its built-in baseline prompt)"
