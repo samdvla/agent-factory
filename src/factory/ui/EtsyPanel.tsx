@@ -16,10 +16,12 @@ import ListingReviewModal from "./ListingReviewModal";
 type ListTab = "drafts" | "queue" | "active" | "rejected";
 
 const TAB_DEFS: { id: ListTab; label: string; emptyMsg: string }[] = [
-  { id: "drafts",   label: "Drafts",   emptyMsg: "No drafts yet" },
-  { id: "queue",    label: "Queue",    emptyMsg: "Nothing queued for regeneration" },
-  { id: "active",   label: "Active",   emptyMsg: "No active listings yet" },
-  { id: "rejected", label: "Rejected", emptyMsg: "Nothing rejected" },
+  // Single-syllable verb-style labels so all 4 fit the narrow rail column
+  // even when a 2-digit count badge is showing alongside.
+  { id: "drafts",   label: "Draft",   emptyMsg: "No drafts yet" },
+  { id: "queue",    label: "Queue",   emptyMsg: "Nothing queued for regeneration" },
+  { id: "active",   label: "Active",  emptyMsg: "No active listings yet" },
+  { id: "rejected", label: "Reject",  emptyMsg: "Nothing rejected" },
 ];
 
 function filterByTab(rows: EtsyPublishRow[], tab: ListTab): EtsyPublishRow[] {
@@ -119,7 +121,12 @@ export default function EtsyPanel({ alwaysOpen: _alwaysOpen = false }: { alwaysO
         await openUrl(r.url);
       }
     } catch (e) {
+      // Re-throw so the caller (modal) can surface the error to the user.
+      // The old console.warn-only behavior made activate appear to succeed
+      // even when the Etsy API rejected it — modal would close silently
+      // and the row would stay in draft with no operator feedback.
       console.warn("activate failed", e);
+      throw e;
     } finally {
       setActivating(null);
     }

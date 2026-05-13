@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type BudgetStatus, type EtsyStatus, type PromptRow } from "../../api";
-import EtsyPanel from "./EtsyPanel";
+import MarketplacesCard from "./MarketplacesCard";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
@@ -98,22 +98,6 @@ function BudgetRow({
       <span className="rail-budget-row-num">
         {fmt(v)}/{fmt(cap)}
       </span>
-    </div>
-  );
-}
-
-/* ─── EtsyCard ───────────────────────────────────────────────────────── */
-function EtsyCard() {
-  return (
-    <div id="rail-etsy" className="rail-card rail-etsy-card rail-card--etsy">
-      <div className="rail-card-header">
-        <span className="rail-card-accent" style={{ background: "#f5a623" }} />
-        Etsy
-      </div>
-      {/* alwaysOpen keeps the panel body visible without needing to click
-          the pill. The pill button is hidden via CSS since the card header
-          already labels this section. */}
-      <EtsyPanel alwaysOpen />
     </div>
   );
 }
@@ -731,8 +715,10 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       {/* Budget card */}
       <BudgetCard budget={budget} />
 
-      {/* Etsy card */}
-      <EtsyCard />
+      {/* Marketplaces accordion — Etsy + Cults3D + Sketchfab + MMF +
+          Gumroad + Pinterest. The id stays `rail-etsy` so the collapsed-
+          strip Etsy icon still scrolls to this card on expand. */}
+      <MarketplacesCard />
 
       {/* Conversations row — opens a modal showing the agent message log */}
       <div id="rail-conversations" className="rail-panel-row-wrap">
@@ -770,7 +756,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
         <button
           type="button"
           className="rail-panel-row"
-          onClick={() => setActivityOpen(true)}
+          onClick={openActivity}
           title="Open the Activity review"
         >
           <span className="rail-card-accent" style={{ background: "#b393f5" }} />

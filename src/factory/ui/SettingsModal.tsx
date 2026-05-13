@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type EtsyStatus } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 import { useFactoryStore } from "../state/factoryStore";
@@ -1884,22 +1885,28 @@ function TrendSignalsSection() {
 /* ------------------------------------------------------------------ */
 
 function MmfSection() {
-  const [keyDraft, setKeyDraft] = useState("");
-  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [clientIdDraft, setClientIdDraft] = useState("");
+  const [clientSecretDraft, setClientSecretDraft] = useState("");
+  const [connectState, setConnectState] = useState<
+    "idle" | "connecting" | "ok" | "error"
+  >("idle");
   const [err, setErr] = useState<string | null>(null);
-  const [verifiedAccount, setVerifiedAccount] = useState<string | null>(null);
   const [status, setStatus] = useState<{
     credsPresent: boolean;
     enabled: boolean;
     sellPaid: boolean;
     dailyCap: number;
     todayCount: number;
+    clientId: string | null;
+    oauthUserId: string | null;
   }>({
     credsPresent: false,
     enabled: false,
     sellPaid: false,
     dailyCap: 5,
     todayCount: 0,
+    clientId: null,
+    oauthUserId: null,
   });
   const [capDraft, setCapDraft] = useState<string>("");
 
@@ -1912,6 +1919,8 @@ function MmfSection() {
         sellPaid: s.sell_paid,
         dailyCap: s.daily_cap,
         todayCount: s.today_count,
+        clientId: s.client_id,
+        oauthUserId: s.oauth_user_id,
       });
       setCapDraft(String(s.daily_cap));
     } catch {
@@ -1920,22 +1929,50 @@ function MmfSection() {
   };
   useEffect(() => {
     reload();
+    let unlistenOk: UnlistenFn | undefined;
+    let unlistenErr: UnlistenFn | undefined;
+    (async () => {
+      unlistenOk = await listen("mmf_connected", () => {
+        setConnectState("ok");
+        setClientIdDraft("");
+        setClientSecretDraft("");
+        setErr(null);
+        reload();
+      });
+      unlistenErr = await listen<string>("mmf_oauth_error", (e) => {
+        setConnectState("error");
+        setErr(String(e.payload || "OAuth failed"));
+      });
+    })();
+    return () => {
+      unlistenOk?.();
+      unlistenErr?.();
+    };
   }, []);
 
-  const handleVerify = async () => {
-    if (!keyDraft.trim()) return;
-    setVerifyState("verifying");
+  const handleConnect = async () => {
+    if (!clientIdDraft.trim() || !clientSecretDraft.trim()) return;
+    setConnectState("connecting");
     setErr(null);
     try {
-      const r = await api.mmfVerify(keyDraft.trim());
-      setVerifyState("ok");
-      setVerifiedAccount(r.account);
-      setKeyDraft("");
-      reload();
+      const { authorize_url } = await api.mmfStartOAuth(
+        clientIdDraft.trim(),
+        clientSecretDraft.trim(),
+      );
+      await openUrl(authorize_url);
+      // Connect-state stays "connecting" until the mmf_connected /
+      // mmf_oauth_error event fires (handled by the listeners above).
     } catch (e) {
-      setVerifyState("error");
+      setConnectState("error");
       setErr(String(e));
     }
+  };
+
+  const handleDisconnect = async () => {
+    await api.mmfDisconnect();
+    setConnectState("idle");
+    setErr(null);
+    reload();
   };
 
   const handleToggle = async () => {
@@ -1955,22 +1992,26 @@ function MmfSection() {
     setStatus((s) => ({ ...s, dailyCap: n }));
   };
 
+  const connected = status.credsPresent;
+
   return (
     <section className="settings-section">
       <div className="settings-section-title">MyMiniFactory publishing</div>
       <div className="settings-helper" style={{ marginBottom: 8 }}>
-        Cross-list every 3D asset to MyMiniFactory. Heads up: MMF's API write
-        access can require developer approval on some accounts — if uploads
-        get rejected, the error shows up in the publishes list and you can
-        switch to manual upload or request OAuth approval. AI disclosure added
-        automatically.
+        Cross-list every 3D asset to MyMiniFactory. MMF requires OAuth 2.0 for
+        uploads — personal API keys only work for reads. Register an app at{" "}
+        <code>myminifactory.com/settings/developer</code> (set redirect URI to{" "}
+        <code>http://localhost:7330/callback</code>), then paste{" "}
+        <code>client_id</code> + <code>client_secret</code> below.
       </div>
 
       <div className="settings-field-row">
         <div className="settings-field-label-col">
           <span className="settings-field-label">Status</span>
           <span className="settings-helper">
-            {status.credsPresent ? "Key saved" : "No key — verify below"}
+            {connected
+              ? `Connected via OAuth${status.oauthUserId ? ` · user ${status.oauthUserId}` : ""}`
+              : "Not connected — paste client_id + client_secret below"}
             {" · "}
             {status.todayCount}/{status.dailyCap} published today
             {" · "}
@@ -1979,40 +2020,90 @@ function MmfSection() {
         </div>
       </div>
 
-      <div className="settings-field-row">
-        <div className="settings-field-label-col">
-          <span className="settings-field-label">API key</span>
-          <span className="settings-helper">
-            Generate at myminifactory.com → Settings → Developer. Verifying
-            saves the key.
-          </span>
-        </div>
-        <input
-          type="password"
-          className="settings-cred-input"
-          placeholder={status.credsPresent ? "•••••• (saved)" : "MMF API key"}
-          value={keyDraft}
-          onChange={(e) => setKeyDraft(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button
-          type="button"
-          className="settings-cred-save"
-          onClick={handleVerify}
-          disabled={verifyState === "verifying" || !keyDraft.trim()}
-        >
-          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
-        </button>
-      </div>
-      {verifyState === "ok" && (
-        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
-          Verified as {verifiedAccount} — key saved.
-        </div>
+      {!connected && (
+        <>
+          <div className="settings-field-row">
+            <div className="settings-field-label-col">
+              <span className="settings-field-label">Client ID</span>
+              <span className="settings-helper">
+                From your MMF developer app. Stored locally, used only to
+                build the OAuth authorize URL.
+              </span>
+            </div>
+            <input
+              type="text"
+              className="settings-cred-input"
+              placeholder="MMF client_id"
+              value={clientIdDraft}
+              onChange={(e) => setClientIdDraft(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="settings-field-row">
+            <div className="settings-field-label-col">
+              <span className="settings-field-label">Client secret</span>
+              <span className="settings-helper">
+                From the same MMF developer app. Used to authenticate the
+                token-exchange POST.
+              </span>
+            </div>
+            <input
+              type="password"
+              className="settings-cred-input"
+              placeholder="MMF client_secret"
+              value={clientSecretDraft}
+              onChange={(e) => setClientSecretDraft(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="settings-cred-save"
+              onClick={handleConnect}
+              disabled={
+                connectState === "connecting" ||
+                !clientIdDraft.trim() ||
+                !clientSecretDraft.trim()
+              }
+            >
+              {connectState === "connecting"
+                ? "Waiting for browser…"
+                : "Connect via OAuth"}
+            </button>
+          </div>
+          {connectState === "connecting" && (
+            <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+              Browser opened. Approve the app on myminifactory.com — this
+              section will switch to "Connected" automatically when the
+              redirect fires.
+            </div>
+          )}
+          {connectState === "error" && (
+            <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+              {err}
+            </div>
+          )}
+        </>
       )}
-      {verifyState === "error" && (
-        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
-          {err}
+
+      {connected && (
+        <div className="settings-field-row">
+          <div className="settings-field-label-col">
+            <span className="settings-field-label">Disconnect</span>
+            <span className="settings-helper">
+              Drops the OAuth tokens. Keeps client_id/client_secret so a
+              reconnect is one click.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="settings-cred-save"
+            onClick={handleDisconnect}
+          >
+            Disconnect
+          </button>
         </div>
       )}
 

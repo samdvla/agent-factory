@@ -22,6 +22,15 @@ use std::time::Duration;
 const API_BASE: &str = "https://www.myminifactory.com/api/v2";
 const UA: &str = "agent-factory/1.0";
 
+/// Authentication material for MMF API calls.
+///
+/// `api_key`: the legacy personal API key, used ONLY for the verify path
+///            (reads from /me / /objects). MMF's write endpoints reject
+///            personal keys with HTTP 401 — that's why we have OAuth.
+/// `access_token`: an OAuth 2.0 access token from the authorization-code
+///            flow. Required for create_object_with_file (writes).
+///
+/// Callers should populate exactly one of these depending on the call site.
 #[derive(Debug, Clone)]
 pub struct Creds {
     pub api_key: String,
@@ -152,13 +161,13 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
 /// Allowed — that route only accepts GET (list objects). The plural-vs-
 /// singular drift cost every prior upload attempt.
 ///
-/// Auth: passes the API key as both an `Authorization: Bearer` header
-/// (MMF's documented modern scheme) AND as the legacy `?key=` query
-/// string. Hitting one or the other works on MMF's mixed auth surface
-/// without us having to know which the user's key actually is.
+/// Auth: ONLY uses `Authorization: Bearer <access_token>`. MMF rejects
+/// personal API keys for object creation (HTTP 401), so this path is
+/// OAuth-only. Callers MUST pass a fresh access token obtained via
+/// `crate::mmf_oauth::ensure_fresh_token`.
 pub async fn create_object_with_file(
     client: &reqwest::Client,
-    creds: &Creds,
+    access_token: &str,
     input: &CreateObjectInput,
     file_path: &Path,
 ) -> Result<CreateObjectResult> {
@@ -187,8 +196,7 @@ pub async fn create_object_with_file(
     }
     let create_resp = client
         .post(format!("{API_BASE}/object"))
-        .query(&[("key", creds.api_key.as_str())])
-        .header("Authorization", format!("Bearer {}", creds.api_key))
+        .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/json; charset=utf-8")
         .header("User-Agent", UA)
         .json(&body)
@@ -225,11 +233,8 @@ pub async fn create_object_with_file(
     // Step 2 — upload the binary file.
     let upload_resp = client
         .post(format!("{API_BASE}/file"))
-        .query(&[
-            ("key", creds.api_key.as_str()),
-            ("upload_id", upload_id.as_str()),
-        ])
-        .header("Authorization", format!("Bearer {}", creds.api_key))
+        .query(&[("upload_id", upload_id.as_str())])
+        .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/octet-stream")
         .header("Content-Disposition", format!("filename=\"{filename}\""))
         .header("User-Agent", UA)

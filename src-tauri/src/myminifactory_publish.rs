@@ -13,13 +13,9 @@ use std::path::PathBuf;
 
 pub const DEFAULT_DAILY_CAP: i64 = 5;
 
-fn creds_from_secrets() -> Option<myminifactory::Creds> {
-    let api_key = secrets::get("mmf_api_key").ok().flatten().unwrap_or_default();
-    if api_key.is_empty() {
-        return None;
-    }
-    Some(myminifactory::Creds { api_key })
-}
+// Personal API key fallback is read-only and not accepted by MMF for
+// writes — the publish path always uses an OAuth access token via
+// `crate::mmf_oauth::ensure_fresh_token` instead.
 
 pub async fn handle_publisher_complete_mmf(
     pool: &SqlitePool,
@@ -91,9 +87,16 @@ pub async fn handle_publisher_complete_mmf(
         return;
     }
 
-    let Some(creds) = creds_from_secrets() else {
-        fail("mmf credentials missing (set mmf_api_key)".into());
-        return;
+    // Fresh OAuth token — refreshed automatically if the cached one is
+    // about to expire. Errors here mean the operator hasn't run the
+    // OAuth flow yet.
+    let client = reqwest::Client::new();
+    let access_token = match crate::mmf_oauth::ensure_fresh_token(&client).await {
+        Ok(t) => t,
+        Err(e) => {
+            fail(format!("mmf oauth not ready: {e:#}"));
+            return;
+        }
     };
 
     // Charge for paid by default — toggleable.
@@ -132,9 +135,8 @@ pub async fn handle_publisher_complete_mmf(
         price_usd: price,
     };
 
-    let client = reqwest::Client::new();
     let now = chrono::Utc::now().timestamp();
-    match myminifactory::create_object_with_file(&client, &creds, &input, &file_path).await {
+    match myminifactory::create_object_with_file(&client, &access_token, &input, &file_path).await {
         Ok(res) => {
             if let Err(e) = sqlx::query(
                 "INSERT INTO mmf_publishes \
@@ -172,7 +174,24 @@ pub async fn handle_publisher_complete_mmf(
             });
         }
         Err(e) => {
-            let reason = format!("mmf create failed: {e:#}");
+            let raw = format!("{e:#}");
+            // A 401 here after we've already passed `ensure_fresh_token`
+            // means the refresh succeeded but the token MMF gave us is
+            // somehow invalid for writes, OR the user revoked our app
+            // from their MMF account. Clear the tokens so we stop
+            // retrying every cycle; the operator can reconnect from
+            // Settings to recover.
+            let is_auth_failure = raw.contains("HTTP 401") || raw.contains("Unauthorized");
+            let reason = if is_auth_failure {
+                let _ = crate::mmf_oauth::disconnect();
+                format!(
+                    "mmf create failed: MMF returned 401 after a fresh OAuth token. \
+                     Tokens dropped to stop retry loops — reconnect via \
+                     Settings → MyMiniFactory. Raw error: {raw}"
+                )
+            } else {
+                format!("mmf create failed: {raw}")
+            };
             if let Err(db_err) = sqlx::query(
                 "INSERT INTO mmf_publishes \
                  (project_id, local_listing_id, title, state, error, published_at, day) \

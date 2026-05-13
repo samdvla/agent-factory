@@ -4195,17 +4195,20 @@ button.etsy-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 5px 2px;
+  gap: 3px;
+  /* Tighter horizontal padding so 2-digit counts still leave room for
+     the full label (was truncating "DRAFTS" → "DRA…" once the badge
+     hit double digits). */
+  padding: 5px 1px;
   min-width: 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -4229,12 +4232,12 @@ button.etsy-pill {
 }
 .etsy-rail-tab-count {
   flex-shrink: 0;
-  min-width: 14px;
-  padding: 0 4px;
+  min-width: 12px;
+  padding: 0 3px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 22%, var(--glass-fill));
   color: var(--accent);
-  font-size: 8.5px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.45;
@@ -7543,3 +7546,448 @@ button.etsy-pill {
 .agent-panel-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 
 
+
+/* ───────────────────────────────────────────────────────────────────────
+   Marketplaces accordion — replaces the single ETSY card on the rail.
+   Each row collapses to a status dot + meta line; one expansion at a
+   time slots in the marketplace's full panel below the row header.
+   ─────────────────────────────────────────────────────────────────── */
+
+.rail-card--marketplaces {
+  padding-bottom: 6px;  /* tighter than default — accordion rows have their own spacing */
+}
+
+.mp-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+/* One row in the accordion. */
+.mp-row {
+  border-radius: 8px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.mp-row:hover:not(.is-expanded) {
+  background: var(--glass-fill);
+}
+.mp-row.is-expanded {
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  /* Pull the border in so it visually wraps the head + body together. */
+}
+
+/* The header button: status dot + label + meta + caret. */
+.mp-row-head {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+.mp-row-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+/* Status dot — one pixel-perfect circle per state. */
+.mp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.mp-dot--connected {
+  background: #9be0b3;
+  box-shadow: 0 0 6px rgba(155, 224, 179, 0.55);
+}
+.mp-dot--disabled {
+  background: #e8d77b;
+  box-shadow: 0 0 4px rgba(232, 215, 123, 0.4);
+}
+.mp-dot--disconnected {
+  background: var(--ink-3);
+  opacity: 0.5;
+}
+.mp-dot--error {
+  background: #ff8a93;
+  box-shadow: 0 0 6px rgba(255, 138, 147, 0.55);
+}
+
+.mp-row-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.mp-row-meta {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 2px;
+}
+
+.mp-row-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 2px;
+  color: var(--ink-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  transition: color 0.12s, background 0.12s;
+}
+.mp-row-link:hover {
+  color: var(--ink-1);
+  background: var(--glass-fill);
+}
+
+.mp-caret {
+  color: var(--ink-3);
+  transition: transform 0.15s ease;
+}
+.mp-caret.is-open {
+  transform: rotate(90deg);
+  color: var(--ink-1);
+}
+
+/* Expanded row body — slots in the marketplace's full panel. */
+.mp-row-body {
+  padding: 4px 8px 10px;
+  border-top: 1px solid var(--glass-border);
+  margin-top: 2px;
+}
+
+/* When the body holds the Etsy panel, strip the duplicate top margin so
+   the panel's status header sits flush under the row head. */
+.mp-row-body .etsy-rail {
+  margin-top: 4px;
+}
+
+/* Visual divider for "sales" vs "traffic" inside the accordion. */
+.mp-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 2px 2px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+.mp-divider::before,
+.mp-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--glass-border);
+}
+
+/* Simple marketplace list (Cults3D / Sketchfab / MMF / Gumroad / Pinterest). */
+.mp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.mp-list-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  background: var(--glass-fill);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.mp-list-state {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--glass-fill-soft);
+  color: var(--ink-2);
+}
+.mp-list-state.state-active,
+.mp-list-state.state-published {
+  background: rgba(155, 224, 179, 0.16);
+  color: #9be0b3;
+}
+.mp-list-state.state-pending,
+.mp-list-state.state-queued {
+  background: rgba(232, 215, 123, 0.16);
+  color: #e8d77b;
+}
+.mp-list-state.state-errored,
+.mp-list-state.state-rejected {
+  background: rgba(255, 138, 147, 0.16);
+  color: #ff8a93;
+}
+.mp-list-title {
+  color: var(--ink-1);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-list-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--ink-3);
+  padding: 2px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  transition: color 0.12s, background 0.12s;
+}
+.mp-list-link:hover {
+  color: var(--ink-1);
+  background: var(--glass-fill-soft);
+}
+
+.mp-empty {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  padding: 6px 4px;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Today / daily-cap meter at the top of each simple marketplace body. */
+.mp-today {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 6px;
+}
+.mp-today-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.mp-today-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.mp-today-count strong {
+  font-weight: 600;
+  color: var(--ink-1);
+  font-size: 12px;
+}
+.mp-today-cap {
+  color: var(--ink-3);
+  margin-left: 2px;
+}
+.mp-today-bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--glass-fill);
+  overflow: hidden;
+}
+.mp-today-bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #9be0b3, #e8d77b);
+  transition: width 0.3s ease;
+}
+
+/* List-row tweaks: add price column + warning glyph + tighter grid. */
+.mp-list-row {
+  /* state? title  warn? price link */
+  grid-template-columns: auto 1fr auto auto auto;
+}
+.mp-list-row.state-active,
+.mp-list-row.state-published {
+  /* No state badge column — title slides left. */
+  grid-template-columns: 1fr auto auto auto;
+}
+.mp-list-price {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  text-align: right;
+  min-width: 32px;
+}
+.mp-list-warn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(232, 215, 123, 0.18);
+  color: #e8d77b;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: help;
+}
+
+/* Hide EtsyPanel's internal status header when nested in the accordion —
+   the row header already shows the shop name + dot, so the inner header
+   was duplication. KILL SWITCH banner stays since it's a real warning. */
+.mp-row-body .etsy-rail-status {
+  display: none;
+}
+.mp-row-body .etsy-rail {
+  /* Cancel the extra top margin we added earlier — body padding handles
+     it now that we're not stacking two status headers. */
+  margin-top: 0;
+}
+
+/* Action-failure banner in the review modal — surfaces what console.warn
+   used to swallow. Sits between the body and the footer so it's visible
+   without scrolling. */
+.review-action-error {
+  margin: 0 18px 0;
+  padding: 8px 12px;
+  background: rgba(255, 138, 147, 0.12);
+  border: 1px solid rgba(255, 138, 147, 0.35);
+  border-radius: 8px;
+  color: #ff8a93;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
+/* Two-step confirmation hint above the modal footer. */
+.review-confirm-hint {
+  margin: 0 18px 8px;
+  padding: 6px 10px;
+  background: rgba(232, 215, 123, 0.12);
+  border: 1px solid rgba(232, 215, 123, 0.35);
+  border-radius: 6px;
+  color: #e8d77b;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Visual change on the action button when it's armed for a second tap. */
+.review-btn.is-confirming {
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
+  animation: review-confirm-pulse 1.2s ease-in-out infinite;
+}
+@keyframes review-confirm-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50%      { box-shadow: 0 0 0 4px rgba(255, 138, 147, 0.18); }
+}
+
+/* Resync button row — sits above the tab strip in the Etsy panel. */
+.etsy-rail-resync-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px 8px;
+  flex-wrap: wrap;
+}
+.etsy-rail-resync-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.etsy-rail-resync-btn:hover:not(:disabled) {
+  background: var(--glass-fill-soft);
+  color: var(--ink-0);
+  border-color: var(--glass-border-strong);
+}
+.etsy-rail-resync-btn:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+.etsy-rail-resync-btn .is-spinning {
+  animation: etsy-resync-spin 0.9s linear infinite;
+}
+@keyframes etsy-resync-spin {
+  to { transform: rotate(360deg); }
+}
+.etsy-rail-resync-msg {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+
+/* Marketplaces card header — sync-all button sits right-aligned in the
+   header strip so the title reads "Marketplaces        [↻]" cleanly. */
+.rail-card-header--marketplaces {
+  /* Header is already flex (gap:6px, align center) from .rail-card-header;
+     we only need to push the sync button to the trailing edge. */
+  justify-content: flex-start;
+}
+.rail-card-header--marketplaces > span:not(.rail-card-accent) {
+  /* Title text — pushes sync button to the far right via margin-right:auto. */
+  margin-right: auto;
+}
+.mp-sync-all-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  background: var(--glass-fill);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.mp-sync-all-btn:hover:not(:disabled) {
+  background: var(--glass-fill-soft);
+  color: var(--ink-0);
+  border-color: var(--glass-border-strong);
+}
+.mp-sync-all-btn:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+.mp-sync-all-btn .is-spinning {
+  animation: etsy-resync-spin 0.9s linear infinite;
+}

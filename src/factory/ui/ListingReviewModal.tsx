@@ -42,6 +42,18 @@ function ListingReviewModalImpl({
   const [asset, setAsset] = useState<JobAssetInfo | null>(null);
   const [svg, setSvg] = useState<string | null>(null);
   const [working, setWorking] = useState<Working>(null);
+  /** Visible error from the most recent action — replaces the old
+   *  console.warn-only behavior so failures aren't invisible. Cleared on
+   *  the next action attempt. */
+  const [actionError, setActionError] = useState<string | null>(null);
+  /** Inline two-step confirmation: which action is pending operator
+   *  confirmation. `window.confirm()` is unreliable inside Tauri 2 (the
+   *  embedded webview's native dialog can return false synchronously
+   *  without showing UI), so we render an in-modal confirmation row
+   *  instead. */
+  const [confirming, setConfirming] = useState<
+    "regenerate" | "reject" | "cancel" | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,71 +100,83 @@ function ListingReviewModalImpl({
   const tags = info?.tags ?? [];
 
   const onActivateClick = async () => {
+    setActionError(null);
     setWorking("activate");
     try {
       await onActivate(localListingId);
       onClose();
+    } catch (e) {
+      setActionError(`Activate failed: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn("activate failed", e);
     } finally {
       setWorking(null);
     }
   };
+  // Two-step confirm: first tap arms the action; second tap (on the same
+  // button, now styled as "Confirm") executes. Tapping elsewhere or any
+  // other action cancels the pending confirm.
   const onRegenerateClick = async () => {
-    if (
-      !window.confirm(
-        "Queue this draft for regeneration? It moves to the Queue tab and a new draft will be produced.",
-      )
-    )
+    if (confirming !== "regenerate") {
+      setConfirming("regenerate");
       return;
+    }
+    setConfirming(null);
+    setActionError(null);
     setWorking("regenerate");
     try {
       await api.etsyRegenerateDraft(localListingId);
       onClose();
     } catch (e) {
+      setActionError(`Regenerate failed: ${e instanceof Error ? e.message : String(e)}`);
       console.warn("regenerate draft failed", e);
     } finally {
       setWorking(null);
     }
   };
   const onRejectClick = async () => {
-    if (
-      !window.confirm(
-        "Reject this idea? It moves to the Rejected tab and the orchestrator will steer away from similar niches.",
-      )
-    )
+    if (confirming !== "reject") {
+      setConfirming("reject");
       return;
+    }
+    setConfirming(null);
+    setActionError(null);
     setWorking("reject");
     try {
       await api.etsyRejectDraft(localListingId);
       onClose();
     } catch (e) {
+      setActionError(`Reject failed: ${e instanceof Error ? e.message : String(e)}`);
       console.warn("reject draft failed", e);
     } finally {
       setWorking(null);
     }
   };
   const onRestoreClick = async () => {
+    setActionError(null);
     setWorking("restore");
     try {
       await api.etsyRestoreRejected(localListingId);
       onClose();
     } catch (e) {
+      setActionError(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
       console.warn("restore rejected failed", e);
     } finally {
       setWorking(null);
     }
   };
   const onCancelRegenClick = async () => {
-    if (
-      !window.confirm(
-        "Cancel this regeneration? The row moves to Rejected and the queued orchestrator job becomes a no-op.",
-      )
-    )
+    if (confirming !== "cancel") {
+      setConfirming("cancel");
       return;
+    }
+    setConfirming(null);
+    setActionError(null);
     setWorking("cancel");
     try {
       await api.etsyCancelRegeneration(localListingId);
       onClose();
     } catch (e) {
+      setActionError(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`);
       console.warn("cancel regeneration failed", e);
     } finally {
       setWorking(null);
@@ -341,26 +365,50 @@ function ListingReviewModalImpl({
           </div>
         </div>
 
+        {actionError && (
+          <div className="review-action-error" role="alert">
+            {actionError}
+          </div>
+        )}
+
+        {confirming && (
+          <div className="review-confirm-hint" role="status">
+            {confirming === "regenerate"
+              ? "Tap Regenerate again to queue a fresh cycle."
+              : confirming === "reject"
+                ? "Tap Reject again to send to Rejected and steer away from this niche."
+                : "Tap Cancel again to drop this regeneration."}
+          </div>
+        )}
+
         <footer className="review-modal-footer">
           {mode === "drafts" && (
             <>
               <button
                 type="button"
-                className="review-btn is-regen"
+                className={`review-btn is-regen${confirming === "regenerate" ? " is-confirming" : ""}`}
                 onClick={onRegenerateClick}
                 disabled={working !== null}
                 title="Queue this draft and enqueue a fresh cycle"
               >
-                {working === "regenerate" ? "…" : "Regenerate"}
+                {working === "regenerate"
+                  ? "…"
+                  : confirming === "regenerate"
+                    ? "Confirm Regenerate"
+                    : "Regenerate"}
               </button>
               <button
                 type="button"
-                className="review-btn is-reject"
+                className={`review-btn is-reject${confirming === "reject" ? " is-confirming" : ""}`}
                 onClick={onRejectClick}
                 disabled={working !== null}
                 title="Reject this idea — moves to Rejected tab and steers future cycles away"
               >
-                {working === "reject" ? "…" : "Reject"}
+                {working === "reject"
+                  ? "…"
+                  : confirming === "reject"
+                    ? "Confirm Reject"
+                    : "Reject"}
               </button>
               <button
                 type="button"
@@ -375,12 +423,16 @@ function ListingReviewModalImpl({
           {mode === "queue" && (
             <button
               type="button"
-              className="review-btn is-reject"
+              className={`review-btn is-reject${confirming === "cancel" ? " is-confirming" : ""}`}
               onClick={onCancelRegenClick}
               disabled={working !== null}
               title="Cancel this regeneration — moves row back to Rejected"
             >
-              {working === "cancel" ? "…" : "Cancel regeneration"}
+              {working === "cancel"
+                ? "…"
+                : confirming === "cancel"
+                  ? "Confirm Cancel"
+                  : "Cancel regeneration"}
             </button>
           )}
           {mode === "rejected" && (

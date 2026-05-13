@@ -96,6 +96,88 @@ async fn create_release(
     serde_json::from_str(&text).with_context(|| format!("parse release resp: {text}"))
 }
 
+/// Returns true if the error message from create_release looks like
+/// GitHub's "Repository is empty" rejection. GitHub refuses to attach
+/// releases to repos with zero commits.
+fn is_empty_repo_error(err_msg: &str) -> bool {
+    err_msg.contains("Repository is empty")
+}
+
+/// Initialize an empty repo by committing a README.md via the Contents
+/// API. Idempotent: if the file already exists GitHub returns 422 which
+/// we silently swallow (the repo already has a commit, which is all we
+/// need for releases to work). This makes asset hosting work on a
+/// freshly-created repo without the operator having to push manually.
+async fn bootstrap_empty_repo(
+    client: &reqwest::Client,
+    repo: &str,
+    token: &str,
+) -> Result<()> {
+    use base64::Engine;
+    let url = format!("{GITHUB_API}/repos/{repo}/contents/README.md");
+    let content_b64 = base64::engine::general_purpose::STANDARD.encode(
+        "# Agent Factory Asset Host\n\n\
+         Auto-initialized by agent-factory. Files in this repo are uploaded as \
+         release assets and served to 3D marketplaces (Cults3D, etc.) as \
+         public download URLs.\n",
+    );
+    let body = serde_json::json!({
+        "message": "Initialize asset host repo",
+        "content": content_b64,
+    });
+    let resp = client
+        .put(&url)
+        .header(AUTHORIZATION, auth_value(token))
+        .header(USER_AGENT, UA)
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("github bootstrap PUT contents failed")?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    // 422 = file already exists / sha mismatch — that means another path
+    // already created a commit, which is exactly what we wanted. Treat
+    // as success so we don't break a repo that someone else just bootstrapped.
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        return Ok(());
+    }
+    let text = resp.text().await.unwrap_or_default();
+    Err(anyhow!("github bootstrap HTTP {status}: {text}"))
+}
+
+/// Wrap create_release with one auto-recovery for the empty-repo case.
+/// First create attempt → if it fails with "Repository is empty", commit
+/// a README via the Contents API then retry. One retry only — if the
+/// second create_release still fails we surface the error as before.
+async fn create_release_with_bootstrap(
+    client: &reqwest::Client,
+    repo: &str,
+    token: &str,
+    tag: &str,
+    name: &str,
+) -> Result<ReleaseResp> {
+    match create_release(client, repo, token, tag, name).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if !is_empty_repo_error(&msg) {
+                return Err(e);
+            }
+            tracing::info!(
+                "github asset host: repo {repo} is empty — bootstrapping with a README and retrying"
+            );
+            bootstrap_empty_repo(client, repo, token)
+                .await
+                .with_context(|| "bootstrap empty repo before release create")?;
+            create_release(client, repo, token, tag, name).await
+        }
+    }
+}
+
 async fn upload_asset(
     client: &reqwest::Client,
     upload_url: &str,
@@ -153,7 +235,7 @@ pub async fn host_listing_assets(
     let tag = format!("asset-{job_id}-{ts}");
     let name = format!("agent-factory asset {job_id}");
 
-    let release = create_release(client, repo, token, &tag, &name).await?;
+    let release = create_release_with_bootstrap(client, repo, token, &tag, &name).await?;
 
     let model_name = model_path
         .file_name()
@@ -298,5 +380,28 @@ pub async fn verify(client: &reqwest::Client, repo: &str, token: &str) -> Result
         .and_then(|s| s.as_str())
         .unwrap_or("main")
         .to_string();
+
+    // GitHub's Releases API rejects repos that have zero commits with
+    // HTTP 422 "Repository is empty". We detect that here at setup time
+    // (the `size` field is 0 for an empty repo and the GET /repos
+    // response omits `default_branch` for empty repos) and bootstrap a
+    // README.md so the very first publish doesn't have to self-heal.
+    // Idempotent — bootstrap_empty_repo treats 422-on-file-exists as ok.
+    let size = parsed.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+    let no_default_branch = parsed.get("default_branch").is_none()
+        || parsed
+            .get("default_branch")
+            .map(|v| v.is_null())
+            .unwrap_or(true);
+    if size == 0 && no_default_branch {
+        tracing::info!(
+            "github asset host: repo {repo} is empty at verify time — \
+             bootstrapping with README.md"
+        );
+        bootstrap_empty_repo(client, repo, token)
+            .await
+            .with_context(|| "bootstrap empty repo during verify")?;
+    }
+
     Ok(default_branch)
 }
