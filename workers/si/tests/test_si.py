@@ -213,6 +213,89 @@ def test_operator_feedback_surfaces_in_prompt():
     assert "HIGHEST PRIORITY" in user
 
 
+def _seed_telegram_ratings(tmp_path, ratings: list[dict]) -> None:
+    af = tmp_path / ".agent-factory"
+    af.mkdir(parents=True, exist_ok=True)
+    path = af / "ratings.jsonl"
+    with path.open("w") as f:
+        for r in ratings:
+            f.write(json.dumps(r) + "\n")
+
+
+def test_publisher_feedback_remaps_to_listing(tmp_path, monkeypatch):
+    """Publisher isn't a VALID_ROLE — its feedback is silently dropped before
+    this fix. Re-route to listing (the agent that authored the copy) so
+    Activity-tab thumbs on publisher cards actually mutate a prompt."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _seed_operator_feedback(tmp_path, {
+        "publisher": [
+            {"rating": "down", "note": "do not use emojis"},
+            {"rating": "up", "note": None},
+        ],
+    })
+    by_role = si_agent._load_operator_feedback_by_role()
+    assert "publisher" not in by_role
+    assert "listing" in by_role
+    notes = [e.get("note") for e in by_role["listing"]]
+    assert "do not use emojis" in notes
+
+
+def test_orchestrator_feedback_remaps_to_research(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _seed_operator_feedback(tmp_path, {
+        "orchestrator": [{"rating": "down", "note": "same niche category twice"}],
+    })
+    by_role = si_agent._load_operator_feedback_by_role()
+    assert "orchestrator" not in by_role
+    assert "research" in by_role
+    assert by_role["research"][0]["note"] == "same niche category twice"
+
+
+def test_telegram_star_ratings_fan_out_to_designer_and_listing(tmp_path, monkeypatch):
+    """Telegram star ratings live in ratings.jsonl and never reached SI
+    before this fix. Stars 1-2 → down, 4-5 → up, 3 ignored. Each rating
+    fans out to both designer and listing so the LLM can decide which to
+    tweak based on which note pattern wins."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _seed_telegram_ratings(tmp_path, [
+        {"kind": "rating", "listing_id": 1, "stars": 1, "title": "bad mesh", "niche": "x"},
+        {"kind": "rating", "listing_id": 2, "stars": 5, "title": "great", "niche": "y"},
+        {"kind": "rating", "listing_id": 3, "stars": 3, "title": "meh", "niche": "z"},
+    ])
+    by_role = si_agent._load_operator_feedback_by_role()
+    assert "designer" in by_role
+    assert "listing" in by_role
+    designer_ratings = [e["rating"] for e in by_role["designer"]]
+    assert "down" in designer_ratings  # 1★
+    assert "up" in designer_ratings    # 5★
+    # 3★ ambiguous — must NOT appear
+    assert len(designer_ratings) == 2
+    assert by_role["designer"] == by_role["listing"]
+
+
+def test_telegram_missing_jsonl_doesnt_crash(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # No ratings.jsonl, no operator_feedback.json — both readers must be silent.
+    assert si_agent._load_operator_feedback_by_role() == {}
+
+
+def test_activity_and_telegram_signals_combine(tmp_path, monkeypatch):
+    """Activity-tab feedback and Telegram ratings must layer cleanly —
+    both visible to SI in the same cycle."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _seed_operator_feedback(tmp_path, {
+        "designer": [{"rating": "down", "note": "doesnt look complete"}],
+    })
+    _seed_telegram_ratings(tmp_path, [
+        {"kind": "rating", "listing_id": 9, "stars": 1, "title": "ugly", "niche": "w"},
+    ])
+    by_role = si_agent._load_operator_feedback_by_role()
+    designer_notes = [e.get("note") for e in by_role["designer"]]
+    assert "doesnt look complete" in designer_notes
+    # Telegram rating must coexist, not overwrite.
+    assert any(n and "1★" in n for n in designer_notes)
+
+
 def test_si_can_tune_cs_role(tmp_path, monkeypatch):
     """CS is now a valid SI target — operator feedback on customer-service
     replies must produce a CS prompt edit, not be silently dropped."""
@@ -569,3 +652,240 @@ def test_rollback_preserves_operator_steers(tmp_path, monkeypatch):
     # system_override should be gone (prior was {}), operator_steers must survive.
     assert "system_override" not in written
     assert written["operator_steers"] == ["focus on dice towers"]
+
+
+def _seed_telegram_ratings_pre_post(
+    path: str, pre_stars: list[int], post_stars: list[int], tweak_ts: int
+) -> None:
+    """Write ratings.jsonl with pre/post star samples spaced around tweak_ts.
+
+    Mirrors _seed_outcomes_pre_post so the rating-rollback tests read clearly
+    next to the existing revenue-rollback tests.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = []
+    for i, s in enumerate(pre_stars):
+        lines.append(json.dumps({
+            "kind": "rating",
+            "listing_id": 100 + i,
+            "stars": int(s),
+            "title": f"pre {i}",
+            "rated_at": tweak_ts - len(pre_stars) + i,
+        }))
+    for i, s in enumerate(post_stars):
+        lines.append(json.dumps({
+            "kind": "rating",
+            "listing_id": 200 + i,
+            "stars": int(s),
+            "title": f"post {i}",
+            "rated_at": tweak_ts + 1 + i,
+        }))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def test_rating_rollback_fires_when_designer_stars_drop(tmp_path, monkeypatch):
+    """With zero sales, revenue rollback can't fire. Star ratings must take
+    its place when the tweak was to a role that affects listing quality."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    ratings_path = tmp_path / ".agent-factory" / "ratings.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 2000
+    # Pre avg = 4.33★, post avg = 1.33★ → 3★ drop, well past 0.75 threshold.
+    _seed_telegram_ratings_pre_post(
+        str(ratings_path), pre_stars=[4, 5, 4], post_stars=[1, 1, 2], tweak_ts=tweak_ts,
+    )
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "designer",
+                "prior_overrides": {"designer": {}},
+                "rationale": "earlier tweak that hurt quality",
+            }
+        ],
+        "designer": {"system_override": "BAD_PROMPT_THAT_HURT_RATINGS"},
+    }))
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("anthropic should NOT be called when rolling back")
+
+    with patch("urllib.request.urlopen", side_effect=_boom):
+        result = si_agent.process_job(20, {})
+
+    assert result["ok"] is True
+    assert result["role_tweaked"] == "rollback"
+    written = json.loads(prompts_path.read_text())
+    assert "designer" not in written
+    history = written["_history"]
+    assert len(history) == 1
+    assert history[0]["role_tweaked"] == "rollback"
+    # Rationale must mention stars so a human auditing the loop can tell
+    # which signal triggered the revert.
+    assert "★" in history[0]["rationale"]
+
+
+def test_rating_rollback_skipped_for_cs_tweak(tmp_path, monkeypatch):
+    """CS doesn't author listings — Telegram star ratings can't be blamed on
+    a CS tweak. Even with a big star drop, the cs override must NOT revert."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    ratings_path = tmp_path / ".agent-factory" / "ratings.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 2000
+    _seed_telegram_ratings_pre_post(
+        str(ratings_path), pre_stars=[4, 5, 4], post_stars=[1, 1, 1], tweak_ts=tweak_ts,
+    )
+    # Need a small operator-feedback nudge to satisfy the outcomes gate so we
+    # exercise the rollback path; otherwise SI returns "waiting for outcomes".
+    _seed_operator_feedback(tmp_path, {
+        "designer": [{"rating": "down", "note": "irrelevant"}],
+    })
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "cs",
+                "prior_overrides": {"cs": {}},
+                "rationale": "tweaked customer-service tone",
+            }
+        ],
+        "cs": {"system_override": "CS_PROMPT_UNRELATED_TO_LISTING_QUALITY"},
+    }))
+
+    payload = _make_response_bytes(json.dumps({
+        "role": None, "new_system": "", "reasoning": "no change",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(21, {})
+
+    # No rollback — the cs prompt must survive untouched.
+    assert result["role_tweaked"] != "rollback"
+    written = json.loads(prompts_path.read_text())
+    assert written["cs"]["system_override"] == "CS_PROMPT_UNRELATED_TO_LISTING_QUALITY"
+
+
+def test_rating_rollback_skipped_when_drop_too_small(tmp_path, monkeypatch):
+    """A modest dip (e.g. 0.33★) is noise on a 5-point scale and must NOT
+    trigger a revert — otherwise SI churns on natural rating variance."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    ratings_path = tmp_path / ".agent-factory" / "ratings.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 2000
+    # Pre 4.0, post 3.67 → 0.33★ drop, well below 0.75 threshold.
+    _seed_telegram_ratings_pre_post(
+        str(ratings_path), pre_stars=[4, 4, 4], post_stars=[4, 3, 4], tweak_ts=tweak_ts,
+    )
+    _seed_operator_feedback(tmp_path, {
+        "designer": [{"rating": "up", "note": "looks good"}],
+    })
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "designer",
+                "prior_overrides": {"designer": {}},
+                "rationale": "earlier tweak",
+            }
+        ],
+        "designer": {"system_override": "GOOD_PROMPT"},
+    }))
+
+    payload = _make_response_bytes(json.dumps({
+        "role": None, "new_system": "", "reasoning": "no change",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(22, {})
+
+    assert result["role_tweaked"] != "rollback"
+    written = json.loads(prompts_path.read_text())
+    assert written["designer"]["system_override"] == "GOOD_PROMPT"
+
+
+def test_rating_rollback_skipped_when_insufficient_post_ratings(tmp_path, monkeypatch):
+    """Need at least RATING_ROLLBACK_WINDOW post-tweak ratings before any
+    rollback decision — otherwise one noisy 1★ would revert a fresh tweak."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    ratings_path = tmp_path / ".agent-factory" / "ratings.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 2000
+    # 3 pre, only 1 post — below window. Even though the one post is 1★, no rollback.
+    _seed_telegram_ratings_pre_post(
+        str(ratings_path), pre_stars=[5, 5, 5], post_stars=[1], tweak_ts=tweak_ts,
+    )
+    _seed_operator_feedback(tmp_path, {
+        "designer": [{"rating": "down", "note": "irrelevant nudge to bypass gate"}],
+    })
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "designer",
+                "prior_overrides": {"designer": {}},
+                "rationale": "earlier tweak",
+            }
+        ],
+        "designer": {"system_override": "TWEAK_THAT_NEEDS_MORE_DATA"},
+    }))
+
+    payload = _make_response_bytes(json.dumps({
+        "role": None, "new_system": "", "reasoning": "no change",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(23, {})
+
+    assert result["role_tweaked"] != "rollback"
+    written = json.loads(prompts_path.read_text())
+    assert written["designer"]["system_override"] == "TWEAK_THAT_NEEDS_MORE_DATA"
+
+
+def test_revenue_rollback_still_preferred_when_sales_exist(tmp_path, monkeypatch):
+    """When real sales data exists, the revenue rollback path must win —
+    star ratings are the fallback for the cold-start window, not the primary."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    outcomes_path = tmp_path / ".agent-factory" / "outcomes.jsonl"
+    ratings_path = tmp_path / ".agent-factory" / "ratings.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 3000
+    # Revenue clearly regressed → revenue rollback should fire and own the
+    # rationale (mentioned in $, not ★).
+    _seed_outcomes_pre_post(
+        str(outcomes_path), [10, 10, 10, 10, 10], [3, 3, 3, 3, 3], tweak_ts,
+    )
+    _seed_telegram_ratings_pre_post(
+        str(ratings_path), pre_stars=[4, 4, 4], post_stars=[4, 4, 4], tweak_ts=tweak_ts,
+    )
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "designer",
+                "prior_overrides": {"designer": {}},
+                "rationale": "earlier tweak",
+            }
+        ],
+        "designer": {"system_override": "PROMPT_THAT_HURT_REVENUE"},
+    }))
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("anthropic should NOT be called when rolling back")
+
+    with patch("urllib.request.urlopen", side_effect=_boom):
+        result = si_agent.process_job(24, {})
+
+    assert result["role_tweaked"] == "rollback"
+    written = json.loads(prompts_path.read_text())
+    assert "designer" not in written
+    history = written["_history"]
+    # Rationale is the revenue one (uses $, not ★).
+    assert "$" in history[0]["rationale"]
+    assert "★" not in history[0]["rationale"]

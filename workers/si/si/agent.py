@@ -111,6 +111,16 @@ ROLLBACK_WINDOW = 5
 ROLLBACK_REGRESSION_RATIO = 0.6
 HISTORY_CAP = 5
 
+# Rating-based rollback. Used when revenue rollback can't fire (no sales yet).
+# Only meaningful for designer / listing tweaks — those are the agents whose
+# work shows up in the Telegram star rating. Smaller window because ratings
+# arrive slower than outcomes. Threshold is an absolute star drop, not a ratio:
+# going from 4★ → 3★ is meaningful even when the ratio (0.75) wouldn't trip
+# the revenue gate.
+RATING_ROLLBACK_WINDOW = 3
+RATING_ROLLBACK_MIN_DROP = 0.75
+RATING_ROLLBACK_ROLES = frozenset({"designer", "listing"})
+
 DATA_DIR = os.path.expanduser("~/.agent-factory")
 OUTCOMES_PATH = os.path.join(DATA_DIR, "outcomes.jsonl")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
@@ -299,6 +309,87 @@ def _should_rollback(history: list, outcomes: list[dict]) -> dict | None:
     return None
 
 
+def _read_rating_events() -> list[dict]:
+    """Read raw Telegram star ratings (`{ts, stars}`) from ratings.jsonl,
+    sorted oldest-first so the before/after split lines up with how the
+    revenue rollback walks outcomes. Returns [] when the file is missing
+    or empty."""
+    p = _ratings_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        try:
+            stars = int(obj.get("stars") or 0)
+            ts = int(obj.get("rated_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= stars <= 5 and ts > 0:
+            out.append({"ts": ts, "stars": stars})
+    out.sort(key=lambda r: r["ts"])
+    return out
+
+
+def _avg_stars(events: list[dict]) -> float:
+    if not events:
+        return 0.0
+    return sum(e["stars"] for e in events) / len(events)
+
+
+def _should_rollback_ratings(history: list, ratings: list[dict]) -> dict | None:
+    """Mirror of `_should_rollback` but using Telegram star ratings instead
+    of sales revenue. Fires only for designer/listing tweaks — other roles
+    don't affect what shows up in a listing's rating.
+
+    Used as a fallback when revenue rollback can't fire because there are
+    no sales yet (every $0 outcome → pre_avg ≤ 0 → revenue check bails).
+    Without this, a bad SI tweak that drives the user's star ratings down
+    has no way to auto-revert and the loop drifts.
+    """
+    if not isinstance(history, list) or not history:
+        return None
+    last = history[-1]
+    if not isinstance(last, dict):
+        return None
+    role = last.get("role_tweaked")
+    if role not in RATING_ROLLBACK_ROLES:
+        return None
+    try:
+        tweak_ts = int(last.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if tweak_ts <= 0:
+        return None
+    before = [r for r in ratings if r["ts"] < tweak_ts]
+    after = [r for r in ratings if r["ts"] >= tweak_ts]
+    if len(before) < RATING_ROLLBACK_WINDOW or len(after) < RATING_ROLLBACK_WINDOW:
+        return None
+    pre_window = before[-RATING_ROLLBACK_WINDOW:]
+    post_window = after[-RATING_ROLLBACK_WINDOW:]
+    pre_avg = _avg_stars(pre_window)
+    post_avg = _avg_stars(post_window)
+    if pre_avg - post_avg >= RATING_ROLLBACK_MIN_DROP:
+        last["_pre_avg"] = pre_avg
+        last["_post_avg"] = post_avg
+        last["_rollback_signal"] = "ratings"
+        return last
+    return None
+
+
 def _apply_rollback(prompts: dict, entry: dict) -> dict:
     """Restore prior_overrides from a history entry into prompts.
 
@@ -359,39 +450,126 @@ def _snapshot_history(
     prompts["_history"] = history
 
 
+# Non-VALID roles that still produce operator feedback get re-routed to the
+# closest authoring role — publisher copy is authored by listing; orchestrator
+# decisions are delegated to research. Only the role at the END of an arrow
+# reads system_override, so feedback on intermediate roles must land on the
+# authoring agent or it has no effect even when SI accepts the proposal.
+ROLE_ALIASES: dict[str, str] = {
+    "publisher": "listing",
+    "orchestrator": "research",
+}
+
+RATINGS_TAIL_LIMIT = 60
+
+
+def _ratings_path() -> str:
+    return os.path.join(_data_dir(), "ratings.jsonl")
+
+
+def _telegram_ratings_as_feedback(limit: int = RATINGS_TAIL_LIMIT) -> list[dict]:
+    """Read Telegram star ratings from ratings.jsonl and convert them into
+    the same up/down shape that operator_feedback.json carries. Stars 1-2 →
+    "down", 4-5 → "up", 3 → skipped (ambiguous signal in this scale).
+
+    The Telegram bot rates whole listings, so each rating gets duplicated
+    into both `designer` (model quality) and `listing` (copy quality) — SI
+    decides per-cycle which role to tweak based on which note pattern wins.
+    Stars without notes still help: the LLM sees the up/down ratio per role.
+    """
+    p = _ratings_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    tail = lines[-limit:] if len(lines) > limit else lines
+    events: list[dict] = []
+    for line in tail:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        try:
+            stars = int(obj.get("stars") or 0)
+        except (TypeError, ValueError):
+            continue
+        if stars <= 0 or stars > 5 or stars == 3:
+            continue
+        rating = "down" if stars <= 2 else "up"
+        note = obj.get("note")
+        title = obj.get("title")
+        if not isinstance(note, str) or not note.strip():
+            # No textual note — synthesize a minimal one from the title so the
+            # LLM has SOMETHING tying the up/down to a specific output rather
+            # than abstract counts.
+            note = f"{stars}★ on listing: {title[:120]}" if isinstance(title, str) and title.strip() else None
+        events.append({"rating": rating, "note": note})
+    return events
+
+
 def _load_operator_feedback_by_role(limit_per_role: int = 12) -> dict[str, list[dict]]:
-    """Read the role-bucketed operator ratings + notes Rust snapshots on every
-    Activity rating. SI is the single agent that consumes this — its job is
-    to distill operator criticism into a small prompt edit and relay it to
-    whichever role most needs the change. Other workers stay clean."""
+    """Read role-bucketed operator ratings from two sources:
+
+    1. operator_feedback.json — Activity-tab thumbs-up/down with notes,
+       snapshotted by Rust from job_feedback joined to jobs.agent_role.
+    2. ratings.jsonl — Telegram star ratings on published listings.
+
+    Non-VALID roles in source 1 are remapped via ROLE_ALIASES so signals
+    on publisher / orchestrator outputs reach the agent that authored the
+    content. Telegram ratings (whole-listing) fan out to both designer and
+    listing buckets so SI can decide which to tweak this cycle."""
+    out: dict[str, list[dict]] = {}
+
+    # Source 1: Activity-tab ratings.
     path = os.path.expanduser("~/.agent-factory/operator_feedback.json")
     try:
         with open(path) as f:
             data = json.load(f)
         by_role = data.get("by_role")
-        if not isinstance(by_role, dict):
-            return {}
-        out: dict[str, list[dict]] = {}
-        for role, arr in by_role.items():
-            if role not in VALID_ROLES or not isinstance(arr, list):
-                continue
-            cleaned: list[dict] = []
-            for item in arr[:limit_per_role]:
-                if not isinstance(item, dict):
+        if isinstance(by_role, dict):
+            for role, arr in by_role.items():
+                if not isinstance(arr, list):
                     continue
-                rating = item.get("rating")
-                if rating not in ("up", "down"):
+                target = role if role in VALID_ROLES else ROLE_ALIASES.get(role)
+                if target not in VALID_ROLES:
                     continue
-                note = item.get("note")
-                cleaned.append({
-                    "rating": rating,
-                    "note": note if isinstance(note, str) and note.strip() else None,
-                })
-            if cleaned:
-                out[role] = cleaned
-        return out
+                bucket = out.setdefault(target, [])
+                for item in arr[:limit_per_role]:
+                    if not isinstance(item, dict):
+                        continue
+                    rating = item.get("rating")
+                    if rating not in ("up", "down"):
+                        continue
+                    note = item.get("note")
+                    bucket.append({
+                        "rating": rating,
+                        "note": note if isinstance(note, str) and note.strip() else None,
+                    })
     except Exception:
-        return {}
+        pass
+
+    # Source 2: Telegram star ratings.
+    telegram_events = _telegram_ratings_as_feedback()
+    if telegram_events:
+        # Fan out to designer + listing. Cap each per limit_per_role so the
+        # final prompt block stays bounded.
+        for target in ("designer", "listing"):
+            bucket = out.setdefault(target, [])
+            room = max(0, limit_per_role - len(bucket))
+            if room <= 0:
+                continue
+            bucket.extend(telegram_events[-room:])
+
+    # Cap each role bucket to limit_per_role to keep the SI prompt bounded.
+    return {role: items[-limit_per_role:] for role, items in out.items() if items}
 
 
 def summarize_operator_feedback(by_role: dict[str, list[dict]]) -> str:
@@ -691,10 +869,19 @@ def process_job(job_id: int, payload: dict) -> dict:
         }
 
     # Rollback check (no Anthropic call): if the most recent history entry's
-    # post-tweak revenue regressed enough vs pre-tweak, revert it.
+    # post-tweak revenue regressed enough vs pre-tweak, revert it. When
+    # revenue has zero signal (no sales yet) fall back to Telegram star
+    # ratings — those react fast enough to catch a designer/listing tweak
+    # that drove quality down before any sales would have shown it.
     current = read_prompts()
     history = current.get("_history") if isinstance(current.get("_history"), list) else []
     rollback_entry = _should_rollback(history, outcomes)
+    rollback_signal = "revenue"
+    if rollback_entry is None:
+        ratings = _read_rating_events()
+        rollback_entry = _should_rollback_ratings(history, ratings)
+        if rollback_entry is not None:
+            rollback_signal = "ratings"
     if rollback_entry is not None:
         rolled_role = rollback_entry.get("role_tweaked", "?")
         pre_avg = float(rollback_entry.get("_pre_avg") or 0.0)
@@ -707,11 +894,19 @@ def process_job(job_id: int, payload: dict) -> dict:
         _apply_rollback(current, rollback_entry)
         # Pop the rolled-back entry, then append a rollback record.
         current["_history"] = history[:-1]
+        if rollback_signal == "ratings":
+            rationale = (
+                f"post-tweak avg {post_avg:.2f}★ vs pre {pre_avg:.2f}★ "
+                f"(drop ≥{RATING_ROLLBACK_MIN_DROP}★ over "
+                f"{RATING_ROLLBACK_WINDOW} ratings)"
+            )
+        else:
+            rationale = f"post-tweak avg ${post_avg:.2f} vs pre ${pre_avg:.2f}"
         _snapshot_history(
             current,
             role_tweaked="rollback",
             prior_overrides=dict(prior_overrides),
-            rationale=f"post-tweak avg ${post_avg:.2f} vs pre ${pre_avg:.2f}",
+            rationale=rationale,
         )
         try:
             write_prompts(_prompts_path(), current)
@@ -725,11 +920,18 @@ def process_job(job_id: int, payload: dict) -> dict:
                 "tokens_in": 0,
                 "tokens_out": 0,
             }
-        print(
-            f"[si] job_id={job_id} rollback role={rolled_role} pre=${pre_avg:.2f} post=${post_avg:.2f}",
-            file=sys.stderr,
-            flush=True,
-        )
+        if rollback_signal == "ratings":
+            print(
+                f"[si] job_id={job_id} rollback (ratings) role={rolled_role} "
+                f"pre={pre_avg:.2f}★ post={post_avg:.2f}★",
+                file=sys.stderr, flush=True,
+            )
+        else:
+            print(
+                f"[si] job_id={job_id} rollback (revenue) role={rolled_role} "
+                f"pre=${pre_avg:.2f} post=${post_avg:.2f}",
+                file=sys.stderr, flush=True,
+            )
         return {
             "ok": True,
             "ticker_text": f"si · rollback · {rolled_role} reverted",
