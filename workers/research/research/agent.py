@@ -5,7 +5,7 @@ import urllib.request
 import urllib.error
 from .protocol import Protocol
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-sonnet-4-6"
 # The brief now carries a paragraph-long design_direction PLUS the new
 # ip_risk field. 1200 was getting tight — Haiku occasionally emitted multi-
 # line strings or newline-in-string breakage that tripped the JSON parser

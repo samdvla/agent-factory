@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 from collections import defaultdict
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-opus-4-7"
 MAX_TOKENS = 1500
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")

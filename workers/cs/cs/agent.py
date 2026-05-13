@@ -159,7 +159,7 @@ def call_claude(system: str, user: str, max_tokens: int = 400) -> dict:
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
     body = json.dumps({
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-sonnet-4-6",
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
@@ -205,7 +205,7 @@ def handle(method, params):
             "ticker_text": f"cs · {parsed.get('category','other')} · {'escalated' if parsed.get('escalate') else 'replied'}",
             "tokens_in": resp.get("usage", {}).get("input_tokens", 0),
             "tokens_out": resp.get("usage", {}).get("output_tokens", 0),
-            "model": "claude-haiku-4-5-20251001",
+            "model": "claude-sonnet-4-6",
         }
     except Exception as e:
         return {

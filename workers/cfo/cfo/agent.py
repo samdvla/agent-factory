@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-opus-4-7"
 MAX_TOKENS = 200
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")

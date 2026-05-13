@@ -20,7 +20,7 @@ import time
 import urllib.request
 import urllib.error
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-opus-4-7"
 # Sized to comfortably emit a 10k-char `improved_system_prompt` + a ~500-char
 # rationale + the JSON envelope (each is ~25% extra tokens after escaping).
 # Previous 2500 hit Sonnet's max_tokens mid-string and the JSON parser

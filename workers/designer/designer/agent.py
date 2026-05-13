@@ -4,7 +4,7 @@ import sys
 import urllib.request
 import urllib.error
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 600
 
 SVG_MODEL = "claude-sonnet-4-6"
