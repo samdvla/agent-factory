@@ -17,9 +17,11 @@ export function layoutStations(kit: RoomKit): StationPos[] {
   const stations: StationPos[] = [];
   switch (kit.stationLayout) {
     case "row": {
+      // y=3.12 matches the handoff's main chair position (in 6×6 coords);
+      // x is centered around 3.54 (handoff "boss seat" projection).
       for (let i = 0; i < c; i++) {
-        const x = 1.4 + ((4.6 - 1.4) * (i + 0.5)) / c;
-        stations.push({ x, y: 3.2, label: `station ${i + 1}` });
+        const x = 2.0 + ((5.0 - 2.0) * (i + 0.5)) / c;
+        stations.push({ x, y: 3.12, label: `station ${i + 1}` });
       }
       break;
     }

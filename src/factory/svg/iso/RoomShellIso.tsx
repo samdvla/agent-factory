@@ -1,29 +1,18 @@
 import type { ReactNode } from "react";
 import { Box, Platform, FloorLightPool, WallDecal, iso3, U } from "./primitives";
+import { getIsoTheme, IsoThemeName } from "./themes";
 
 const fmt = (n: number) => n.toFixed(2);
 
 const ROOM_W_DEFAULT = 6;
 const ROOM_D_DEFAULT = 6;
-const WALL_H = 4.0;           // total wall height in world Z
-const WALL_SOLID = 2.0;       // solid lower section
+// Walls reduced 30% from the original 4.0 → 2.8 so the rooms read as
+// pavilions rather than glass boxes.
+const WALL_H = 2.8;           // total wall height in world Z
+const WALL_SOLID = 1.4;       // solid lower section (half of total)
 const WALL_T = 0.14;
 const PLATFORM_PAD = 0.42;
 const PLATFORM_THICK = 0.32;
-
-/** Warm-studio theme palette derived from the handoff `office.jsx` THEMES.warm. */
-const THEME = {
-  floor: "#e7d5b4",
-  floorTile: "rgba(80,50,20,0.10)",
-  wallBack: "#f4ead2",
-  wallSide: "#ecdfc1",
-  wallTrim: "#c8b88f",
-  parapet: "#cbb88a",
-  glassFill: "rgba(255,247,225,0.32)",
-  skirting: "#a48863",
-  platform: "#faf3e5",
-  ambient: "rgba(255,240,200,0.35)",
-};
 
 /**
  * Drop-in replacement for the visual contents of a room — raised platform
@@ -43,6 +32,7 @@ export default function RoomShellIso({
   children,
   width = ROOM_W_DEFAULT,
   depth = ROOM_D_DEFAULT,
+  theme: themeName,
 }: {
   /** Room bounds in world coords (room-local origin: b.x0 == 0 when the
    *  parent translates by the room's world position). For SvgFactoryFloor
@@ -56,7 +46,10 @@ export default function RoomShellIso({
   children?: ReactNode;
   width?: number;
   depth?: number;
+  /** Iso theme controlling floor/wall/glass palette. */
+  theme?: IsoThemeName;
 }) {
+  const THEME = getIsoTheme(themeName);
   // We do everything in room-local coords (0..width, 0..depth) and translate
   // the whole group by (b.x0, b.y0). This means the iso3 helpers can use
   // local positions and the existing iso() avatar pipeline still aligns.
@@ -67,9 +60,10 @@ export default function RoomShellIso({
   const ambientCx = ROOM_W * 0.55;
   const ambientCy = ROOM_D * 0.55;
 
-  // Signage plaque: written onto the back-left glass panel
+  // Signage plaque: written onto the back-left glass panel.  Sized so the
+  // text reads cleanly without dominating the room.
   const labelTxt = name.toUpperCase();
-  const labelW = Math.max(labelTxt.length * U * 0.36 + U * 0.6, U * 2.0);
+  const labelW = Math.max(labelTxt.length * U * 0.26 + U * 0.4, U * 1.6);
   const subTxt = subtitle ? subtitle.toUpperCase() : "";
 
   return (
@@ -102,7 +96,7 @@ export default function RoomShellIso({
         );
       })()}
 
-      {/* Subtle wood-grain hatch on the floor */}
+      {/* Subtle floor hatch — quiet horizontal lines */}
       {(() => {
         const lines: ReactNode[] = [];
         for (let i = 0.6; i < ROOM_D; i += 0.6) {
@@ -212,46 +206,46 @@ export default function RoomShellIso({
       {showFurniture && <g className="iso-room-furniture">{children}</g>}
 
       {/* Signage plaque on the back-left glass panel */}
-      <WallDecal wall="left" u={ROOM_W * 0.06} v={WALL_H * 0.78}>
+      <WallDecal wall="left" u={ROOM_W * 0.06} v={WALL_H * 0.82}>
         <rect
-          x={-U * 0.25}
-          y={-U * 0.7}
-          width={labelW + U * 0.4}
-          height={U * 1.15}
-          fill="rgba(255,255,255,0.65)"
+          x={-U * 0.2}
+          y={-U * 0.5}
+          width={labelW + U * 0.3}
+          height={U * 0.8}
+          fill={THEME.isDark ? "rgba(10,12,18,0.65)" : "rgba(255,255,255,0.65)"}
           stroke={accent}
-          strokeWidth={1.2}
-          opacity={0.8}
-          rx={3}
+          strokeWidth={1}
+          opacity={THEME.isDark ? 0.9 : 0.8}
+          rx={2.5}
         />
-        <circle cx={-U * 0.1} cy={-U * 0.55} r={1.4} fill={accent} opacity={0.6} />
-        <circle cx={labelW + U * 0.05} cy={-U * 0.55} r={1.4} fill={accent} opacity={0.6} />
-        <circle cx={-U * 0.1} cy={U * 0.32} r={1.4} fill={accent} opacity={0.6} />
-        <circle cx={labelW + U * 0.05} cy={U * 0.32} r={1.4} fill={accent} opacity={0.6} />
-        <rect x={-U * 0.15} y={-U * 0.6} width={U * 0.05} height={U * 0.95} fill={accent}>
+        <circle cx={-U * 0.08} cy={-U * 0.38} r={1.1} fill={accent} opacity={0.6} />
+        <circle cx={labelW + U * 0.04} cy={-U * 0.38} r={1.1} fill={accent} opacity={0.6} />
+        <circle cx={-U * 0.08} cy={U * 0.22} r={1.1} fill={accent} opacity={0.6} />
+        <circle cx={labelW + U * 0.04} cy={U * 0.22} r={1.1} fill={accent} opacity={0.6} />
+        <rect x={-U * 0.12} y={-U * 0.42} width={U * 0.04} height={U * 0.66} fill={accent}>
           <animate attributeName="opacity" values="0.55;1;0.55" dur="2.6s" repeatCount="indefinite" />
         </rect>
         <text
           x={0}
-          y={0}
+          y={-U * 0.06}
           fill={accent}
           fontFamily="ui-monospace, Menlo, 'Inconsolata', monospace"
-          fontSize={U * 0.42}
-          fontWeight={800}
-          letterSpacing={3}
+          fontSize={U * 0.3}
+          fontWeight={700}
+          letterSpacing={2}
         >
           {labelTxt}
         </text>
         {subTxt && (
           <text
             x={0}
-            y={U * 0.34}
+            y={U * 0.18}
             fill={accent}
             opacity={0.7}
             fontFamily="ui-monospace, Menlo, monospace"
-            fontSize={U * 0.18}
+            fontSize={U * 0.13}
             fontWeight={500}
-            letterSpacing={2}
+            letterSpacing={1.5}
           >
             {subTxt}
           </text>

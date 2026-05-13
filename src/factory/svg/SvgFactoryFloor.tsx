@@ -9,6 +9,7 @@ import HandoffLayer from "./HandoffLayer";
 import Corridors from "./Corridors";
 import { detailLevelsFor } from "./viewport";
 import { IsoDefs } from "./iso/primitives";
+import { getIsoTheme } from "./iso/themes";
 
 type ViewBox = { minX: number; minY: number; w: number; h: number };
 
@@ -66,6 +67,8 @@ export default function SvgFactoryFloor() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rooms = useFactoryStore((s) => s.rooms);
+  const isoThemeName = useFactoryStore((s) => s.isoTheme);
+  const isoTheme = getIsoTheme(isoThemeName);
   const layout = useMemo(
     () => computeFacilityLayout(Object.values(rooms)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -174,12 +177,13 @@ export default function SvgFactoryFloor() {
   return (
     <div
       ref={containerRef}
-      className="stage"
+      className={`stage iso-theme-${isoTheme.name}`}
       style={{
         position: "relative",
         width: "100%",
         height: "100%",
         overflow: "hidden",
+        background: isoTheme.sky,
         cursor: isDragging.current ? "grabbing" : "grab",
       }}
       onWheel={onWheel}

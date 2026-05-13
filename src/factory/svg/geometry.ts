@@ -5,7 +5,9 @@ export const TH = 32;
 export const WALL_H = 60;
 export const ROOM_W = 6;
 export const ROOM_H = 6;
-export const GAP = 1;
+// Gap between rooms in world units — wider gap = more breathing room
+// between the iso platforms so each room reads as its own pod.
+export const GAP = 2.6;
 
 export function iso(x: number, y: number) {
   return { x: (x - y) * (TW / 2), y: (x + y) * (TH / 2) };

@@ -44,6 +44,7 @@ type RoomShellProps = {
 function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: RoomShellProps) {
   const room = useFactoryStore((s) => s.rooms[roomId]);
   const roles = useFactoryStore((s) => s.roles);
+  const isoTheme = useFactoryStore((s) => s.isoTheme);
   const roomState = useFactoryStore((s) => {
     const r = s.rooms[roomId];
     if (!r) return "idle";
@@ -203,6 +204,7 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
           name={room.name}
           subtitle={subtitleText}
           showFurniture={showFurniture}
+          theme={isoTheme}
         >
           {isoFurnitureFor(tag, accent)}
         </RoomShellIso>

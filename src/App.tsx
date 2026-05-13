@@ -13,6 +13,7 @@ import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { usePrintifyOperatorBoot } from "./hooks/usePrintifyOperator";
 import { useDemoFloor } from "./hooks/useDemoFloor";
 import { useFactoryStore } from "./factory/state/factoryStore";
+import { mapAppThemeToIso } from "./factory/svg/iso/themes";
 import { api } from "./api";
 import "./factory/ui/factory-floor.css";
 import "./App.css";
@@ -42,6 +43,14 @@ export default function App() {
   useEffect(() => {
     api.setSecret("ui_sandbox_mode", String(sandbox)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Derive the initial iso room theme from whatever app theme is active. The
+  // SettingsModal updates both in lockstep when the user picks a new theme;
+  // this catches the cold-start case where only the app theme is in DOM.
+  useEffect(() => {
+    const currentApp = document.documentElement.dataset.theme || "claude";
+    useFactoryStore.getState().setIsoTheme(mapAppThemeToIso(currentApp));
   }, []);
 
   // Open onboarding on cold start if no Anthropic credentials at all —

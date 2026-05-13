@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { FactoryStore } from "./types";
+import { FactoryStore, IsoThemeName } from "./types";
 import {
   INITIAL_AGENTS, ROLES as FOUNDING_ROLES, ROOMS as FOUNDING_ROOMS,
 } from "./fixtures";
@@ -21,6 +21,15 @@ function readSandboxDefault(): boolean {
   return false; // default: Live mode
 }
 
+const ISO_THEME_STORAGE_KEY = "agentFactory.isoTheme";
+function readIsoThemeDefault(): IsoThemeName {
+  try {
+    const v = localStorage.getItem(ISO_THEME_STORAGE_KEY);
+    if (v === "warm" || v === "clinic" || v === "night") return v;
+  } catch {}
+  return "warm";
+}
+
 export const useFactoryStore = create<FactoryStore>((set, get) => ({
   roles: { ...FOUNDING_ROLES },
   rooms: { ...FOUNDING_ROOMS },
@@ -31,6 +40,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   selectedAgent: null,
   drawerOpen: false,
   sandbox: readSandboxDefault(),
+  isoTheme: readIsoThemeDefault(),
   allStop: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
@@ -135,6 +145,12 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     set({ sandbox: v });
   },
   setAllStop: (v) => set({ allStop: v }),
+  setIsoTheme: (v) => {
+    try {
+      localStorage.setItem(ISO_THEME_STORAGE_KEY, v);
+    } catch {}
+    set({ isoTheme: v });
+  },
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
   setBudgetCapped: (v) => set({ budgetCapped: v }),
   pushHandoff: (h) => set((s) => ({ handoffs: [...s.handoffs, h], lastActivityAt: Date.now() })),

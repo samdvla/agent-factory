@@ -3,6 +3,9 @@ export type AgentVisualState =
   | "paused" | "crashed" | "killed" | "quarantined"
   | "materializing" | "dissolving";
 
+/** Iso room theme — controls floor/wall/glass palette across every room. */
+export type IsoThemeName = "warm" | "clinic" | "night";
+
 export type AvatarArchetype =
   | "authoritative" | "slim" | "relaxed" | "office"
   | "friendly" | "formal" | "lab";
@@ -214,6 +217,9 @@ export type FactoryStore = {
   setPendingGate: (g: GateRequest | null) => void;
   selectAgent: (role: string | null) => void;
   setSandbox: (v: boolean) => void;
+  /** Active iso room theme (warm/clinic/night). Persisted to localStorage. */
+  isoTheme: IsoThemeName;
+  setIsoTheme: (v: IsoThemeName) => void;
   setAllStop: (v: boolean) => void;
   setBudget: (usd: number) => void;
   setBudgetCapped: (v: boolean) => void;

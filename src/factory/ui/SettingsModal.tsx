@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api, type EtsyStatus } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
+import { useFactoryStore } from "../state/factoryStore";
+import { ISO_THEMES, ISO_THEME_NAMES, mapAppThemeToIso } from "../svg/iso/themes";
+import type { IsoThemeName } from "../state/types";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                                */
@@ -313,6 +316,7 @@ function getCurrentTheme(): ThemeId {
 
 function ThemeSection() {
   const [active, setActive] = useState<ThemeId>(getCurrentTheme);
+  const setIsoTheme = useFactoryStore((s) => s.setIsoTheme);
 
   const apply = (id: ThemeId) => {
     setActive(id);
@@ -321,6 +325,8 @@ function ThemeSection() {
       localStorage.setItem(THEME_STORAGE_KEY, id);
     } catch {}
     api.setSecret("ui_theme", id).catch(() => {});
+    // Keep the iso room theme aligned with the app theme.
+    setIsoTheme(mapAppThemeToIso(id));
   };
 
   return (
@@ -369,6 +375,83 @@ function ThemeSection() {
               <div className="theme-meta">
                 <span className="theme-name">{t.name}</span>
                 <span className="theme-blurb">{t.blurb}</span>
+              </div>
+              {isActive && (
+                <span className="theme-active-tick" aria-hidden="true">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  IsoThemeSection — picker for factory-floor iso room theme            */
+/* ------------------------------------------------------------------ */
+
+const ISO_THEME_BLURBS: Record<IsoThemeName, string> = {
+  warm: "Cream parchment + wood floor",
+  clinic: "Bright white + cool blue glass",
+  night: "Dark slabs + neon glass",
+};
+
+function IsoThemeSection() {
+  const active = useFactoryStore((s) => s.isoTheme);
+  const setIsoTheme = useFactoryStore((s) => s.setIsoTheme);
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Factory floor</div>
+      <div className="settings-helper" style={{ marginBottom: 12 }}>
+        Visual theme for the iso rooms — applies to floors, walls, glass, and
+        ambient lighting across every room.
+      </div>
+      <div className="theme-grid">
+        {ISO_THEME_NAMES.map((id) => {
+          const t = ISO_THEMES[id];
+          const isActive = active === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`theme-card${isActive ? " is-active" : ""}`}
+              onClick={() => setIsoTheme(id)}
+              aria-pressed={isActive}
+            >
+              <div
+                className="theme-preview"
+                style={{ background: t.sky, borderColor: t.wallTrim }}
+              >
+                <div
+                  className="theme-preview-panel"
+                  style={{ background: t.platform, border: `1px solid ${t.wallTrim}` }}
+                >
+                  <span
+                    className="theme-preview-bar"
+                    style={{ background: t.wallBack }}
+                  />
+                  <span
+                    className="theme-preview-line"
+                    style={{ background: t.floor, opacity: 0.95 }}
+                  />
+                  <span
+                    className="theme-preview-line is-short"
+                    style={{ background: t.skirting, opacity: 0.85 }}
+                  />
+                </div>
+                <span
+                  className="theme-preview-dot"
+                  style={{ background: t.glassFill.replace(/rgba?\(([^)]+)\)/, (_m, inside) => `rgb(${inside.split(",").slice(0, 3).join(",")})`) }}
+                />
+              </div>
+              <div className="theme-meta">
+                <span className="theme-name">{id[0].toUpperCase() + id.slice(1)}</span>
+                <span className="theme-blurb">{ISO_THEME_BLURBS[id]}</span>
               </div>
               {isActive && (
                 <span className="theme-active-tick" aria-hidden="true">
@@ -2654,6 +2737,7 @@ export default function SettingsModal({
 
           {activeTab === "account" && <>
           <ThemeSection />
+          <IsoThemeSection />
 
           {/* ---- Section 1: Credentials ---- */}
           <section className="settings-section">

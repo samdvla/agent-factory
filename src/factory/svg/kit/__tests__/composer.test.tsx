@@ -39,14 +39,14 @@ describe("composer", () => {
     expect(layoutStations(k)).toHaveLength(4);
   });
 
-  it("row layout spreads stations along y=3.2", () => {
+  it("row layout spreads stations along y=3.12", () => {
     const k: RoomKit = {
       primaryTag: "analyst", capacity: 3, accent: "#5fd4f0",
       stationLayout: "row", wallFeature: "trends", features: [],
     };
     const stations = layoutStations(k);
     expect(stations).toHaveLength(3);
-    expect(stations.every((s) => Math.abs(s.y - 3.2) < 0.01)).toBe(true);
+    expect(stations.every((s) => Math.abs(s.y - 3.12) < 0.01)).toBe(true);
   });
 
   it("perimeter layout places along S/E walls (y near 4.6 OR x near 4.7)", () => {
