@@ -82,10 +82,15 @@ def _use_json_prefill() -> bool:
     return "api.anthropic.com" in url
 
 
-def _messages_for_json_call(user_content: str) -> list[dict]:
+def _messages_for_json_call(user_content) -> list[dict]:
     """Build the messages array for a JSON-emitting Anthropic call. Adds the
     assistant prefill only when the API supports it (direct Anthropic, not
-    a bridge proxy)."""
+    a bridge proxy).
+
+    `user_content` may be a plain string (legacy) OR a list of content
+    blocks (multimodal: image + text blocks). Anthropic's Messages API
+    accepts both shapes on the same field.
+    """
     msgs: list[dict] = [{"role": "user", "content": user_content}]
     if _use_json_prefill():
         msgs.append({"role": "assistant", "content": "{"})
@@ -104,6 +109,24 @@ DRAFTS_TAIL_LIMIT = 20
 # instead of dumping 50 stickers nobody bought. Order = our preferred
 # default order when none has been tried yet.
 ROTATION_PRODUCT_TYPES = ["sticker", "digital_print", "poster", "mug", "tee"]
+
+# Natural-language labels for product_type values — used in conversation
+# messages so the floor reads like agents talking, not enum dumps.
+_PRODUCT_TYPE_LABELS = {
+    "stl_file": "STL file",
+    "3d_model": "3D model",
+    "sticker": "sticker design",
+    "digital_print": "digital print",
+    "poster": "poster design",
+    "mug": "mug design",
+    "tee": "tee design",
+}
+
+
+def _humanize_product_type(pt: str | None) -> str:
+    if not pt:
+        return "next product"
+    return _PRODUCT_TYPE_LABELS.get(pt, pt.replace("_", " "))
 # 3D types are only included in rotation when TRIPO_API_KEY/MESHY_API_KEY is
 # set in the worker env. The designer would fail otherwise, wasting an
 # orchestrator token spend on a niche we can't actually produce.
@@ -252,6 +275,258 @@ def _data_dir() -> str:
     return os.path.expanduser("~/.agent-factory")
 
 
+def _prompts_path() -> str:
+    return os.path.join(_data_dir(), "prompts.json")
+
+
+def _rejections_path() -> str:
+    return os.path.join(_data_dir(), "rejections.json")
+
+
+def _load_rejection_avoid_list(limit: int = 12) -> list[dict]:
+    """Read the rejection learning file written by Rust on every operator
+    Reject action. Returns up to `limit` recent entries — each `{title, niche}`.
+    Best-effort: missing or malformed file returns []. Mirrors
+    workers/research/research/agent.py::_load_rejection_avoid_list — the
+    research worker already consumes this list, but research only ELABORATES
+    on niches the orchestrator already picked. So if the orchestrator doesn't
+    also read rejections, the operator keeps seeing nearby variants of the
+    direction they just rejected."""
+    try:
+        with open(_rejections_path()) as f:
+            data = json.load(f)
+        arr = data.get("rejections")
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for item in arr[:limit]:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title")
+            niche = item.get("niche")
+            if isinstance(title, str) and title.strip():
+                out.append({
+                    "title": title.strip(),
+                    "niche": niche if isinstance(niche, str) else None,
+                })
+        return out
+    except Exception:
+        return []
+
+
+def _append_rejection_avoid_block(system_prompt: str) -> str:
+    """Append an AVOID block listing recently rejected niches/titles so the
+    orchestrator steers away from re-picking them. No-op when the file is
+    empty or missing.
+
+    Inserted into the system prompt BEFORE the operator-steer block — that
+    way an explicit operator steer (e.g. 'try Lovecraftian again, but as
+    jewelry instead of dice towers') can supersede a stale rejection."""
+    entries = _load_rejection_avoid_list()
+    if not entries:
+        return system_prompt
+    lines: list[str] = []
+    for e in entries:
+        niche = e.get("niche")
+        title = e["title"]
+        if niche:
+            lines.append(f'- {niche} — "{title[:80]}"')
+        else:
+            lines.append(f'- "{title[:80]}"')
+    block = (
+        "AVOID — the operator already rejected these ideas. Pick a different "
+        "niche AND a meaningfully different angle from each entry. Treat the "
+        "list as forbidden territory, not a starting point:\n"
+        + "\n".join(lines)
+    )
+    return system_prompt.rstrip() + "\n\n" + block
+
+
+def _load_strategist_notes() -> str | None:
+    """Read the orchestrator-tuning notes written by the meta-strategist
+    (workers/strategist/strategist/agent.py:_process_orchestrator_tuning).
+    Returns None when missing or malformed. Notes are advisory — appended
+    as the last block of the user prompt, but never replace the dynamic
+    system-prompt assembly."""
+    try:
+        with open(_prompts_path()) as f:
+            data = json.load(f)
+        notes = data.get("orchestrator", {}).get("strategist_notes")
+        if isinstance(notes, str) and notes.strip():
+            return notes.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _load_operator_steers(role: str) -> list[dict]:
+    """Read operator standing instructions for `role` from prompts.json.
+
+    Returns a normalized list of `{"text": str, "image_paths": list[str]}`
+    dicts. Two on-disk shapes are accepted for backward compatibility:
+    plain strings (no images) and `{"text": ..., "image_paths": [...]}`
+    objects (images attached via the ChatPanel paperclip). Returns [] when
+    the file is missing or malformed.
+    """
+    try:
+        with open(_prompts_path()) as f:
+            data = json.load(f)
+        arr = data.get(role, {}).get("operator_steers")
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for entry in arr:
+            if isinstance(entry, str):
+                if entry.strip():
+                    out.append({"text": entry.strip(), "image_paths": []})
+            elif isinstance(entry, dict):
+                text = entry.get("text")
+                paths = entry.get("image_paths") or []
+                if isinstance(text, str) and text.strip():
+                    out.append({
+                        "text": text.strip(),
+                        "image_paths": [p for p in paths if isinstance(p, str)],
+                    })
+        return out
+    except Exception:
+        pass
+    return []
+
+
+def _append_operator_steers(system_prompt: str) -> str:
+    """Append operator standing instructions as the final block of the
+    orchestrator system prompt. The orchestrator is the agent that actually
+    picks the niche (research/designer/listing only elaborate on what the
+    orchestrator hands them), so the operator's intent MUST land here or it
+    gets silently overridden by the orchestrator's hardcoded category list.
+
+    Reads steers from both the "orchestrator" role (direct steers) AND the
+    "research" role (because operators intuitively click Steer on Research
+    when they want to inject a new niche idea, and that intent needs to
+    propagate up to the agent doing the actual picking). De-duplicated;
+    the orchestrator's own steers win when both contain the same text.
+
+    Only the TEXT half of each steer lands in the system prompt — image
+    references attach to the user message via _build_user_content_with_steer_images
+    because Anthropic's `system` field is text-only.
+    """
+    own = _load_operator_steers("orchestrator")
+    research = _load_operator_steers("research")
+    seen: set[str] = set()
+    merged: list[str] = []
+    for entry in own + research:
+        text = entry["text"]
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+    if not merged:
+        return system_prompt
+    block = (
+        "OPERATOR OVERRIDE — these standing instructions supersede every "
+        "rule above, including any 'pick niches in these categories', "
+        "'AVOID X', 'we DO NOT sell Y', or 'rotate across these pools' "
+        "directives. The orchestrator is the boss of the pipeline; the "
+        "operator is the boss of the orchestrator. If any rule above "
+        "conflicts with the instructions below, ignore that rule for "
+        "this job and follow the operator. Pick a niche_seed that "
+        "directly satisfies the operator's intent:\n"
+        + "\n".join(f"- {s}" for s in merged)
+    )
+    return system_prompt.rstrip() + "\n\n" + block
+
+
+def _build_user_content_with_steer_images(
+    user_prompt: str, roles: list[str]
+) -> "str | list[dict]":
+    """If any operator steer for the listed roles carries image references,
+    upgrade the user-message content from a plain string to a list of
+    multimodal content blocks: each image block is followed by a small
+    text block citing the steer it belongs to, then the original user
+    prompt lands as the final text block.
+
+    Returns the user_prompt unchanged when no images are attached, so the
+    common case (text-only steers) costs nothing extra at the wire.
+
+    Best-effort on file reads: missing or unreadable images are skipped
+    rather than crashing the job — the steer's text still applied via the
+    system prompt's OPERATOR OVERRIDE block.
+    """
+    import base64
+    import mimetypes
+    # Anthropic caps each base64 image at 5 MB on the wire. base64 inflates
+    # bytes by ~4/3, so the underlying raw file has to be ≤ ~3.75 MB. Use
+    # 3.5 MB as the practical cap to leave headroom for the JSON wrapping
+    # the bytes (key names, padding, multi-image batches). Above that we
+    # skip the attachment with a loud log line — the steer's TEXT still
+    # arrives via the system prompt's OPERATOR OVERRIDE block, so the
+    # instruction isn't lost; only the visual reference is.
+    MAX_RAW_BYTES = 3_500_000
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for role in roles:
+        for entry in _load_operator_steers(role):
+            for path in entry.get("image_paths", []):
+                if not isinstance(path, str) or path in seen:
+                    continue
+                seen.add(path)
+                refs.append((entry.get("text", ""), path))
+    if not refs:
+        return user_prompt
+    blocks: list[dict] = []
+    for text, path in refs:
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            print(
+                f"[orchestrator] skipping unreadable steer image {path!r}: {e}",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        if size > MAX_RAW_BYTES:
+            print(
+                f"[orchestrator] skipping oversize steer image {path!r}: "
+                f"{size} bytes > {MAX_RAW_BYTES} cap (Anthropic 5 MB/image "
+                "after base64 inflation) — steer TEXT still applied via "
+                "system prompt",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            print(
+                f"[orchestrator] skipping unreadable steer image {path!r}: {e}",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        mime = mimetypes.guess_type(path)[0] or "image/png"
+        if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+            mime = "image/png"
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(raw).decode("ascii"),
+            },
+        })
+        snippet = text[:200] + ("…" if len(text) > 200 else "")
+        blocks.append({
+            "type": "text",
+            "text": f"^ Operator reference image for the steer: {snippet!r}",
+        })
+    if not any(b.get("type") == "image" for b in blocks):
+        # Every image was skipped (oversize / unreadable). Fall back to the
+        # plain text path so we don't ship a multimodal request with only
+        # text blocks — that costs more JSON for no value.
+        return user_prompt
+    blocks.append({"type": "text", "text": user_prompt})
+    return blocks
+
+
 def _outcomes_path() -> str:
     return os.path.join(_data_dir(), "outcomes.jsonl")
 
@@ -370,6 +645,26 @@ def _summarize_recent_themes(recent_drafts: list[dict]) -> str | None:
     return "\n".join(parts)
 
 
+def _fetch_trend_signals_text() -> str:
+    """Best-effort: pull live trend signals and format them for the prompt.
+    Never raises — if every source fails we return '' and the orchestrator
+    just runs without external signal.
+
+    Disabled when ORCHESTRATOR_TREND_SIGNALS=0 (escape hatch for offline
+    runs / rate limits). Default ON so the niche pick rides public-trend
+    signal out of the box.
+    """
+    if os.environ.get("ORCHESTRATOR_TREND_SIGNALS", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return ""
+    try:
+        from .trends import fetch_all_signals, format_for_prompt
+        signals = fetch_all_signals(top_n=20)
+        return format_for_prompt(signals) if signals else ""
+    except Exception as e:
+        print(f"[orchestrator] trend fetch failed (non-fatal): {e}", file=sys.stderr, flush=True)
+        return ""
+
+
 def _read_recent_outcomes(limit: int = OUTCOMES_TAIL_LIMIT, path: str | None = None) -> list[dict]:
     """Read up to `limit` most recent outcomes from outcomes.jsonl. Skip malformed lines."""
     p = path if path is not None else _outcomes_path()
@@ -396,14 +691,23 @@ def _read_recent_outcomes(limit: int = OUTCOMES_TAIL_LIMIT, path: str | None = N
 
 
 def _summarize_outcomes(outcomes: list[dict]) -> str | None:
-    """Bucket outcomes by niche, compute avg revenue, render a niche-memory context string.
+    """Bucket outcomes by niche, compute avg revenue + traction (views/favorites),
+    render a niche-memory context string.
 
     Returns None when there are not enough outcomes to be meaningful, or when no
     niche has at least the minimum samples per bucket.
+
+    Views/favorites are the leading indicator for "the niche is alive but the
+    listing/price is broken" — without them, a niche with 200 views and 0 sales
+    looks identical to a dead niche, and the orchestrator wrongly kills both.
+    Fields are best-effort: missing → not rendered, never crashes.
     """
     if not outcomes or len(outcomes) < NICHE_MIN_OUTCOMES:
         return None
-    buckets: dict[str, dict] = defaultdict(lambda: {"revenue": 0.0, "count": 0})
+    buckets: dict[str, dict] = defaultdict(
+        lambda: {"revenue": 0.0, "count": 0, "views": 0.0, "favorites": 0.0,
+                 "views_seen": 0, "favs_seen": 0}
+    )
     for o in outcomes:
         niche = str(o.get("niche") or "").strip()
         if not niche:
@@ -415,32 +719,198 @@ def _summarize_outcomes(outcomes: list[dict]) -> str | None:
         b = buckets[niche]
         b["revenue"] += rev
         b["count"] += 1
+        v = o.get("views")
+        if isinstance(v, (int, float)):
+            b["views"] += float(v)
+            b["views_seen"] += 1
+        f = o.get("favorites")
+        if isinstance(f, (int, float)):
+            b["favorites"] += float(f)
+            b["favs_seen"] += 1
+
+    def _avg_traction(b: dict) -> tuple[float | None, float | None]:
+        v_avg = (b["views"] / b["views_seen"]) if b["views_seen"] else None
+        f_avg = (b["favorites"] / b["favs_seen"]) if b["favs_seen"] else None
+        return v_avg, f_avg
 
     qualified = [
-        (niche, b["revenue"] / b["count"], b["count"])
+        (niche, b["revenue"] / b["count"], b["count"], *_avg_traction(b))
         for niche, b in buckets.items()
         if b["count"] >= NICHE_MIN_SAMPLES_PER_BUCKET
     ]
     if not qualified:
         return None
 
+    def _fmt_with_traction(name: str, avg_rev: float, cnt: int, v_avg, f_avg, with_count: bool) -> str:
+        parts = [f"{name} (${avg_rev:.2f} avg"]
+        if with_count:
+            parts.append(f", {cnt} tries")
+        traction_bits = []
+        if v_avg is not None:
+            traction_bits.append(f"{v_avg:.0f}v")
+        if f_avg is not None:
+            traction_bits.append(f"{f_avg:.0f}f")
+        if traction_bits:
+            parts.append(", " + " ".join(traction_bits))
+        parts.append(")")
+        return "".join(parts)
+
+    # Three-way split:
+    #  • Top / bottom — straight revenue ranking (unchanged semantics — keeps
+    #    the existing top-N-by-avg-revenue intuition intact).
+    #  • Promising — ANY niche (top OR bottom) whose views suggest interest
+    #    but conversion is broken. Surfaces as its own bullet so the model
+    #    treats it as "fix the listing", not "kill the niche".
     qualified.sort(key=lambda t: t[1], reverse=True)
     top = qualified[:3]
-    # Bottom = up to 3 worst niches, excluding any already shown as top.
-    top_names = {n for n, _, _ in top}
+    top_names = {n for n, _, _, _, _ in top}
     bottom_pool = [t for t in reversed(qualified) if t[0] not in top_names]
     if not bottom_pool and len(qualified) >= 2:
-        # Fewer than 4 niches → bottom would otherwise be empty. Show the single worst.
         bottom_pool = [qualified[-1]]
     bottom = bottom_pool[:3]
 
-    top_str = ", ".join(f"{n} (${avg:.2f} avg)" for n, avg, _ in top)
-    lines = ["Recent shop performance:", f"Top performers: {top_str}"]
+    # Promising bucket: low/zero revenue but ≥5 avg views means buyers are
+    # finding it. Pull from the FULL qualified set so a $1-avg niche with
+    # heavy traffic still surfaces as promising.
+    promising = [
+        t for t in qualified
+        if t[1] < 3.0 and t[3] is not None and t[3] >= 5
+    ]
+    promising.sort(key=lambda t: (t[3] or 0), reverse=True)
+    promising = promising[:3]
+
+    lines = ["Recent shop performance:"]
+    if top:
+        lines.append(
+            "Top performers: "
+            + ", ".join(_fmt_with_traction(*t, with_count=False) for t in top)
+        )
+    if promising:
+        lines.append(
+            "Promising — traction but weak revenue (listing/price problem, NOT niche death — retry with a different angle): "
+            + ", ".join(_fmt_with_traction(*t, with_count=True) for t in promising)
+        )
     if bottom:
-        bottom_str = ", ".join(f"{n} (${avg:.2f} avg, {cnt} tries)" for n, avg, cnt in bottom)
-        lines.append(f"Underperformers: {bottom_str} — avoid retrying these.")
+        lines.append(
+            "Underperformers: "
+            + ", ".join(_fmt_with_traction(*t, with_count=True) for t in bottom)
+            + " — avoid retrying these."
+        )
     lines.append(
         "Pick a NEW niche, ideally borrowing patterns from the top performers, NOT in the underperformer list."
+    )
+    return "\n".join(lines)
+
+
+# ---------- operator ratings (Telegram rater bot) ----------
+#
+# Operator-supplied star ratings (+ optional notes) live in
+# ~/.agent-factory/ratings.jsonl, written by workers/rater_bot when the
+# operator taps a star in Telegram. This is THE feedback channel for the
+# first ~100 drafts: outcomes.jsonl only carries actual sales, so before
+# the shop has revenue the orchestrator has no signal to learn from. A
+# 5-star note like "love the chunky silhouette" tells the model what to
+# imitate; a 1-star "looks like every AI dragon" tells it what to avoid.
+
+
+RATINGS_TAIL_LIMIT = 60
+
+
+def _ratings_path() -> str:
+    return os.path.join(_data_dir(), "ratings.jsonl")
+
+
+def _read_recent_ratings(limit: int = RATINGS_TAIL_LIMIT, path: str | None = None) -> list[dict]:
+    """Read up to `limit` most recent rating events. Returns NEWEST-FIRST so
+    the summarizer's de-dup-by-listing-id keeps the latest re-rating."""
+    p = path if path is not None else _ratings_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    tail = lines[-limit:] if len(lines) > limit else lines
+    out: list[dict] = []
+    for line in tail:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    out.reverse()  # newest first
+    return out
+
+
+def _summarize_ratings(ratings: list[dict]) -> str | None:
+    """Render top-rated + low-rated examples as a few-shot block. We pick
+    EXEMPLARS (specific titles + notes), not bucketed averages, because the
+    qualitative note is the high-bandwidth signal — "love the chunky
+    silhouette" teaches the model more than "niche X averages 4.2".
+
+    De-dup by listing_id so re-rating doesn't double-count the same draft.
+    """
+    if not ratings:
+        return None
+
+    seen: set[int] = set()
+    dedup: list[dict] = []
+    for r in ratings:
+        lid = r.get("listing_id")
+        if not isinstance(lid, int) or lid in seen:
+            continue
+        seen.add(lid)
+        try:
+            stars = int(r.get("stars") or 0)
+        except (TypeError, ValueError):
+            stars = 0
+        if stars < 1 or stars > 5:
+            continue
+        dedup.append({
+            "stars": stars,
+            "title": str(r.get("title") or "").strip(),
+            "niche": str(r.get("niche") or "").strip(),
+            "note": str(r.get("note") or "").strip(),
+        })
+
+    if not dedup:
+        return None
+
+    # Sort high-rated first, low-rated last; cap each side at 4 so the
+    # block stays under ~600 tokens.
+    high = sorted([r for r in dedup if r["stars"] >= 4], key=lambda r: -r["stars"])[:4]
+    low = sorted([r for r in dedup if r["stars"] <= 2], key=lambda r: r["stars"])[:4]
+
+    if not high and not low:
+        return None
+
+    def _line(r: dict) -> str:
+        stars = "★" * r["stars"]
+        bits = [f"{stars} \"{r['title'] or '(untitled)'}\""]
+        if r["niche"]:
+            bits.append(f"[{r['niche']}]")
+        if r["note"]:
+            bits.append(f"— note: {r['note']}")
+        return " ".join(bits)
+
+    lines = [
+        "OPERATOR RATINGS (rate-it-yourself feedback from the human in the "
+        "loop — trust these MORE than sales for first-100-listing learning):"
+    ]
+    if high:
+        lines.append("Loved:")
+        lines.extend(f"  • {_line(r)}" for r in high)
+    if low:
+        lines.append("Disliked:")
+        lines.extend(f"  • {_line(r)}" for r in low)
+    lines.append(
+        "Pick a NEW niche that resembles the LOVED examples in style + "
+        "silhouette; avoid patterns from the DISLIKED list."
     )
     return "\n".join(lines)
 
@@ -449,6 +919,8 @@ def build_orchestrator_prompt(
     niche_context: str | None = None,
     drafts_context: str | None = None,
     target_product_type: str | None = None,
+    trend_signals_text: str | None = None,
+    strategist_notes: str | None = None,
 ) -> tuple[str, str]:
     focus = _shop_focus()
     is_3d = focus == "3d_only" or target_product_type in {"stl_file", "3d_model"}
@@ -562,6 +1034,35 @@ def build_orchestrator_prompt(
         user_parts.append(drafts_context)
     if niche_context:
         user_parts.append(niche_context)
+    if trend_signals_text and trend_signals_text.strip():
+        # Live trend signals from Reddit / Google Trends / YouTube. Mine for
+        # niche categories the average Etsy seller hasn't reacted to yet;
+        # filter ruthlessly. The signal is in the CATEGORIES (mythology,
+        # dinosaurs, dnd, anime archetype, holiday) — not in surface terms.
+        user_parts.append(
+            "LIVE TREND SIGNALS (Reddit hot posts, Google Trends, YouTube — "
+            "raw scrape, score is normalized 0-100 within source):\n"
+            f"{trend_signals_text}\n"
+            "Mine these for niche ideas the average Etsy/Cults3D seller "
+            "hasn't reacted to yet — but filter ruthlessly: skip celebrity "
+            "gossip, current events, brand/IP names (HIGH legal risk), and "
+            "anything that doesn't translate to a printable/displayable 3D "
+            "object. The signal is in the underlying CATEGORIES (mythology, "
+            "dinosaurs, Halloween, dnd, anime archetype, hobby). DO NOT just "
+            "regurgitate a trending term as the niche."
+        )
+    if strategist_notes and strategist_notes.strip():
+        # Meta-strategist's cross-niche guidance — distilled from outcomes
+        # the orchestrator can't infer from a single row (e.g. scale biases,
+        # adjacency suggestions, listing/price diagnoses). Placed LAST so
+        # it gets the model's strongest attention before the final pick.
+        user_parts.append(
+            "STRATEGIST NOTES — your tuner reviewed recent outcomes and "
+            "wrote this guidance for THIS cycle. Treat it as advisory, not "
+            "as a hard rule (operator steers above still trump it), but "
+            "lean into the patterns it surfaces:\n"
+            f"{strategist_notes}"
+        )
     user_parts.append(
         "Pick the next niche to pursue. Be specific, and make sure it's in "
         "a category we haven't already over-covered."
@@ -575,18 +1076,34 @@ def call_anthropic(
     niche_context: str | None = None,
     drafts_context: str | None = None,
     target_product_type: str | None = None,
+    trend_signals_text: str | None = None,
+    strategist_notes: str | None = None,
 ) -> tuple[dict, int, int]:
     system_prompt, user_prompt = build_orchestrator_prompt(
         niche_context=niche_context,
         drafts_context=drafts_context,
         target_product_type=target_product_type,
+        trend_signals_text=trend_signals_text,
+        strategist_notes=strategist_notes,
+    )
+    # AVOID block first (rejected niches), then OPERATOR OVERRIDE (steers).
+    # Steers come last so a fresh "try Lovecraftian jewelry" can override an
+    # older "Lovecraftian dice tower" rejection. Last tokens carry strongest
+    # model attention.
+    system_prompt = _append_rejection_avoid_block(system_prompt)
+    system_prompt = _append_operator_steers(system_prompt)
+    # Image-bearing steers attach to the user message as multimodal blocks
+    # because Anthropic's `system` field is text-only. No-op when no steer
+    # carries images (returns user_prompt as a plain string).
+    user_content = _build_user_content_with_steer_images(
+        user_prompt, ["orchestrator", "research"]
     )
 
     body = json.dumps({
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system_prompt,
-                "messages": _messages_for_json_call(user_prompt),
+                "messages": _messages_for_json_call(user_content),
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -640,7 +1157,11 @@ def handle(method: str, params: dict) -> dict:
             "ticker_text": f"orchestrator failed: {msg}",
         }
 
-    niche_context = _summarize_outcomes(_read_recent_outcomes())
+    outcomes_summary = _summarize_outcomes(_read_recent_outcomes())
+    ratings_summary = _summarize_ratings(_read_recent_ratings())
+    # Concatenate so the prompt sees BOTH sales-derived patterns and
+    # operator ratings. Either may be None; we drop blanks.
+    niche_context = "\n\n".join(s for s in (outcomes_summary, ratings_summary) if s) or None
     recent_drafts = _read_recent_drafts()
     drafts_context = _summarize_recent_themes(recent_drafts)
     target_product_type, rotation_summary = _pick_rotation_product_type(recent_drafts)
@@ -654,6 +1175,24 @@ def handle(method: str, params: dict) -> dict:
         f"[orchestrator] job_id={job_id} product rotation: pick={target_product_type} | counts: {rotation_summary}",
         file=sys.stderr, flush=True,
     )
+    # Live trend signals — best-effort, opt out via ORCHESTRATOR_TREND_SIGNALS=0.
+    # Fetched here (not lazily inside call_anthropic) so test mocks of the
+    # Anthropic call don't accidentally trigger live HTTP to Reddit/Google/YT.
+    trend_signals_text = _fetch_trend_signals_text()
+    if trend_signals_text:
+        print(
+            f"[orchestrator] job_id={job_id} trend signals: {len(trend_signals_text)} chars",
+            file=sys.stderr, flush=True,
+        )
+    # Meta-strategist notes — written by the strategist's orchestrator-tuning
+    # tick. Advisory cross-niche guidance, distinct from operator steers
+    # (which are imperative).
+    strategist_notes = _load_strategist_notes()
+    if strategist_notes:
+        print(
+            f"[orchestrator] job_id={job_id} strategist notes: {len(strategist_notes)} chars",
+            file=sys.stderr, flush=True,
+        )
     print(f"[orchestrator] job_id={job_id} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
     try:
         data, tokens_in, tokens_out = call_anthropic(
@@ -661,22 +1200,32 @@ def handle(method: str, params: dict) -> dict:
             niche_context=niche_context,
             drafts_context=drafts_context,
             target_product_type=target_product_type,
+            trend_signals_text=trend_signals_text,
+            strategist_notes=strategist_notes,
         )
         niche_seed = data.get("niche_seed", "unknown niche")
         rationale = data.get("rationale", "")
         target_audience = data.get("target_audience", "")
         print(f"[orchestrator] job_id={job_id} done niche_seed={niche_seed!r} pt={target_product_type} in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
         # Conversation log: tell the floor what we picked AND why we rotated.
+        # These render in the Conversations panel as agent-to-agent chatter, so
+        # phrase them like Slack messages between colleagues — not log lines.
+        pt_label = _humanize_product_type(target_product_type)
+        niche_msg_parts = [
+            f"Iris — picking **{niche_seed}** as a {pt_label} for this cycle."
+        ]
+        if rationale and rationale.strip():
+            niche_msg_parts.append(f"Why: {rationale.strip()}")
+        if target_audience and target_audience.strip():
+            niche_msg_parts.append(f"Target buyer: {target_audience.strip()}.")
+
         messages = [
             {
                 "from": "orchestrator",
                 "to": "research",
                 "topic": "niche_pick",
                 "importance": "heads_up",
-                "content": (
-                    f"Next niche: '{niche_seed}' (target product: {target_product_type}). "
-                    f"Why: {rationale or '—'}"
-                ),
+                "content": "\n\n".join(niche_msg_parts),
             },
             {
                 "from": "orchestrator",
@@ -684,8 +1233,8 @@ def handle(method: str, params: dict) -> dict:
                 "topic": "rotation",
                 "importance": "info",
                 "content": (
-                    f"Product rotation this cycle → {target_product_type}. "
-                    f"Recent counts: {rotation_summary}."
+                    f"Rotating into **{pt_label}** for this cycle — "
+                    f"lowest-volume format in recent drafts ({rotation_summary})."
                 ),
             },
         ]
