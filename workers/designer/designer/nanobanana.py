@@ -92,7 +92,22 @@ def _auth_ok(timeout: int = 15) -> bool:
 
 def is_configured() -> bool:
     """Designer reads this to decide whether the nanobanana → image-to-3D
-    path is available. True only when the CLI is on PATH and authed."""
+    path is available. Two backends accepted, in priority order:
+
+      1. Direct Gemini (`GEMINI_IMAGE_API_KEY` set) — preferred. Cheaper
+         per image (~$0.067 on Flash 3.1 vs Higgsfield's bundled rate)
+         and no separate CLI auth flow.
+      2. Higgsfield CLI authed — the legacy path. Used when no Gemini
+         key is configured.
+
+    Returns True if either backend is ready.
+    """
+    try:
+        from . import gemini_image as _gemini
+        if _gemini.is_configured():
+            return True
+    except ImportError:
+        pass
     return _cli_available() and _auth_ok()
 
 
@@ -144,6 +159,26 @@ def generate_reference_image(
     final listing image — vertical aspect for character work, no text
     in frame requested.
     """
+    # Direct Gemini path wins when its key is set — cheaper per image
+    # and no CLI dependency. Falls through to the Higgsfield path when
+    # GEMINI_IMAGE_API_KEY is missing.
+    try:
+        from . import gemini_image as _gemini
+        if _gemini.is_configured():
+            try:
+                return _gemini.generate_reference_image(
+                    api_key, prompt,
+                    job_id=job_id, assets_dir=assets_dir,
+                    aspect_ratio=aspect_ratio, timeout=timeout,
+                )
+            except _gemini.GeminiImageError as e:
+                # Surface as NanobananaError so the designer's existing
+                # soft-fallback to text-to-3D handles it identically to
+                # the Higgsfield failure modes — never blocks the cycle.
+                raise NanobananaError(f"gemini direct: {e}") from e
+    except ImportError:
+        pass
+
     if not _cli_available():
         raise NanobananaError(
             "higgsfield CLI not on PATH — install via "

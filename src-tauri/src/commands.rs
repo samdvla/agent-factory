@@ -538,6 +538,20 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
     } else {
         Some(("GOOGLE_API_KEY".into(), google_key))
     };
+    // Direct Google AI Studio image-generation key. When set, the
+    // designer's nanobanana dispatcher prefers the direct Gemini path
+    // (gemini-3.1-flash-image-preview at ~$0.067/image) over the
+    // Higgsfield CLI's nano_banana_pro bundle. This is the cheapest
+    // route once a Higgsfield plan is depleted. Key lives in secrets
+    // under `gemini_image_api_key`; get one at
+    // https://aistudio.google.com/apikey.
+    let gemini_image_key = secrets::get("gemini_image_api_key")
+        .ok().flatten().unwrap_or_default();
+    let gemini_image_env: Option<(String, String)> = if gemini_image_key.is_empty() {
+        None
+    } else {
+        Some(("GEMINI_IMAGE_API_KEY".into(), gemini_image_key))
+    };
     // YouTube Data API key — used by research's trends fetcher for the
     // YouTube trending source. Optional: if missing, research skips
     // YouTube but still hits Reddit + Google Trends.
@@ -585,6 +599,7 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         let meshy_env = meshy_env.clone();
         let tripo_env = tripo_env.clone();
         let google_env = google_env.clone();
+        let gemini_image_env = gemini_image_env.clone();
         let youtube_env = youtube_env.clone();
         let higgsfield_env = higgsfield_env.clone();
         let shop_focus_env = shop_focus_env.clone();
@@ -611,6 +626,9 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
             }
             if let Some(ref g) = google_env {
                 env.push(g.clone());
+            }
+            if let Some(ref gi) = gemini_image_env {
+                env.push(gi.clone());
             }
             if let Some(ref y) = youtube_env {
                 env.push(y.clone());
