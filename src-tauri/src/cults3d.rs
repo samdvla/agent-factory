@@ -82,6 +82,20 @@ async fn graphql(
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
+        if status.as_u16() == 401 {
+            return Err(anyhow!(
+                "Cults3D rejected your credentials (HTTP 401).\n\
+                 Two things to check:\n\
+                 • Username must be your Cults3D NICK — the handle that \
+                   appears in your profile URL (cults3d.com/en/users/<nick>). \
+                   NOT your email, NOT your display name. Open your profile \
+                   in a browser to see it.\n\
+                 • API key must be a freshly-generated one from \
+                   cults3d.com/en/api/keys. Keys are shown once; if you lost \
+                   it, generate a new one. Copy without surrounding whitespace.\n\
+                 Server response: {text}"
+            ));
+        }
         return Err(anyhow!("cults3d HTTP {status}: {text}"));
     }
     let parsed: serde_json::Value =

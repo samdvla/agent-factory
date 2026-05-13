@@ -1034,11 +1034,11 @@ function Cults3DSection() {
 
       <div className="settings-field-row">
         <div className="settings-field-label-col">
-          <span className="settings-field-label">Cults3D username</span>
+          <span className="settings-field-label">Cults3D nick</span>
           <span className="settings-helper">
             {status.credsPresent
               ? "Saved (verify again to replace)."
-              : "Your Cults3D account username."}
+              : "Your Cults3D NICK — the handle in your profile URL (cults3d.com/en/users/<nick>). Not your email or display name."}
           </span>
         </div>
         <input
