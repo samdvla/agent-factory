@@ -147,36 +147,45 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
   const shoeColor = "#15171c";
   const skin = "var(--skin)";
 
-  // Shoes: two slim parallelograms suggesting iso boots. side="l"/"r" lets
-  // CSS animate the left/right shoes independently when the avatar walks.
+  // Shoes — beefier iso parallelograms with a visible side face so each foot
+  // reads as a 3D shape (not just a flat line) at base zoom.
   const shoe = (sx: number, side: "l" | "r") => (
     <g className={`avatar-shoe avatar-shoe-${side}`}>
+      {/* sole / left dark face */}
       <polygon
-        points={`${sx - 1.6},2 ${sx + 1.7},2 ${sx + 2.0},0 ${sx - 1.2},0`}
+        points={`${sx - 1.9},2.4 ${sx + 1.9},2.4 ${sx + 2.6},0.4 ${sx - 1.3},0.4`}
         fill={shoeColor}
       />
+      {/* top */}
       <polygon
-        points={`${sx - 1.2},0 ${sx + 2.0},0 ${sx + 2.0},-1 ${sx - 1.2},-1`}
-        fill={lighterHex(shoeColor, 0.2)}
+        points={`${sx - 1.3},0.4 ${sx + 2.6},0.4 ${sx + 2.6},-1.0 ${sx - 1.3},-1.0`}
+        fill={lighterHex(shoeColor, 0.3)}
+      />
+      {/* side highlight */}
+      <polygon
+        points={`${sx + 1.9},2.4 ${sx + 2.6},0.4 ${sx + 2.6},-1.0 ${sx + 1.9},1.0`}
+        fill={darkerHex(shoeColor, 0.4)}
       />
     </g>
   );
 
-  // Legs: 3-face boxes with iso depth. Same per-side class so the left and
-  // right leg can alternate-bob while walking.
+  // Legs — taller, thicker 3-face boxes with pronounced iso shading.
   const leg = (lx: number, side: "l" | "r") => (
     <g className={`avatar-leg avatar-leg-${side}`}>
+      {/* dark left face */}
       <polygon
-        points={`${lx - 1.1},-1 ${lx - 1.1},-12 ${lx + 0.4},-13 ${lx + 0.4},-2`}
-        fill={darkerHex(pants, 0.2)}
+        points={`${lx - 1.4},-1 ${lx - 1.4},-12.5 ${lx + 0.4},-13.5 ${lx + 0.4},-2`}
+        fill={darkerHex(pants, 0.25)}
       />
+      {/* main right face */}
       <polygon
-        points={`${lx + 0.4},-2 ${lx + 0.4},-13 ${lx + 1.9},-12 ${lx + 1.9},-1`}
+        points={`${lx + 0.4},-2 ${lx + 0.4},-13.5 ${lx + 2.4},-12.5 ${lx + 2.4},-1`}
         fill={pants}
       />
+      {/* top face highlight */}
       <polygon
-        points={`${lx - 1.1},-12 ${lx + 0.4},-13 ${lx + 1.9},-12 ${lx + 0.4},-11`}
-        fill={lighterHex(pants, 0.12)}
+        points={`${lx - 1.4},-12.5 ${lx + 0.4},-13.5 ${lx + 2.4},-12.5 ${lx + 0.4},-11.5`}
+        fill={lighterHex(pants, 0.2)}
       />
     </g>
   );
@@ -186,11 +195,11 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
   const torsoTop = baseY - torsoH;
   const torsoLeft = -torsoW / 2;
   const torsoRight = torsoW / 2;
-  const dx = 2.4;
-  const dy = -1.4;
-  const accentLight = lighterHex(accent, 0.18);
-  const accentDark = darkerHex(accent, 0.16);
-  const armR = 1.6;
+  const dx = 3.0;
+  const dy = -1.8;
+  const accentLight = lighterHex(accent, 0.22);
+  const accentDark = darkerHex(accent, 0.22);
+  const armR = 2.2;
   return (
     <g>
       {shoe(-2.2, "l")}
