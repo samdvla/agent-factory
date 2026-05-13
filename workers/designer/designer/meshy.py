@@ -154,11 +154,10 @@ def generate_3d_from_image(
         _tripo.download_to_path(model_url, glb_path)
     except _tripo.TripoError as e:
         raise MeshyError(f"download glb failed: {e}") from e
-    # Decimate over-large GLBs before STL conversion so both shipped files
-    # share the same low-poly mesh and pass Etsy's 20 MB digital-upload cap.
-    _tripo.shrink_glb_for_etsy(glb_path)
+    # Convert to STL and loop-decimate until the STL itself fits Etsy's
+    # 19 MB cap (binary STL is ~3-4× the size of the compressed GLB).
     try:
-        _tripo.glb_to_stl(glb_path, stl_path)
+        _tripo.ensure_stl_under_cap(glb_path, stl_path)
     except _tripo.TripoError as e:
         raise MeshyError(f"glb→stl failed: {e}") from e
     thumb = pick_thumbnail_url(data)
@@ -275,7 +274,7 @@ def generate_3d(
         raise MeshyError(f"download glb failed: {e}") from e
     print(f"[meshy] job_id={job_id} downloaded glb ({os.path.getsize(glb_path)} bytes)", file=sys.stderr, flush=True)
     try:
-        _tripo.glb_to_stl(glb_path, stl_path)
+        _tripo.ensure_stl_under_cap(glb_path, stl_path)
     except _tripo.TripoError as e:
         raise MeshyError(f"glb→stl failed: {e}") from e
     print(f"[meshy] job_id={job_id} converted stl ({os.path.getsize(stl_path)} bytes)", file=sys.stderr, flush=True)

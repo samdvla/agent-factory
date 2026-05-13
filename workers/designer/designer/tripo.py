@@ -284,10 +284,120 @@ def glb_to_stl(glb_path: str, stl_path: str) -> None:
     scene_or_mesh.export(stl_path, file_type="stl")
 
 
-# Etsy's digital-file upload caps at 20 MB. We aim for ≤ 15 MB so multipart
-# overhead doesn't push borderline files over. Decimation kicks in only when
-# the GLB is already over this size — small models pass through untouched.
+# Etsy's digital-file upload soft-fails at ~19 MB (the publisher's safety
+# margin under the documented 20 MB cap). Binary STL is roughly 3-4× the
+# size of the compressed GLB (each triangle = 50 bytes uncompressed in STL
+# vs. indexed/draco-compressed in GLB), so gating on GLB size lets oversized
+# STLs through. We aim for ≤ 18 MB on the STL with a 1 MB safety margin.
+ETSY_STL_MAX_BYTES = 18 * 1024 * 1024
+# Legacy alias — pre-2026-05-13 code gated on GLB size at 15 MB. Kept as
+# the first-pass target so small models still pass through untouched.
 ETSY_FILE_MAX_BYTES = 15 * 1024 * 1024
+
+
+def _decimate_glb_in_place(glb_path: str, target_ratio: float) -> bool:
+    """Decimate the GLB to `target_ratio` of its current face count via
+    trimesh, writing back to `glb_path`. Returns True on success. Best-
+    effort — any failure logs and returns False without mutating the file.
+    """
+    import os, sys
+    try:
+        import trimesh  # type: ignore
+    except ImportError:
+        print("[tripo] decimate: trimesh not available", file=sys.stderr, flush=True)
+        return False
+    try:
+        scene_or_mesh = trimesh.load(glb_path, force="mesh")
+        if hasattr(scene_or_mesh, "dump"):
+            scene_or_mesh = scene_or_mesh.dump(concatenate=True)
+        faces = getattr(scene_or_mesh, "faces", None)
+        if faces is None or len(faces) == 0:
+            return False
+        face_count = len(faces)
+        try_target = max(2000, int(face_count * max(0.05, target_ratio)))
+        if try_target >= face_count:
+            return False
+        decimated = None
+        # trimesh 4.x's simplify_quadric_decimation uses keyword args
+        # `percent=` (fraction to KEEP, 0–1) or `face_count=` (target count).
+        # Older versions accepted a bare positional face-count int. Try the
+        # new API first, fall back to the legacy form, fall back to the
+        # alt-spelled `simplify_quadratic_decimation`.
+        if hasattr(scene_or_mesh, "simplify_quadric_decimation"):
+            try:
+                decimated = scene_or_mesh.simplify_quadric_decimation(face_count=try_target)
+            except TypeError:
+                # Legacy positional API
+                decimated = scene_or_mesh.simplify_quadric_decimation(try_target)
+        elif hasattr(scene_or_mesh, "simplify_quadratic_decimation"):
+            decimated = scene_or_mesh.simplify_quadratic_decimation(try_target)
+        else:
+            print("[tripo] decimate: trimesh has no decimation method", file=sys.stderr, flush=True)
+            return False
+        if decimated is None or not hasattr(decimated, "export"):
+            return False
+        decimated.export(glb_path, file_type="glb")
+        new_size = os.path.getsize(glb_path)
+        print(
+            f"[tripo] decimate: {face_count} → {try_target} faces, "
+            f"GLB now {new_size / 1024 / 1024:.1f} MB",
+            file=sys.stderr, flush=True,
+        )
+        return True
+    except Exception as e:
+        print(f"[tripo] decimate: failed: {e}", file=sys.stderr, flush=True)
+        return False
+
+
+def ensure_stl_under_cap(glb_path: str, stl_path: str, max_bytes: int = ETSY_STL_MAX_BYTES) -> None:
+    """Convert GLB to STL. If the resulting STL exceeds `max_bytes`, decimate
+    the GLB and reconvert — looping until under cap or attempts exhausted.
+
+    This is the single source of truth for "ship a printable + Etsy-uploadable
+    STL". Replaces the previous `shrink_glb_for_etsy + glb_to_stl` pair which
+    gated only on GLB size and let big STLs through.
+    """
+    import os, sys
+
+    glb_to_stl(glb_path, stl_path)
+    try:
+        stl_size = os.path.getsize(stl_path)
+    except OSError:
+        return
+    if stl_size <= max_bytes:
+        return
+
+    # Iterative decimation. Each round targets stl_size→max_bytes proportionally,
+    # then re-converts. Bias each ratio a touch tighter (×0.85) to compensate
+    # for the STL/GLB compression ratio variance per mesh.
+    for round_idx in range(5):
+        target_ratio = (max_bytes / float(stl_size)) * 0.85
+        target_ratio = max(0.05, min(0.85, target_ratio))
+        print(
+            f"[tripo] ensure_stl_under_cap: STL is {stl_size / 1024 / 1024:.1f} MB "
+            f"(over {max_bytes / 1024 / 1024:.0f} MB cap), round {round_idx+1} "
+            f"decimating to {target_ratio:.0%} of current faces",
+            file=sys.stderr, flush=True,
+        )
+        if not _decimate_glb_in_place(glb_path, target_ratio):
+            print("[tripo] ensure_stl_under_cap: decimate failed, leaving STL as-is", file=sys.stderr, flush=True)
+            return
+        glb_to_stl(glb_path, stl_path)
+        try:
+            stl_size = os.path.getsize(stl_path)
+        except OSError:
+            return
+        if stl_size <= max_bytes:
+            print(
+                f"[tripo] ensure_stl_under_cap: STL now {stl_size / 1024 / 1024:.1f} MB — under cap",
+                file=sys.stderr, flush=True,
+            )
+            return
+    print(
+        f"[tripo] ensure_stl_under_cap: still {stl_size / 1024 / 1024:.1f} MB "
+        f"after 5 rounds — publisher's size guard will reject cleanly",
+        file=sys.stderr, flush=True,
+    )
 
 
 def shrink_glb_for_etsy(glb_path: str) -> None:
@@ -453,10 +563,11 @@ def generate_3d_from_image(
     stl_path = os.path.join(assets_dir, f"{job_id}.stl")
     png_path = os.path.join(assets_dir, f"{job_id}.png")
     download_to_path(model_url, glb_path)
-    # Decimate if the file is over Etsy's 20 MB digital-upload cap, before we
-    # convert to STL — keeps the GLB and STL aligned on the same low-poly mesh.
-    shrink_glb_for_etsy(glb_path)
-    glb_to_stl(glb_path, stl_path)
+    # Convert to STL and loop-decimate until the STL fits Etsy's 19 MB cap
+    # (binary STL is ~3-4× the size of the compressed GLB, so gating on GLB
+    # size alone let oversized STLs through). Keeps the GLB and STL aligned
+    # on the same low-poly mesh either way.
+    ensure_stl_under_cap(glb_path, stl_path)
     preview_url = pick_preview_url(data)
     if preview_url:
         try:
@@ -509,7 +620,7 @@ def generate_3d(
     png_path = os.path.join(assets_dir, f"{job_id}.png")
     download_to_path(model_url, glb_path)
     print(f"[tripo] job_id={job_id} downloaded glb ({os.path.getsize(glb_path)} bytes)", file=sys.stderr, flush=True)
-    glb_to_stl(glb_path, stl_path)
+    ensure_stl_under_cap(glb_path, stl_path)
     print(f"[tripo] job_id={job_id} converted stl ({os.path.getsize(stl_path)} bytes)", file=sys.stderr, flush=True)
     # Listing thumbnail: prefer Tripo's preview render; placeholder otherwise.
     preview_url = pick_preview_url(data)

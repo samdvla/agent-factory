@@ -4,8 +4,16 @@ version = "0.1.0"
 requires-python = ">=3.11"
 # trimesh handles GLB→STL conversion so a single Tripo generation yields
 # both a game-ready GLB and a 3D-printable STL. numpy is a hard dep of
-# trimesh. Pure-Python wheels, no native build step.
-dependencies = ["trimesh>=4.0", "numpy>=1.26", "Pillow>=10.0"]
+# trimesh. fast_simplification is the backend for trimesh 4.x's
+# simplify_quadric_decimation — without it, mesh decimation silently
+# fails and oversized STLs (>19 MB) get rejected by Etsy. Pure-Python
+# wheels, no native build step required at install time.
+dependencies = [
+    "trimesh>=4.0",
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "fast_simplification>=0.1",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
