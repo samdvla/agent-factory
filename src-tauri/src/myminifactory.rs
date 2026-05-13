@@ -62,6 +62,16 @@ struct CreateObjectResp {
     id: Option<serde_json::Value>,
     url: Option<String>,
     short_url: Option<String>,
+    /// Per-file upload IDs returned by the create-object call. Step 2 of
+    /// the upload flow needs these to address the binary POST.
+    files: Option<Vec<CreateObjectFileEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateObjectFileEntry {
+    upload_id: Option<String>,
+    #[allow(dead_code)]
+    filename: Option<String>,
 }
 
 /// Verify the API key. Returns username for the UI to display.
@@ -131,7 +141,21 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
     ))
 }
 
-/// Create an object + attach the file in a single multipart call.
+/// Create an object + upload its file, following the documented two-step
+/// MMF API flow:
+///   1. POST /api/v2/object — JSON body with metadata + files[{filename, bytes}].
+///      Returns the object id + a per-file `upload_id`.
+///   2. POST /api/v2/file?upload_id=… — raw binary body of the file.
+///
+/// Previous implementation used `POST /api/v2/objects` (plural) with
+/// multipart in a single call, which MMF rejects with 405 Method Not
+/// Allowed — that route only accepts GET (list objects). The plural-vs-
+/// singular drift cost every prior upload attempt.
+///
+/// Auth: passes the API key as both an `Authorization: Bearer` header
+/// (MMF's documented modern scheme) AND as the legacy `?key=` query
+/// string. Hitting one or the other works on MMF's mixed auth surface
+/// without us having to know which the user's key actually is.
 pub async fn create_object_with_file(
     client: &reqwest::Client,
     creds: &Creds,
@@ -146,48 +170,85 @@ pub async fn create_object_with_file(
         .and_then(|n| n.to_str())
         .unwrap_or("model.stl")
         .to_string();
-    let tags_joined = input.tags.join(",");
-    let price_str = format!("{:.2}", input.price_usd);
+    let byte_count = bytes.len() as u64;
 
-    let mut form = reqwest::multipart::Form::new()
-        .text("name", input.name.clone())
-        .text("description", input.description.clone())
-        .text("tags", tags_joined)
-        .text("price", price_str);
+    // Step 1 — create the object metadata + receive upload_id for the file.
+    let mut body = serde_json::json!({
+        "name": input.name,
+        "description": input.description,
+        "tags": input.tags.join(","),
+        "files": [{
+            "filename": filename,
+            "bytes": byte_count,
+        }],
+    });
     if let Some(cat) = &input.category {
-        form = form.text("category", cat.clone());
+        body["category"] = serde_json::Value::String(cat.clone());
     }
-    let file_part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
-        .mime_str("application/octet-stream")?;
-    form = form.part("file", file_part);
-
-    let resp = client
-        .post(format!("{API_BASE}/objects"))
+    let create_resp = client
+        .post(format!("{API_BASE}/object"))
         .query(&[("key", creds.api_key.as_str())])
+        .header("Authorization", format!("Bearer {}", creds.api_key))
+        .header("Content-Type", "application/json; charset=utf-8")
         .header("User-Agent", UA)
-        .multipart(form)
-        .timeout(Duration::from_secs(180))
+        .json(&body)
+        .timeout(Duration::from_secs(60))
         .send()
         .await
-        .context("mmf POST /objects failed")?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!("mmf create-object HTTP {status}: {text}"));
+        .context("mmf POST /object failed")?;
+    let create_status = create_resp.status();
+    let create_text = create_resp.text().await.unwrap_or_default();
+    if !create_status.is_success() {
+        return Err(anyhow!(
+            "mmf create-object HTTP {create_status}: {create_text}"
+        ));
     }
-    let parsed: CreateObjectResp = serde_json::from_str(&text)
-        .with_context(|| format!("parse create-object JSON: {text}"))?;
-    let object_id = parsed
+    let create_parsed: CreateObjectResp = serde_json::from_str(&create_text)
+        .with_context(|| format!("parse create-object JSON: {create_text}"))?;
+    let object_id = create_parsed
         .id
+        .clone()
         .map(|v| match v {
             serde_json::Value::String(s) => s,
             other => other.to_string(),
         })
         .ok_or_else(|| anyhow!("mmf create-object: missing id"))?;
+    let upload_id = create_parsed
+        .files
+        .as_ref()
+        .and_then(|files| files.first())
+        .and_then(|f| f.upload_id.clone())
+        .ok_or_else(|| {
+            anyhow!("mmf create-object: missing files[0].upload_id in response: {create_text}")
+        })?;
+
+    // Step 2 — upload the binary file.
+    let upload_resp = client
+        .post(format!("{API_BASE}/file"))
+        .query(&[
+            ("key", creds.api_key.as_str()),
+            ("upload_id", upload_id.as_str()),
+        ])
+        .header("Authorization", format!("Bearer {}", creds.api_key))
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", format!("filename=\"{filename}\""))
+        .header("User-Agent", UA)
+        .body(bytes)
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .context("mmf POST /file (binary upload) failed")?;
+    let upload_status = upload_resp.status();
+    if !upload_status.is_success() {
+        let upload_text = upload_resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "mmf file upload HTTP {upload_status}: {upload_text}"
+        ));
+    }
+
     Ok(CreateObjectResult {
         object_id,
-        url: parsed.url.or(parsed.short_url),
+        url: create_parsed.url.or(create_parsed.short_url),
         file_attached: true,
         warning: None,
     })

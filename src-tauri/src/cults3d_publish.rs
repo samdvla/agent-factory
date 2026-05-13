@@ -109,11 +109,45 @@ pub async fn handle_publisher_complete_cults3d(
         .and_then(|v| v.as_str())
         .map(String::from);
 
+    // Closure that records the failure to BOTH the UI bus AND the
+    // cults3d_publishes table so early-exit reasons survive a restart and
+    // operators can audit them in the Activity tab. Previously these
+    // early-exits only fired a bus event — the table stayed empty and we
+    // had no way to know why publishes weren't happening.
+    let title_for_fail = title.clone();
+    let today_for_fail = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let pool_for_fail = pool.clone();
+    let project_id_for_fail = project_id;
+    let bus_for_fail = bus.clone();
     let fail = |reason: String| {
-        bus.send(SupervisorEvent::Cults3dPublishFailed {
-            local_listing_id,
-            reason,
+        let title = title_for_fail.clone();
+        let today = today_for_fail.clone();
+        let pool = pool_for_fail.clone();
+        let project_id = project_id_for_fail;
+        let bus = bus_for_fail.clone();
+        let reason_for_log = reason.clone();
+        tokio::spawn(async move {
+            tracing::warn!("cults3d_publish skip: {reason_for_log}");
+            let now = chrono::Utc::now().timestamp();
+            let _ = sqlx::query(
+                "INSERT INTO cults3d_publishes \
+                 (project_id, local_listing_id, title, state, error, published_at, day) \
+                 VALUES (?, ?, ?, 'errored', ?, ?, ?)",
+            )
+            .bind(project_id)
+            .bind(local_listing_id)
+            .bind(&title)
+            .bind(&reason_for_log)
+            .bind(now)
+            .bind(&today)
+            .execute(&pool)
+            .await;
+            bus.send(SupervisorEvent::Cults3dPublishFailed {
+                local_listing_id,
+                reason: reason_for_log,
+            });
         });
+        let _ = reason;
     };
 
     let Some(asset_path_str) = asset_path_str else {
