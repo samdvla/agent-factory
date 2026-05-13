@@ -103,6 +103,60 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     assert captured["body"]["system"] == default_system
 
 
+def test_drift_guard_rejects_stale_svg_override(tmp_path, monkeypatch):
+    """Regression for: strategist re-wrote designer.system_override with a
+    pre-3D-pivot SVG-sticker prompt; Designer's Haiku call then produced
+    contradictory output and downstream Tripo cascades blew the supervisor
+    timeout. Drift guard must reject any override with pre-pivot markers when
+    SHOP_FOCUS=3d_only and fall back to the built-in 3D-aware baseline."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHOP_FOCUS", "3d_only")
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    stale_override = (
+        "You are a sticker designer. Output valid SVG only. "
+        "viewBox='0 0 400 400'. Kiss-cut vinyl sticker for an Etsy shop. " * 6
+    )
+    (af_dir / "prompts.json").write_text(json.dumps({
+        "designer": {"system_override": stale_override},
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "cthulhu mini", "product_type": "stl_file"})
+    sent = captured["body"]["system"]
+    # The stale override must NOT have leaked into the Anthropic system prompt.
+    assert "viewBox" not in sent
+    assert "Kiss-cut vinyl" not in sent
+    # The built-in 3D-aware baseline + 3D schema must be present.
+    assert "3D-asset shop" in sent
+    assert "stl_file" in sent
+
+
+def test_drift_guard_lets_clean_3d_override_through(tmp_path, monkeypatch):
+    """A 3D-aware override (no pre-pivot markers) must still apply normally."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHOP_FOCUS", "3d_only")
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    clean_override = (
+        "Designer: emphasize iconic upright poses for altar figurine STLs. "
+        "Stylization: stylized cartoon with hard surface accents. " * 6
+    )
+    (af_dir / "prompts.json").write_text(json.dumps({
+        "designer": {"system_override": clean_override},
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "cthulhu mini", "product_type": "stl_file"})
+    sent = captured["body"]["system"]
+    assert "altar figurine STLs" in sent
+    # Schema is still re-appended.
+    assert "stl_file" in sent
+    assert "JSON only" in sent
+
+
 def test_brief_parse_ignores_trailing_prose(monkeypatch, tmp_path):
     """Sonnet sometimes appends an explanation after the JSON object. Job #670
     failed with `Extra data: line 9 column 1 (char 872)` because json.loads()
@@ -715,6 +769,189 @@ def test_designer_falls_through_when_nanobanana_fails(tmp_path, monkeypatch):
 
     assert result["ok"] is True
     assert calls["tripo_text"] == 1
+    assert result["asset"]["asset_path"] == stl_path
+    assert result["model"] == "tripo-text-to-model"
+
+
+def test_designer_skips_text_fallback_when_image3d_timed_out(tmp_path, monkeypatch):
+    """Image-to-3D provider was QUEUED (raised 'timed out after Ns') → the
+    designer must NOT cascade into a second 240s text-to-3D poll. Cascading
+    would risk tripping the supervisor's outer 900s timeout when both
+    providers are backed up. The cycle ends cleanly with no asset and the
+    next cycle gets a fresh slot at the provider."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    ref_path = str(tmp_path / "1001-ref.png")
+    calls = {"nano": 0, "tripo_img": 0, "tripo_text": 0}
+
+    def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["nano"] += 1
+        return ref_path
+
+    from designer import tripo as tripo_mod
+
+    def fake_tripo_img(*a, **kw):
+        calls["tripo_img"] += 1
+        raise tripo_mod.TripoError("Tripo task abc123 timed out after 240s")
+
+    def fake_tripo_text(*a, **kw):
+        calls["tripo_text"] += 1
+        raise AssertionError(
+            "text-to-3D must NOT run after image-to-3D timeout — would "
+            "double the wait and risk the supervisor outer timeout"
+        )
+
+    from designer import nanobanana as nano_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(tripo_mod, "generate_3d_from_image", fake_tripo_img)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+
+    result = handle("process_job", _character_brief_params(1001))
+
+    assert calls["nano"] == 1
+    assert calls["tripo_img"] == 1
+    assert calls["tripo_text"] == 0
+    # Cycle ends with no asset (3D-only shop hard-fails when nothing made it
+    # to disk) so the cycle gets a clean abort instead of being killed by
+    # the supervisor mid-poll.
+    assert result["ok"] is False
+    assert "no asset" in result.get("error", "").lower()
+
+
+def test_classify_3d_provider_failure_credits():
+    from designer.agent import _classify_3d_provider_failure
+    msg = _classify_3d_provider_failure(
+        'Meshy POST https://api.meshy.ai/openapi/v2/text-to-3d HTTP 402: {"code":"insufficient_credits"}'
+    )
+    assert msg is not None
+    assert "Meshy" in msg and "credit" in msg.lower()
+
+
+def test_classify_3d_provider_failure_auth():
+    from designer.agent import _classify_3d_provider_failure
+    msg = _classify_3d_provider_failure(
+        'Tripo POST https://api.tripo3d.ai/v2/openapi/task HTTP 401: {"code":"unauthorized"}'
+    )
+    assert msg is not None
+    assert "Tripo" in msg and "401" in msg
+
+
+def test_classify_3d_provider_failure_rate_limit():
+    from designer.agent import _classify_3d_provider_failure
+    msg = _classify_3d_provider_failure(
+        'Meshy GET https://api.meshy.ai/... HTTP 429: rate_limit_exceeded'
+    )
+    assert msg is not None
+    assert "rate-limited" in msg or "rate limit" in msg.lower()
+
+
+def test_classify_3d_provider_failure_unknown_returns_none():
+    from designer.agent import _classify_3d_provider_failure
+    # Random python traceback shouldn't trip the matcher.
+    assert _classify_3d_provider_failure("KeyError: 'glb_url'") is None
+
+
+def test_designer_credit_failure_surfaces_friendly_message(tmp_path, monkeypatch):
+    """Tripo returns HTTP 402 → the designer's hard-fail message must be the
+    classified 'out of credits' string (not the wrapped 'no asset produced
+    (...)') so the supervisor → UI alert reads cleanly. Locks in the user's
+    ask: 'how would we know if i ran out of api credits'."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    from designer import nanobanana as nano_mod
+    from designer import tripo as tripo_mod
+
+    def fake_nano(*a, **kw):
+        # Nano import succeeds but nb_available will be False — character-
+        # brief gate prevents image-to-3D, so we go straight to text-to-3D.
+        return str(tmp_path / "ref.png")
+
+    def fake_tripo_text(*a, **kw):
+        raise tripo_mod.TripoError(
+            'Tripo POST https://api.tripo3d.ai/v2/openapi/task '
+            'HTTP 402: {"code":40006,"message":"insufficient_credits"}'
+        )
+
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: False)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+
+    result = handle("process_job", _character_brief_params(2002))
+
+    assert result["ok"] is False
+    err = result.get("error", "")
+    assert "Tripo" in err
+    assert "credit" in err.lower()
+    # Must NOT be the legacy generic wrapping when classification succeeded.
+    assert "no asset produced" not in err
+    # The ticker line includes the friendly message verbatim so users see
+    # the cause without having to open the alert details.
+    assert "credit" in result.get("ticker_text", "").lower()
+
+
+def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkeypatch):
+    """Image-to-3D errored for a NON-timeout reason (auth, bad payload,
+    network) → the text-to-3D fallback still runs. The timeout-skip path
+    must NOT swallow other recoverable errors."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    ref_path = str(tmp_path / "1002-ref.png")
+    glb_path = str(tmp_path / "1002.glb")
+    stl_path = str(tmp_path / "1002.stl")
+    png_path = str(tmp_path / "1002.png")
+    calls = {"nano": 0, "tripo_img": 0, "tripo_text": 0}
+
+    def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["nano"] += 1
+        return ref_path
+
+    from designer import tripo as tripo_mod
+
+    def fake_tripo_img(*a, **kw):
+        calls["tripo_img"] += 1
+        raise tripo_mod.TripoError("HTTP 400: bad payload format")
+
+    def fake_tripo_text(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["tripo_text"] += 1
+        return glb_path, stl_path, png_path
+
+    from designer import nanobanana as nano_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(tripo_mod, "generate_3d_from_image", fake_tripo_img)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+
+    result = handle("process_job", _character_brief_params(1002))
+
+    assert calls["nano"] == 1
+    assert calls["tripo_img"] == 1
+    assert calls["tripo_text"] == 1
+    assert result["ok"] is True
     assert result["asset"]["asset_path"] == stl_path
     assert result["model"] == "tripo-text-to-model"
 

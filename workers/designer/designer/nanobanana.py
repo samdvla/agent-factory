@@ -137,15 +137,36 @@ def generate_reference_image(
         )
 
     os.makedirs(assets_dir, exist_ok=True)
-    # Same enrichment that worked well with Gemini: clean background,
-    # single centered subject, no text/logos/props. Tripo/Meshy
-    # downstream both prefer this composition.
+    # Nano Banana Pro prompt — this is THE pivot point. Tripo/Meshy
+    # reconstruct the 3D mesh from this single PNG, so the reference must
+    # be image-to-3D-optimal: single hero subject, clean background, even
+    # lighting, no shadows, no occluders. The brief_for_image_gen string
+    # the Designer wrote owns the subject + pose + stylization; we add the
+    # universal studio-reference wrapping that turns it into a Tripo-ready
+    # plate.
+    #
+    # Structure follows Nano Banana Pro's documented best-practice formula
+    # (Subject · Composition · Lighting · Style · Negative), with command
+    # syntax (no "please", no conversational filler — every token is an
+    # instruction). The model handles complex multi-constraint synthesis;
+    # we exploit that by stating each constraint as a hard rule.
     enriched = (
-        "Full-body character render on a clean neutral background (light "
-        "grey or off-white). Single subject, centered, facing camera, "
-        "even diffuse lighting, no harsh shadows, no text, no logos, no "
-        "watermarks, no second character, no props occluding the body. "
-        f"Subject: {prompt}"
+        f"{prompt}\n\n"
+        "Composition: single hero subject, centered, fills 60-70% of "
+        "frame, three-quarter view for characters / front-elevation for "
+        "symmetric props / top-down for terrain tiles. Full subject "
+        "visible from base to top — no edge cropping.\n"
+        "Background: clean neutral light-grey #E8E8E8 seamless backdrop. "
+        "No horizon line, no environment, no shadow on backdrop.\n"
+        "Lighting: even soft ambient illumination, no harsh directional "
+        "light, no rim light, no cast shadows.\n"
+        "Style: photorealistic studio-reference render of a single 3D-"
+        "printable object. Matte single-color surface. No painted decals, "
+        "no PBR textures, no rigging, no moving parts.\n"
+        "(negative: no text, no logos, no watermarks, no UI overlays, no "
+        "multiple subjects, no environment, no humans, no measuring tools, "
+        "no film grain, no depth-of-field blur, no specular highlights, "
+        "no second figure, no props occluding the subject)"
     )
 
     cmd = [

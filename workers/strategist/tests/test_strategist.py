@@ -32,8 +32,26 @@ def test_build_synthesis_prompt_includes_current_override():
         {"niche": "boho", "sales": 1, "revenue_usd": 4.0},
     ])
     assert "Design Strategist" in system
-    assert "battle-tested prompt patterns" in system.lower() or "midjourney" in system.lower()
+    # Strategist must understand we sell 3D files, not SVG stickers — the
+    # prompt it writes is a JSON brief that feeds Tripo/Meshy.
+    sys_l = system.lower()
+    assert "stl" in sys_l and "glb" in sys_l
+    assert "tripo" in sys_l or "meshy" in sys_l
+    assert "brief_for_image_gen" in sys_l or "json brief" in sys_l
     assert cur in user
+
+
+def test_build_synthesis_prompt_forbids_pre_pivot_terms():
+    """The strategist must explicitly warn itself against writing pre-pivot
+    artifacts (SVG, viewBox, kiss-cut, sticker, planner). If those leak back
+    into the override, the Designer drift-guard rejects the override at
+    load time and we lose the strategist's tuning entirely."""
+    system, _ = build_synthesis_prompt(None, [])
+    sys_l = system.lower()
+    # Hard rules block names the forbidden tokens so Sonnet knows not to use
+    # them in the override it produces.
+    for forbidden in ("svg", "viewbox", "kiss-cut", "sticker", "planner"):
+        assert forbidden in sys_l, f"strategist must call out '{forbidden}' as forbidden"
 
 
 def test_build_synthesis_prompt_handles_no_override():

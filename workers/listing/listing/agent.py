@@ -91,14 +91,54 @@ def _messages_for_json_call(user_content: str) -> list[dict]:
 
 
 
+def _override_compatible_with_focus(override: str | None) -> bool:
+    """Reject overrides that drifted back to the pre-3D-pivot world. See the
+    designer worker's copy for the full rationale — mirrored here so each
+    worker enforces it at load time, not just once via a hand-clean.
+
+    For listing specifically, an override that pushes prices outside [$3, $15]
+    is also stale (operator policy locks digital sales to that band; anything
+    higher gets silently clamped by the publisher and the listing copy ends
+    up mis-anchored to the displayed price)."""
+    if not override:
+        return True
+    focus = os.environ.get("SHOP_FOCUS", "3d_only").strip().lower()
+    if focus != "3d_only":
+        return True
+    s = override.lower()
+    stale_markers = (
+        "kiss-cut", "kiss cut", "sticker shop", "sticker-first",
+        "kiss-cut vinyl",
+        "viewbox", "svg markup",
+        "adhd routine", "adhd planner", "planner bundle", "planner printable",
+        "printable wall art",
+        # Price drift — operator policy is $3-$15. Anything anchored above
+        # $15 will get clamped and the copy will read wrong.
+        "$20-$30", "$20–$30", "$20 to $30",
+        "price-anchor toward the $20", "price-anchor toward the $25",
+    )
+    return not any(m in s for m in stale_markers)
+
+
 def _load_system_override(role: str) -> str | None:
-    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None.
+
+    Rejects overrides that fail _override_compatible_with_focus.
+    """
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         ov = data.get(role, {}).get("system_override")
         if isinstance(ov, str) and ov.strip():
+            if not _override_compatible_with_focus(ov):
+                print(
+                    f"[listing] rejecting stale {role}.system_override "
+                    f"({len(ov)} chars, contains pre-3D-pivot markers); "
+                    "falling back to built-in baseline",
+                    file=sys.stderr, flush=True,
+                )
+                return None
             return ov
     except Exception:
         pass
@@ -293,13 +333,91 @@ def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
         f"an AI-run Etsy shop selling {product_type.replace('_', ' ')}s"
     )
 
+    # 3D-specific copy guidance — Etsy 3D digital-download buyers read very
+    # differently than sticker buyers. Architecture: Identity → Format rules
+    # → Title formula → Description structure → Tag strategy → Anti-patterns.
+    if is_3d:
+        copy_guidance = (
+            "TITLE FORMULA (140 char hard cap, lead with the highest-value "
+            "search phrase — Etsy weights first 60 chars):\n"
+            "  [Specific Subject] [Niche/Mythology] [Format Tag] | [Buyer "
+            "Use Case] [Scale]\n"
+            "Examples:\n"
+            "  ✓ \"Lovecraftian Deep One Altar Figurine STL | Cthulhu "
+            "Cosmic Horror 3D Print | 28mm Tabletop Mini\"\n"
+            "  ✓ \"Norse Runic Wolf Pendant STL | Viking Mythology 3D "
+            "Print | Wearable Jewelry File\"\n"
+            "  ✓ \"D&D Mushroom Forest Terrain Tiles STL | Modular "
+            "Fantasy Dungeon | 28mm Tabletop\"\n\n"
+
+            "DESCRIPTION STRUCTURE (5 blocks, in order):\n"
+            "  1. Hook sentence (1 line) — the buyer use case, not "
+            "the product. \"Anchor your Cthulhu altar with a "
+            "sculptural Deep One figurine you can print at home.\"\n"
+            "  2. What's included — bullet-style: 'STL file (for "
+            "slicers)', 'GLB file (for viewers / AR)', 'Recommended "
+            "scale: 28mm tabletop'.\n"
+            "  3. Print settings — concrete numbers: layer height "
+            "(0.1mm resin / 0.2mm FDM), infill (15-20%), supports "
+            "(needed / not needed), recommended printer types (FDM + "
+            "resin compatible).\n"
+            "  4. License — \"Personal print use included. Commercial "
+            "/ resale licensing available on request.\"\n"
+            "  5. Closing — single sentence reinforcing the niche / "
+            "mood. No emoji. No CTAs like 'click here'.\n\n"
+
+            "TAG STRATEGY (exactly 13 — Etsy hard cap):\n"
+            "  • 1-2 format tags: 'STL file', '3D print' (always).\n"
+            "  • 3-5 niche-specific tags: 'cthulhu', 'deep one', "
+            "'altar figurine', 'cosmic horror', 'lovecraftian'.\n"
+            "  • 2-3 audience tags: 'dnd', 'tabletop', 'collector', "
+            "'cosplay'.\n"
+            "  • 2-3 use-case tags: 'altar decor', 'desk decor', "
+            "'gift', 'home decor'.\n"
+            "  • 1-2 specificity tags: '28mm', 'fdm printable', "
+            "'resin printable'.\n"
+            "  • NO generic filler ('art', 'design', 'unique', "
+            "'cute') — those are wasted slots.\n"
+            "  • Tags must be ≤20 chars each.\n\n"
+
+            "ANTI-PATTERNS — Etsy buyers bounce on these:\n"
+            "  ✗ Copying the title into the description verbatim.\n"
+            "  ✗ Pretending a physical item ships (we sell digital "
+            "downloads — always say so explicitly).\n"
+            "  ✗ ALL-CAPS sections or excessive emoji.\n"
+            "  ✗ Promising commercial license without the operator's "
+            "approval — default to personal-use-only.\n"
+            "  ✗ Omitting the AI-generation disclosure — Etsy policy "
+            "requires it (added automatically by the worker, but "
+            "don't fight it in the copy).\n"
+            "  ✗ Generic openers (\"You'll love this\", \"Perfect "
+            "for...\") — the hook must be specific to the niche.\n\n"
+        )
+    else:
+        copy_guidance = ""
+
+    persona_block = (
+        "PERSONA — You are an Etsy + Cults3D Listing Copywriter who has "
+        "written hundreds of high-converting 3D digital-download listings. "
+        "You know that 3D buyers are technical and skeptical: they scan "
+        "for print settings, scale, file format, and license terms before "
+        "they read marketing copy. You write titles that load the highest-"
+        "value keyword in the first 60 chars (Etsy weights early tokens "
+        "heavily) and descriptions that read like a TTRPG product page — "
+        "specific, practical, no marketing slop, no exclamation marks, "
+        "no emoji.\n\n"
+    ) if is_3d else (
+        f"You are the Listing Copywriter at {shop_persona}.\n\n"
+    )
+
     system = (
-        f"You are the Listing Copywriter at {shop_persona}. "
+        persona_block +
         "Given a Demand Brief and an Asset Description, produce a complete "
         "listing draft. Title must be ≤140 chars. Exactly 13 tags. "
-        "Description should be SEO-tuned and policy-compliant. "
-        f"PRODUCT — {product_guide} "
-        f"{pricing_guidance} "
+        "Description should be SEO-tuned and policy-compliant.\n\n"
+        f"PRODUCT — {product_guide}\n\n"
+        f"{pricing_guidance}\n\n"
+        f"{copy_guidance}"
         "When the draft is ready, call the submit_listing tool with all five "
         "fields populated. Do not write JSON in a text reply — the tool is "
         "the only sanctioned output channel."

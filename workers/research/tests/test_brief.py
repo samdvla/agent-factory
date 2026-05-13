@@ -190,7 +190,10 @@ def test_rejection_avoid_block_no_file_is_noop(tmp_path, monkeypatch):
     captured = _capture_anthropic_system(monkeypatch)
     from research.agent import call_anthropic
     call_anthropic("k-test")
-    assert "AVOID" not in captured["body"]["system"]
+    # The rejection-avoid block prefix is the unique marker (the bare word
+    # "AVOID" also appears in the baseline as a section header for proven-
+    # loser niches, so we need the prefix to discriminate).
+    assert "AVOID — the operator already rejected" not in captured["body"]["system"]
 
 
 def test_rejection_avoid_block_malformed_file_is_noop(tmp_path, monkeypatch):
@@ -203,7 +206,10 @@ def test_rejection_avoid_block_malformed_file_is_noop(tmp_path, monkeypatch):
     captured = _capture_anthropic_system(monkeypatch)
     from research.agent import call_anthropic
     call_anthropic("k-test")
-    assert "AVOID" not in captured["body"]["system"]
+    # The rejection-avoid block prefix is the unique marker (the bare word
+    # "AVOID" also appears in the baseline as a section header for proven-
+    # loser niches, so we need the prefix to discriminate).
+    assert "AVOID — the operator already rejected" not in captured["body"]["system"]
 
 
 def test_loose_json_handles_trailing_prose():

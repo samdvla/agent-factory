@@ -112,15 +112,22 @@ impl Worker {
         self.stdin.lock().await.write_all(line.as_bytes()).await?;
         self.stdin.lock().await.flush().await?;
 
-        // Designer for 3D jobs is the slowest agent: Anthropic asset-description
-        // call (~10s) → optional nanobanana ref render (~10s) → Meshy/Tripo
-        // text-or-image-to-3D (often 60–180s preview, up to ~300s when queued)
-        // → multi-angle pure-numpy rasterizer (~20-40s for 5 angles at 1024px
-        // on a real generated mesh). 240s blew past on legit jobs; 600s gives
-        // comfortable headroom for Meshy preview + our renderer without
-        // masking a truly stuck process (refine pass is still bounded to
-        // ~600s inside the meshy client itself).
-        let value = tokio::time::timeout(std::time::Duration::from_secs(600), rx)
+        // Designer for 3D jobs is the slowest agent. Actual per-stage worst-
+        // case budgets (after the Plan A trims in workers/designer/agent.py):
+        //   • Anthropic asset desc (Haiku, max_attempts=3): ~220s
+        //   • nanobanana CLI (Nano Banana Pro via Higgsfield): up to 180s
+        //   • image-to-3D Tripo poll (POLL_TIMEOUT_SEC): up to 360s
+        //     ↳ on TIMEOUT: cascade-skip (text-to-3D fallback aborted)
+        //     ↳ on OTHER failure: text-to-3D poll, another 360s
+        //   • Higgsfield product-photoshoot enhance: up to 240s
+        //     ↳ in-worker wall-clock guard skips when elapsed > 650s
+        //   • multi-angle pure-numpy rasterizer: 20-40s for 5 angles
+        // Worst case with skip-guards active: 220 + 180 + 360 + 40 = 800s
+        // (Higgsfield skipped when budget low). Without guards it was ~1230s,
+        // which is why the 600s cap and even the 900s bump were too tight.
+        // 900s leaves ~100s of headroom over the guarded worst case while
+        // still bounding genuinely wedged processes.
+        let value = tokio::time::timeout(std::time::Duration::from_secs(900), rx)
             .await
             .map_err(|_| anyhow!("worker request timed out"))??;
         Ok(value)

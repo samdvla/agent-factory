@@ -199,14 +199,49 @@ def _repair_json_text(text: str) -> str:
     return out
 
 
+def _override_compatible_with_focus(override: str | None) -> bool:
+    """Reject overrides that drifted back to the pre-3D-pivot world. See the
+    designer worker's copy for the full rationale — mirrored here so each
+    worker enforces it at load time, not just once via a hand-clean."""
+    if not override:
+        return True
+    focus = os.environ.get("SHOP_FOCUS", "3d_only").strip().lower()
+    if focus != "3d_only":
+        return True
+    s = override.lower()
+    # For research specifically, an override that tells us to AVOID 3D STL or
+    # PREFER planner/sticker niches is poison — it directly contradicts the
+    # shop's product mix.
+    stale_markers = (
+        "avoid 3d print", "avoid 3d stl", "avoid stl",
+        "favor variations of daily routine planners",
+        "adhd routine", "adhd planner",
+        "kiss-cut", "kiss cut", "sticker shop", "sticker-first",
+        "viewbox", "svg markup",
+        "printable wall art", "planner bundle",
+    )
+    return not any(m in s for m in stale_markers)
+
+
 def _load_system_override(role: str) -> str | None:
-    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None.
+
+    Rejects overrides that fail _override_compatible_with_focus.
+    """
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         ov = data.get(role, {}).get("system_override")
         if isinstance(ov, str) and ov.strip():
+            if not _override_compatible_with_focus(ov):
+                print(
+                    f"[research] rejecting stale {role}.system_override "
+                    f"({len(ov)} chars, contains pre-3D-pivot markers); "
+                    "falling back to built-in baseline",
+                    file=sys.stderr, flush=True,
+                )
+                return None
             return ov
     except Exception:
         pass
@@ -442,48 +477,110 @@ def build_demand_brief_prompt(
 
     if is_3d:
         system = (
-            "You are a Market Research Analyst at an AI-run 3D-asset shop "
-            "selling STL + GLB digital downloads on Etsy and Cults3D. Your "
-            "job: identify a niche the shop can win AND lay down the form "
-            "playbook the Designer feeds to Tripo/Meshy verbatim. Return a "
-            "structured JSON Demand Brief. Concise, specific, no markdown.\n\n"
+            "PERSONA — You are a Market Research Analyst at an AI-run "
+            "3D-asset shop selling STL + GLB digital downloads on Etsy and "
+            "Cults3D. You have deep familiarity with bestseller patterns "
+            "for 3D printables: you know what consistently sells (Egyptian "
+            "/ Norse / Lovecraftian altar figurines, themed jewelry "
+            "pendants, modular D&D terrain, articulated fidget toys) and "
+            "what bleeds money (generic skeleton warriors, unbranded dice "
+            "towers, Christmas ornaments, anything 2D). You pick niches "
+            "like a sniper — one specific, defensible niche per cycle. "
+            "No hedging. No broad categories.\n\n"
+            "Your job: pick ONE niche the shop can win AND hand the "
+            "Designer a Tripo-ready design_direction it copies verbatim. "
+            "Return JSON only, no prose, no markdown fences.\n\n"
 
-            "PRODUCT_TYPE: always use 'stl_file' for 3D-printable buyer "
-            "audiences (tabletop minis, jewelry, decor, cosplay, keychains) "
-            "and '3d_model' only for game-asset / AR audiences. Default to "
-            "stl_file unless the niche is explicitly game-dev or AR.\n\n"
+            "PRODUCT_TYPE rules:\n"
+            "  • 'stl_file' (default) for 3D-printable buyers — tabletop "
+            "minis, jewelry pendants, decor, cosplay, keychains, dice "
+            "towers, terrain tiles, altar figurines.\n"
+            "  • '3d_model' ONLY when the niche is explicitly game-asset / "
+            "AR (Sketchfab buyers, indie dev props).\n\n"
 
-            "PRICE_BAND_USD: typical Etsy 3D digital downloads run $3-$15 "
-            "for single models, $8-$25 for bundles. Cults3D runs $2-$12. "
-            "Pick a band that fits the niche — minis $5-$10, jewelry $4-$8, "
-            "decor $6-$15, cosplay $10-$25.\n\n"
+            "PRICE_BAND_USD — operator policy locks every digital sale to "
+            "$3-$15 (publisher silently clamps anything outside). Pick a "
+            "band that fits the niche AND fits the range:\n"
+            "  • single minis $4-$9\n"
+            "  • jewelry pendants $3-$7\n"
+            "  • desk decor $7-$12\n"
+            "  • cosplay/props $10-$15\n"
+            "  • dice towers $8-$15\n"
+            "  • modular terrain tiles $6-$12\n\n"
 
-            "DESIGN_DIRECTION (this is the most important field): write a "
-            "Tripo-style prompt the Designer copies verbatim. Be specific "
-            "about:\n"
-            "  · subject + pose (e.g. 'goblin warrior, standing, sword "
-            "raised', 'botanical leaf with veining, flat profile')\n"
-            "  · stylization (stylized cartoon / semi-realistic / "
-            "low-poly / organic flowing / hard-surface geometric)\n"
-            "  · printability constraints (no thin overhangs, base shape, "
-            "support-friendly silhouette, hollow vs solid hints)\n"
-            "  · scale (28mm tabletop / 8cm desk / wearable jewelry size)\n"
-            "  · what NOT to include (no PBR textures, no rigging, no "
-            "moving parts — single static mesh).\n\n"
+            "DESIGN_DIRECTION — this field is THE Designer's input to "
+            "Nano Banana Pro → Tripo/Meshy. Write it using this formula "
+            "(front-load subject + adjectives — early tokens carry more "
+            "weight in both Nano Banana and Tripo):\n"
+            "  [Subject + pose] · [Single stylization anchor] · "
+            "[Material/surface] · [Scale anchor in real units] · "
+            "[Printability constraints] · (negative: 3-5 excludes)\n\n"
 
-            "KEYWORDS: focus on Etsy + Cults3D search behavior. Mix tags "
-            "like 'STL file', '3D print', specific niche terms, and "
-            "audience terms ('dnd', 'tabletop', 'cosplay', 'gift').\n\n"
+            "Stylization anchors (pick ONE per brief): stylized cartoon | "
+            "semi-realistic | low-poly | organic flowing | hard-surface "
+            "geometric | sculptural realism. Don't stack.\n\n"
 
-            "IP_RISK: classify the niche honestly. Use 'high' if it "
-            "references a copyrighted franchise (Naruto, Marvel, Star Wars, "
-            "Pokemon, Disney, Genshin, Warhammer, etc.) — even fan-art "
-            "interpretations are HIGH risk because Etsy + Cults3D + GitHub "
-            "all enforce DMCA. Use 'mythology' for public-domain gods, "
-            "myths, folklore, fairy tales (Greek, Norse, yokai, Cthulhu, "
-            "Arthurian, Alice in Wonderland). Use 'original' if we're "
-            "coining a brand-new character. Use 'none' for generic "
-            "objects/props that aren't tied to any character."
+            "Example design_direction strings (length: 30-70 words):\n"
+            "  ✓ \"Standing dwarf warrior in three-quarter stance, hammer "
+            "resting on shoulder. Stylized cartoon with hard-surface "
+            "plate armor. Matte single-color, no PBR. 28mm tabletop mini "
+            "scale, circular base, single static mesh. (negative: no thin "
+            "axe blade, no floating beard, no second figure, no "
+            "background)\"\n"
+            "  ✓ \"Pendant of a stylized Norse runic wolf head, "
+            "front-facing, jaw closed. Hard-surface geometric, deep "
+            "engraved runes around the edge. Wearable pendant size "
+            "(35mm), flat back, hollow-printable. (negative: no chain, "
+            "no gemstones, no second motif, no painted detail)\"\n\n"
+
+            "Anti-patterns Designer can't recover from — DO NOT request:\n"
+            "  ✗ Multiple subjects in one brief.\n"
+            "  ✗ Non-physical effects (smoke, glow, sparkles, magic "
+            "energy) — Tripo can't model these.\n"
+            "  ✗ Named copyrighted IP (Naruto, Pikachu, Spider-Man, "
+            "Yoda, Mickey) — use generic archetype descriptions.\n"
+            "  ✗ Long thin features (sword blades, hair strands, "
+            "butterfly antennae) without explicit support hints — Tripo "
+            "drops them.\n"
+            "  ✗ Vague adjectives (\"beautiful\", \"amazing\", \"epic\") "
+            "— burn tokens, add no geometry signal.\n\n"
+
+            "KEYWORDS — focus on Etsy + Cults3D search behavior. Mix:\n"
+            "  • Format tags ('STL file', 'STL', '3D print', '3D model', "
+            "'digital download').\n"
+            "  • Niche-specific terms (\"deep one altar figurine\", "
+            "\"egyptian deity STL\").\n"
+            "  • Audience tags ('dnd', 'tabletop', 'cosplay', 'gift', "
+            "'collector', 'altar').\n"
+            "  • 13 total tags max — Etsy hard caps at 13.\n\n"
+
+            "IP_RISK — classify honestly. The cycle ends here for HIGH-"
+            "risk briefs (no design / no listing) unless operator approves:\n"
+            "  • 'high' — copyrighted franchise (Naruto, Marvel, Star "
+            "Wars, Pokemon, Disney, Genshin, Warhammer, Game of Thrones, "
+            "MCU, Studio Ghibli). Fan-art counts.\n"
+            "  • 'mythology' — public-domain gods, myths, folklore, fairy "
+            "tales (Greek, Norse, yokai, Cthulhu/Lovecraft, Arthurian, "
+            "Alice in Wonderland, Egyptian, Aztec).\n"
+            "  • 'original' — brand-new character we're coining.\n"
+            "  • 'none' — generic object/prop with no character attached "
+            "(dice tower, modular terrain, pendant motif).\n\n"
+
+            "PROVEN SELLERS (use as tiebreakers when picking niches):\n"
+            "  • Egyptian / Norse / Lovecraftian altar figurines ($20-$25 "
+            "average — but clamp at $15).\n"
+            "  • D&D minis with strong silhouette (dwarves, beholders, "
+            "owlbears, mind flayers).\n"
+            "  • Articulated fidget toys (snakes, scorpions, dragons).\n"
+            "  • Modular terrain tile sets (mushroom forest, dungeon "
+            "stone, sci-fi station).\n"
+            "  • Jewelry pendants tied to mythology (Norse rune wolves, "
+            "Egyptian ankh, Cthulhu sigil).\n\n"
+
+            "AVOID (proven losers): seasonal/holiday (Christmas ornaments), "
+            "generic skeleton warriors, generic single dice tower without "
+            "themed brand, anything 2D (planners, stickers, printables) — "
+            "those are pre-pivot."
         )
     else:
         system = (

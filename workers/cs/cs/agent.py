@@ -65,14 +65,43 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
     raise RuntimeError("retry: unreachable")
 
 
+def _override_compatible_with_focus(override: str | None) -> bool:
+    """Reject overrides that drifted back to the pre-3D-pivot world. Same
+    rationale as the designer/research/listing copies — kept per-worker so
+    each loads its own override safely without a shared module dependency."""
+    if not override:
+        return True
+    focus = os.environ.get("SHOP_FOCUS", "3d_only").strip().lower()
+    if focus != "3d_only":
+        return True
+    s = override.lower()
+    stale_markers = (
+        "kiss-cut", "kiss cut", "sticker shop", "sticker-first", "kiss-cut vinyl",
+        "viewbox", "svg markup",
+        "adhd routine", "adhd planner", "planner bundle", "printable wall art",
+    )
+    return not any(m in s for m in stale_markers)
+
+
 def _load_system_override(role: str) -> str | None:
-    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None.
+
+    Rejects overrides that fail _override_compatible_with_focus.
+    """
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         ov = data.get(role, {}).get("system_override")
         if isinstance(ov, str) and ov.strip():
+            if not _override_compatible_with_focus(ov):
+                print(
+                    f"[cs] rejecting stale {role}.system_override "
+                    f"({len(ov)} chars, contains pre-3D-pivot markers); "
+                    "falling back to built-in baseline",
+                    file=sys.stderr, flush=True,
+                )
+                return None
             return ov
     except Exception:
         pass

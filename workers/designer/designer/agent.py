@@ -12,21 +12,33 @@ SVG_MAX_TOKENS = 16000
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
+# Wall-clock budget guard for the Higgsfield product-photoshoot enhance
+# step. Supervisor outer-cap is 900s; the enhance can take up to 240s; the
+# angle-renderer pass after it takes 20-40s. If `handle()` is already past
+# this threshold, skip the enhance and ship the un-enhanced Tripo preview
+# (still a usable listing thumbnail) — better than blowing the whole job.
+HIGGSFIELD_SKIP_AFTER_SEC = 650
 
-def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 5) -> str:
+
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
     Returns the response body as utf-8 string. Raises on final failure.
 
     HTTP 529 is Anthropic's load-shedding signal — typical overload events
-    last 30s-2min, so the legacy 1s/2s/4s schedule (~7s total) blew right
-    through them and failed real jobs. 529 gets its own longer schedule
-    (8s/15s/30s/60s/60s). Other 5xx + URLError keep the fast schedule.
+    last 30s-2min. The retry budget is intentionally tight for the designer:
+    this worker has a 900s supervisor outer-cap and 4 more external stages
+    after this call (nanobanana → Tripo poll → Higgsfield enhance → raster).
+    Worst case for THIS call: 3 × 60s urlopen + 10s + 30s sleep = ~220s.
+    Going wider (5 attempts at 60s + 8/15/30/60/60 sleeps = 413s) was eating
+    the budget on overload days and tripping the outer timeout. If
+    Anthropic is genuinely overloaded for 3+ minutes, the next cycle gets
+    a fresh slot — better than wedging this one.
 
     _retry_request: see workers/research/tests/test_research.py for behavior coverage.
     """
     import time as _time
-    overload_delays = (8, 15, 30, 60, 60)
-    fast_delays = (1, 2, 4, 8, 16)
+    overload_delays = (10, 30)
+    fast_delays = (1, 4)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -196,14 +208,56 @@ def _repair_json_text(text: str) -> str:
     return out
 
 
+def _override_compatible_with_focus(override: str | None) -> bool:
+    """Reject overrides that drifted back to the pre-3D-pivot world.
+
+    The strategist + SI workers periodically rewrite overrides from operator
+    feedback and outcomes. If either runs with stale context — or a pre-pivot
+    snapshot resurfaces — it can write a sticker/SVG-era override that makes
+    the Designer's Haiku call emit markup instead of a JSON brief, blowing
+    the parser and (when the cascade fires) the supervisor's outer timeout.
+
+    Returns False when SHOP_FOCUS=3d_only AND the override carries unambiguous
+    2D-era markers (viewBox, kiss-cut, 'output SVG only', planner bundle).
+    Caller skips the override and falls back to the built-in 3D-aware baseline.
+    """
+    if not override:
+        return True
+    focus = os.environ.get("SHOP_FOCUS", "3d_only").strip().lower()
+    if focus != "3d_only":
+        return True
+    s = override.lower()
+    stale_markers = (
+        "viewbox",
+        "kiss-cut", "kiss cut",
+        "output valid svg", "output only the svg", "output svg only",
+        "svg markup",
+        "planner bundle", "adhd planner", "printable wall art",
+        "sticker shop", "sticker-first", "kiss-cut vinyl",
+    )
+    return not any(m in s for m in stale_markers)
+
+
 def _load_system_override(role: str) -> str | None:
-    """Read ~/.agent-factory/prompts.json and return system_override for role, or None."""
+    """Read ~/.agent-factory/prompts.json and return system_override for role, or None.
+
+    Rejects overrides that fail the SHOP_FOCUS compatibility check — see
+    _override_compatible_with_focus for the rationale.
+    """
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         ov = data.get(role, {}).get("system_override")
         if isinstance(ov, str) and ov.strip():
+            if not _override_compatible_with_focus(ov):
+                print(
+                    f"[designer] rejecting stale {role}.system_override "
+                    f"({len(ov)} chars, contains pre-3D-pivot markers); "
+                    "falling back to built-in baseline",
+                    file=sys.stderr, flush=True,
+                )
+                return None
             return ov
     except Exception:
         pass
@@ -291,13 +345,111 @@ def build_designer_prompt(brief: dict) -> tuple[str, str]:
         # 3D-aware philosophy layer. The schema layer is appended below via
         # _designer_schema_block so the strategist's override path and the
         # built-in path stay schema-equivalent.
+        #
+        # Architecture: Identity → Pipeline-aware rules → Examples → Anti-
+        # patterns. The string `brief_for_image_gen` is sent verbatim to
+        # Nano Banana Pro (image render) and then the resulting PNG is fed
+        # into Tripo/Meshy image-to-3D. So the brief must satisfy BOTH
+        # stages — front-loaded subject + adjectives (early-token weighting),
+        # explicit pose, single stylization anchor, real-unit scale,
+        # printability constraints, and a negative clause.
         philosophy = (
-            "You are the Designer at an AI-run 3D-asset shop. We sell STL + "
-            "GLB downloads on Etsy + Cults3D. Given a Demand Brief, produce a "
-            "concise structured description that feeds directly into a "
-            "text-to-3D or image-to-3D generator (Tripo / Meshy / "
-            "nanobanana). Be specific about subject, stylization, scale, and "
-            "printability constraints."
+            "PERSONA — You are the Designer at an AI-run 3D-asset shop "
+            "selling STL + GLB digital downloads on Etsy and Cults3D. You "
+            "think like a sculptor with a decade of experience prototyping "
+            "for tabletop game studios and collector-figurine shops: you "
+            "obsess over silhouette readability at thumb-size, base "
+            "stability, and support-friendly geometry. Your one job is to "
+            "write a brief that produces a single, printable, sellable "
+            "mesh on the first Tripo / Meshy run — no second pass. Buyers: "
+            "hobbyist 3D printers, tabletop gamers, jewelry makers, "
+            "collectors, cosplayers, desk-decor shoppers.\n\n"
+
+            "INPUT: a Demand Brief (niche + design_direction + product_type "
+            "from research).\n"
+            "OUTPUT: structured JSON (schema below) describing one printable "
+            "3D asset. The single most important field is `brief_for_image_gen` "
+            "— that string is sent verbatim to Nano Banana Pro to produce one "
+            "front-facing reference render, which Tripo/Meshy then reconstruct "
+            "into a 3D mesh. Bad image = bad mesh. Compose with discipline.\n\n"
+
+            "PROMPT FORMULA for `brief_for_image_gen` — front-load subject + "
+            "key adjectives (early tokens carry more weight in both Nano "
+            "Banana Pro and Tripo/Meshy):\n"
+            "  [Subject + pose] · [Single stylization anchor] · [Material / "
+            "surface] · [Scale anchor in real units] · [Printability "
+            "constraints] · (negative: 3-5 explicit excludes)\n\n"
+
+            "EXAMPLES — copy this shape, swap the subject:\n"
+            "  Example 1 (character figurine): \"Standing goblin warrior, "
+            "three-quarter stance, sword raised overhead. Stylized cartoon "
+            "with hard-surface armor. Matte single-color render, no PBR "
+            "textures. 28mm tabletop mini scale, support-friendly silhouette "
+            "with circular base, single static mesh. (negative: no thin "
+            "spear blade, no floating cloak, no second figure, no "
+            "background)\"\n"
+            "  Example 2 (deity statue): \"Seated Bastet figurine, upright "
+            "posture, paws forward, head tilted slightly. Stylized Egyptian "
+            "Art Deco — sharp geometric forms, smooth surfaces. Matte "
+            "single-color, no painted detail. 15cm desk display scale, "
+            "hollow-printable, support-friendly. (negative: no jewelry "
+            "details, no offering bowl, no thin appendages, no hieroglyphs "
+            "floating in space)\"\n"
+            "  Example 3 (terrain tile): \"Single modular mushroom-forest "
+            "terrain tile, top-down view, 5cm hex base with central "
+            "mushroom cluster. Stylized D&D fantasy, low-poly. Solid base, "
+            "watertight geometry, no overhangs. 28mm tabletop scale. "
+            "(negative: no characters, no thin grass blades, no animal "
+            "figures, no separate components)\"\n\n"
+
+            "HARD RULES for `brief_for_image_gen`:\n"
+            "  • Exactly ONE subject (a 'modular tile set' counts as one "
+            "assembled tile).\n"
+            "  • Explicit pose / orientation: standing / seated / kneeling "
+            "/ three-quarter / top-down / side profile.\n"
+            "  • Single stylization anchor (pick one): stylized cartoon | "
+            "semi-realistic | low-poly | organic flowing | hard-surface "
+            "geometric | sculptural realism.\n"
+            "  • Scale anchor in real units (28mm tabletop / 8cm desk / "
+            "15cm display / wearable pendant size).\n"
+            "  • Printability clause — minimum: 'support-friendly "
+            "silhouette' + 'single static mesh' + 'matte single-color'.\n"
+            "  • Negative clause `(negative: ...)` with 3-5 explicit "
+            "excludes. Almost always include: 'no PBR textures, no "
+            "background, no second figure'.\n"
+            "  • Length: 30-70 words. Tighter is better — Meshy explicitly "
+            "warns that adjective overload buries the core object.\n\n"
+
+            "ANTI-PATTERNS — these wreck the downstream pipeline:\n"
+            "  ✗ Vague adjectives (\"beautiful\", \"amazing\", \"stunning\", "
+            "\"high-quality\") — burn tokens, add no geometry signal.\n"
+            "  ✗ Non-physical elements (smoke, glitter, magic energy, glow "
+            "effects, particle systems) — Tripo/Meshy cannot model these; "
+            "they show up as noise on the mesh.\n"
+            "  ✗ Named copyrighted IP (Naruto, Pikachu, Mickey, Spider-Man, "
+            "Yoda) — IP risk + the geometry never matches canon. Use "
+            "generic descriptions of the archetype instead.\n"
+            "  ✗ Adjective stacking (>6 stylization terms in a row).\n"
+            "  ✗ Multiple subjects (\"a goblin AND his pet wolf\") — Tripo "
+            "fuses them into a malformed blob.\n"
+            "  ✗ Thin overhangs or long thin appendages (long swords, "
+            "thin hair strands, butterfly antennae) — won't print without "
+            "supports and Tripo often drops them.\n\n"
+
+            "OTHER FIELDS — keep concise; the listing worker uses them as "
+            "metadata:\n"
+            "  • asset_type — 'stl_file' for printable buyer audiences "
+            "(default), '3d_model' only when the niche is explicitly "
+            "game-asset / AR.\n"
+            "  • style — one-sentence summary of stylization + form "
+            "language (e.g. \"low-poly stylized cartoon with rounded "
+            "forms\").\n"
+            "  • palette — one hex value. We render untextured single-"
+            "color; pick the color that reads best as a listing preview.\n"
+            "  • dimensions — real-world scale string (e.g. \"28mm "
+            "tabletop mini\", \"8cm desk decor\", \"wearable pendant\").\n"
+            "  • mockup_count — always 1 (the worker renders 5 angles "
+            "automatically off the GLB)."
         )
     else:
         philosophy = (
@@ -603,6 +755,61 @@ def _image_to_3d_provider() -> str:
     return "tripo"
 
 
+def _classify_3d_provider_failure(err_str: str) -> str | None:
+    """Map a raw 3D-provider error string (e.g. 'Meshy POST ... HTTP 402:
+    {"code":"insufficient_credits",...}') to a short, human-readable reason
+    that fits in the ticker + alert sub-text. Returns None when the cause
+    isn't recognisable — the caller should fall back to the raw error.
+
+    The provider tag at the start of the error string tells us which
+    service to name; the HTTP code + body text narrows down the cause.
+    """
+    if not err_str:
+        return None
+    s = err_str.lower()
+    if "tripo" in s:
+        provider = "Tripo"
+    elif "meshy" in s:
+        provider = "Meshy"
+    else:
+        provider = "3D provider"
+    # Body-text signals first — they win over status codes because Tripo and
+    # Meshy both use 200-with-error-payload for some failure modes.
+    if ("insufficient_credit" in s or "insufficient credit" in s
+            or "out of credit" in s or "no credit" in s
+            or "credit_exhaust" in s or "balance is" in s):
+        return f"{provider}: out of credits — top up your account"
+    if "payment required" in s or "http 402" in s:
+        return f"{provider}: out of credits (HTTP 402)"
+    if ("rate_limit" in s or "rate limit" in s or "too many requests" in s
+            or "http 429" in s):
+        return f"{provider}: rate-limited (HTTP 429) — slow down or upgrade plan"
+    if ("unauthorized" in s or "invalid_api_key" in s or "invalid api key" in s
+            or "http 401" in s):
+        return f"{provider}: API key invalid or revoked (HTTP 401)"
+    if "http 403" in s or "forbidden" in s:
+        return f"{provider}: access forbidden (HTTP 403)"
+    if "http 5" in s:
+        return f"{provider}: server error — try again later"
+    if "network error" in s or "name resolution" in s:
+        return f"{provider}: network unreachable"
+    return None
+
+
+class _Image3dTimedOut(Exception):
+    """Raised by _run_image_to_3d when the chosen provider hit its internal
+    poll timeout. Signals the caller to skip the text-to-3D cascade — the
+    provider is queued, and burning another 240s on it will likely hit the
+    same wait and trip the supervisor's outer timeout."""
+
+
+def _looks_like_timeout(err: Exception) -> bool:
+    """MeshyError / TripoError use the message 'timed out after Ns' on poll
+    timeouts (see meshy.py:120/212, tripo.py:204). Sniff for that so we can
+    treat a queued-provider timeout differently from auth/quota failures."""
+    return "timed out after" in str(err).lower()
+
+
 def _run_image_to_3d(
     *,
     brief: dict,
@@ -615,7 +822,10 @@ def _run_image_to_3d(
     """Run Nano Banana Pro reference render (via Higgsfield CLI) → chosen
     image-to-3D provider. Returns (glb_path, stl_path, preview_png,
     model_used) on success, or None to signal the caller to fall through
-    to text-to-3D.
+    to text-to-3D. Raises _Image3dTimedOut when the provider was queued
+    and exhausted its poll budget — the caller should NOT cascade in that
+    case (a second 240s wait would likely repeat the same queue stall and
+    trip the supervisor's outer 900s timeout).
 
     `model_used` is a short tag for budget tracking + UI ticker text.
     """
@@ -673,6 +883,13 @@ def _run_image_to_3d(
             )
             return glb, stl, png, "meshy-image-to-3d"
     except Exception as e:
+        if _looks_like_timeout(e):
+            print(
+                f"[designer] image-to-3d ({provider}) TIMED OUT: {e} — "
+                "skipping text-to-3D cascade (provider queued)",
+                file=sys.stderr, flush=True,
+            )
+            raise _Image3dTimedOut(str(e)) from e
         print(
             f"[designer] image-to-3d ({provider}) failed: {e} — "
             "falling back to text-to-3D",
@@ -686,11 +903,32 @@ def _maybe_higgsfield_enhance(
     brief: dict,
     job_id: int,
     assets_dir: str,
+    elapsed_sec: float = 0.0,
 ) -> str | None:
-    """If Higgsfield is enabled + authenticated, run the preview through a
-    product-photoshoot enhancement and return the new path. On any failure
-    returns the original preview_png. Best-effort, never raises."""
+    """If Higgsfield is enabled + authenticated AND the wall-clock budget
+    still has headroom, run the preview through a product-photoshoot
+    enhancement and return the new path. On any failure (or budget
+    exhaustion) returns the original preview_png. Best-effort, never raises.
+
+    Budget guard: Higgsfield enhance can take up to 240s. The supervisor's
+    outer cap is 900s. If we're already past ~650s by the time we reach
+    this step, skipping the enhance is the difference between shipping the
+    listing with an un-enhanced thumbnail and the whole job getting killed
+    mid-render and re-queued. The un-enhanced Tripo preview is already a
+    usable listing thumbnail; the enhance is pure polish.
+    """
     if not preview_png:
+        return preview_png
+    # Budget guard — leave at least 250s for the Higgsfield call to
+    # complete + 40s for the angle-renderer pass that follows it. If we've
+    # already burned past 650s, the enhance has to wait for next cycle.
+    if elapsed_sec >= HIGGSFIELD_SKIP_AFTER_SEC:
+        print(
+            f"[designer] job_id={job_id} skipping Higgsfield enhance "
+            f"(elapsed={elapsed_sec:.0f}s ≥ {HIGGSFIELD_SKIP_AFTER_SEC}s "
+            "budget); using un-enhanced Tripo preview as listing thumbnail",
+            file=sys.stderr, flush=True,
+        )
         return preview_png
     try:
         from . import higgsfield as _hf
@@ -716,6 +954,9 @@ def _maybe_higgsfield_enhance(
 def handle(method: str, params: dict) -> dict:
     if method != "process_job":
         return {"ok": False, "error": f"unknown method {method}"}
+
+    import time as _time_handle
+    _handle_t0 = _time_handle.time()
 
     job_id = params.get("job_id", 0)
     payload = params.get("payload", {})
@@ -766,15 +1007,23 @@ def handle(method: str, params: dict) -> dict:
                 nb_available = False
 
             i23 = None
+            image3d_timed_out = False
             if nb_available and _is_character_brief(brief) and (tripo_key or meshy_key):
-                i23 = _run_image_to_3d(
-                    brief=brief,
-                    asset=asset,
-                    job_id=job_id,
-                    assets_dir=assets_dir,
-                    meshy_key=meshy_key,
-                    tripo_key=tripo_key,
-                )
+                try:
+                    i23 = _run_image_to_3d(
+                        brief=brief,
+                        asset=asset,
+                        job_id=job_id,
+                        assets_dir=assets_dir,
+                        meshy_key=meshy_key,
+                        tripo_key=tripo_key,
+                    )
+                except _Image3dTimedOut:
+                    # Provider was queued; skip the text-to-3D cascade so we
+                    # don't burn another 240s + trip the supervisor's outer
+                    # timeout. Cycle ends cleanly and the next one gets a
+                    # fresh slot at the provider.
+                    image3d_timed_out = True
 
             if i23 is not None:
                 glb_path, stl_path, preview_png, model_used = i23
@@ -784,6 +1033,7 @@ def handle(method: str, params: dict) -> dict:
                 )
                 preview_png = _maybe_higgsfield_enhance(
                     preview_png, brief, job_id, assets_dir,
+                    elapsed_sec=_time_handle.time() - _handle_t0,
                 )
                 asset["asset_path"] = stl_path
                 asset["glb_path"] = glb_path
@@ -814,6 +1064,19 @@ def handle(method: str, params: dict) -> dict:
                     print(f"[designer] angle render import failed: {e}", file=sys.stderr, flush=True)
                     angle_paths = []
                 asset["preview_pngs"] = angle_paths + [preview_png] if angle_paths else [preview_png]
+            elif image3d_timed_out:
+                # Image-to-3D timed out — provider was queued. Skip the
+                # text-to-3D cascade (a second 240s wait would likely hit
+                # the same backlog and risk the supervisor's outer timeout).
+                # Surface as a soft fail; next cycle gets a fresh attempt.
+                print(
+                    f"[designer] job_id={job_id} skipping text-to-3d cascade "
+                    "after image-to-3d timeout",
+                    file=sys.stderr, flush=True,
+                )
+                asset["asset_path"] = None
+                model_used = MODEL
+                svg_glyph = "3d timeout (provider queued)"
             else:
                 # Text-to-3D fallback. Honour the user's preferred 3D provider
                 # (IMAGE_TO_3D_PROVIDER env, default 'tripo') for this path
@@ -861,6 +1124,7 @@ def handle(method: str, params: dict) -> dict:
                             model_used = "tripo-text-to-model"
                         preview_png = _maybe_higgsfield_enhance(
                             preview_png, brief, job_id, assets_dir,
+                            elapsed_sec=_time_handle.time() - _handle_t0,
                         )
                         asset["asset_path"] = stl_path
                         asset["glb_path"] = glb_path
@@ -890,14 +1154,18 @@ def handle(method: str, params: dict) -> dict:
                             angle_paths + [preview_png] if angle_paths else [preview_png]
                         )
                     except Exception as e:
-                        print(f"[designer] 3d generation failed: {e}", file=sys.stderr, flush=True)
+                        raw_err = str(e)
+                        print(f"[designer] 3d generation failed: {raw_err}", file=sys.stderr, flush=True)
                         asset["asset_path"] = None
                         model_used = MODEL
-                        # 240 chars is enough to keep the HTTP status + first
-                        # part of the response body / error message, which is
-                        # what's needed to diagnose Tripo / Meshy failures
-                        # (401 / 404 / 429 / 5xx vs network).
-                        svg_glyph = f"3d failed: {str(e)[:240]}"
+                        # Try to give the user a human-readable reason
+                        # (out of credits / key invalid / rate-limited /
+                        # network) — the raw HTTP body still goes to
+                        # stderr above for diagnostics. Falls back to the
+                        # raw 240-char snippet when the cause isn't one
+                        # of the well-known patterns.
+                        friendly = _classify_3d_provider_failure(raw_err)
+                        svg_glyph = friendly if friendly else f"3d failed: {raw_err[:240]}"
         else:
             # Second call: Sonnet generates real SVG markup we save to disk.
             # Any failure here is logged and the pipeline continues text-only.
@@ -933,7 +1201,16 @@ def handle(method: str, params: dict) -> dict:
         # failing loudly with "missing asset_path". One critical message
         # instead of five errors.
         if not asset.get("asset_path"):
-            fail_msg = f"no asset produced ({svg_glyph})"
+            # When svg_glyph already carries a classified reason (e.g.
+            # "Tripo: out of credits ..."), promote it directly into the
+            # fail_msg so the supervisor → UI alert reads cleanly. The
+            # generic 3D-failure path keeps the historical "no asset
+            # produced (...)" wrapping for diagnosability.
+            classified = (
+                svg_glyph if _classify_3d_provider_failure(svg_glyph) is not None
+                else None
+            )
+            fail_msg = classified if classified else f"no asset produced ({svg_glyph})"
             print(
                 f"[designer] job_id={job_id} HARD FAIL: {fail_msg}",
                 file=sys.stderr, flush=True,
