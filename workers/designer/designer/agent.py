@@ -13,11 +13,14 @@ SVG_MAX_TOKENS = 16000
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 # Wall-clock budget guard for the Higgsfield product-photoshoot enhance
-# step. Supervisor outer-cap is 900s; the enhance can take up to 240s; the
-# angle-renderer pass after it takes 20-40s. If `handle()` is already past
-# this threshold, skip the enhance and ship the un-enhanced Tripo preview
-# (still a usable listing thumbnail) — better than blowing the whole job.
-HIGGSFIELD_SKIP_AFTER_SEC = 650
+# step. Supervisor outer-cap is 750s; the enhance can take up to ~150s;
+# the angle-renderer pass after it takes 20-40s. If `handle()` is already
+# past this threshold, skip the enhance and ship the un-enhanced Tripo
+# preview (still a usable listing thumbnail) — better than blowing the
+# whole job. Math: 220 (Anthropic worst) + 120 (nano) + 240 (Tripo) = 580s
+# absolute worst entry, so threshold 500 means skip kicks in only when at
+# least two earlier stages went long.
+HIGGSFIELD_SKIP_AFTER_SEC = 500
 
 
 def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:

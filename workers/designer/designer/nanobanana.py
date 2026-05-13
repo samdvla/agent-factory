@@ -32,15 +32,26 @@ import urllib.error
 import urllib.request
 
 CLI = "higgsfield"
-DEFAULT_MODEL = os.environ.get("NANOBANANA_MODEL", "nano_banana_pro")
+# Higgsfield CLI model identifier. The CLI renames sometimes — at the
+# time of writing (May 2026) `higgsfield model list` shows:
+#   nano_banana       → "Nano Banana"     (original)
+#   nano_banana_flash → "Nano Banana 2"   (faster variant)
+#   nano_banana_2     → "Nano Banana Pro" (high-control, our target)
+# The legacy id `nano_banana_pro` was renamed to `nano_banana_2` and now
+# fails fast with "Unknown model". Verify with `higgsfield model list`
+# whenever this errors after a CLI upgrade.
+DEFAULT_MODEL = os.environ.get("NANOBANANA_MODEL", "nano_banana_2")
 # 9:16 vertical: full-body character refs need head + body without cropping.
 # Square / landscape framings tend to lose either the head or the feet.
 DEFAULT_ASPECT_RATIO = os.environ.get("NANOBANANA_ASPECT", "9:16")
 
-# Nano Banana Pro typically resolves in 10–40s; bake in headroom so a
-# slow upstream doesn't kill a job mid-render.
-DEFAULT_TIMEOUT_SEC = 180
-DOWNLOAD_TIMEOUT_SEC = 60
+# Nano Banana Pro typical end-to-end (CLI submit → poll → result URL) is
+# 30-60s on a healthy day; we measured 48s for the probe call. 120s catches
+# busy days while still bounding the worker's outer 750s supervisor cap
+# (anthropic 220 + nano 120 + tripo 240 + higgsfield 150 + raster 40 = 770
+# — but Higgsfield skip-after-500s keeps the realistic ceiling ~620s).
+DEFAULT_TIMEOUT_SEC = 120
+DOWNLOAD_TIMEOUT_SEC = 45
 
 # Higgsfield prints image URLs to stdout/stderr on completion. Same
 # regex used by the existing higgsfield.py product-photoshoot client —
@@ -88,13 +99,20 @@ def is_configured() -> bool:
 def _download(url: str, dest: str, timeout: int = DOWNLOAD_TIMEOUT_SEC) -> None:
     """Stream a Higgsfield result URL to `dest`. Raises NanobananaError
     on any failure so the caller's existing try/except triggers the
-    text-to-3D fallback."""
+    text-to-3D fallback.
+
+    IPv4-only: Higgsfield serves images from AWS CloudFront which
+    advertises broken IPv6 endpoints from some networks (operator's). The
+    stdlib doesn't do Happy Eyeballs, so without forcing IPv4 we hang in
+    SYN_SENT for ~75s/attempt before the timeout fires.
+    """
+    from .ipv4 import force_ipv4
     try:
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "agent-factory/1.0"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with force_ipv4(), urllib.request.urlopen(req, timeout=timeout) as resp:
             tmp = dest + ".tmp"
             with open(tmp, "wb") as f:
                 f.write(resp.read())

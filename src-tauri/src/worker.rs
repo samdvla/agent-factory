@@ -112,22 +112,24 @@ impl Worker {
         self.stdin.lock().await.write_all(line.as_bytes()).await?;
         self.stdin.lock().await.flush().await?;
 
-        // Designer for 3D jobs is the slowest agent. Actual per-stage worst-
-        // case budgets (after the Plan A trims in workers/designer/agent.py):
-        //   • Anthropic asset desc (Haiku, max_attempts=3): ~220s
-        //   • nanobanana CLI (Nano Banana Pro via Higgsfield): up to 180s
-        //   • image-to-3D Tripo poll (POLL_TIMEOUT_SEC): up to 360s
-        //     ↳ on TIMEOUT: cascade-skip (text-to-3D fallback aborted)
-        //     ↳ on OTHER failure: text-to-3D poll, another 360s
-        //   • Higgsfield product-photoshoot enhance: up to 240s
-        //     ↳ in-worker wall-clock guard skips when elapsed > 650s
-        //   • multi-angle pure-numpy rasterizer: 20-40s for 5 angles
-        // Worst case with skip-guards active: 220 + 180 + 360 + 40 = 800s
-        // (Higgsfield skipped when budget low). Without guards it was ~1230s,
-        // which is why the 600s cap and even the 900s bump were too tight.
-        // 900s leaves ~100s of headroom over the guarded worst case while
-        // still bounding genuinely wedged processes.
-        let value = tokio::time::timeout(std::time::Duration::from_secs(900), rx)
+        // Designer for 3D jobs is the slowest agent. Per-stage budgets
+        // (calibrated from a real probe on 2026-05-13 after fixing the
+        // Nano Banana model rename + the broken-IPv6 download hang):
+        //   • Anthropic asset desc (Haiku, max_attempts=3): ~220s worst
+        //     (measured ~5-10s typical)
+        //   • nanobanana CLI Nano Banana Pro: 120s ceiling
+        //     (measured 48s typical — Anthropic + nano combined)
+        //   • Tripo image-to-3D poll: 240s ceiling
+        //     (measured 82s typical end-to-end)
+        //   • Higgsfield product-photoshoot enhance: 240s ceiling
+        //     ↳ in-worker wall-clock guard skips when elapsed > 500s
+        //   • Multi-angle pure-numpy rasterizer: ~30s for 5 angles
+        // Worst-case sum without guards: 220+120+240+240+30 = 850s.
+        // With Higgsfield skip-after-500s active: 220+120+240+0+30 = 610s.
+        // Typical-day total: ~330s (5.5 min). 750s outer cap leaves ~140s
+        // of headroom over the guarded worst case while still bounding
+        // genuinely wedged processes.
+        let value = tokio::time::timeout(std::time::Duration::from_secs(750), rx)
             .await
             .map_err(|_| anyhow!("worker request timed out"))??;
         Ok(value)

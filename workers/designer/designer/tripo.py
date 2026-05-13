@@ -27,10 +27,12 @@ TRIPO_API_BASE = os.environ.get("TRIPO_API_BASE", "https://api.tripo3d.ai").rstr
 # ships a newer one we want to opt into without a code change.
 DEFAULT_MODEL_VERSION = os.environ.get("TRIPO_MODEL_VERSION", "v2.5-20250123")
 
-# Poll cadence + ceiling. Tripo text→3D typically completes in 30–90s; we
-# cap at 6 minutes so a stuck task can't tie up the worker forever.
+# Poll cadence + ceiling. Tripo image→3D typically completes in 60-90s on
+# a healthy day (we measured 82s end-to-end on a real probe). 240s catches
+# busy-queue days while still leaving room for the worker's other stages
+# (anthropic + nano + Higgsfield + raster) under the 750s outer cap.
 POLL_INTERVAL_SEC = 5
-POLL_TIMEOUT_SEC = 360
+POLL_TIMEOUT_SEC = 240
 
 
 class TripoError(Exception):
