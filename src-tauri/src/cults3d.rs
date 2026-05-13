@@ -95,18 +95,32 @@ async fn graphql(
         .ok_or_else(|| anyhow!("cults3d response missing data: {text}"))?)
 }
 
-/// Lightweight auth ping: fetch the authenticated user's username via
-/// `myself`. We don't care about the value beyond confirming auth works.
+/// Lightweight auth ping. Confirms the Basic-auth credentials reach a logged-in
+/// `Myself` resolver, without asking for any specific field on Myself —
+/// Cults3D has renamed identity fields in the past (`username` removed in
+/// favor of `nick`, etc.), and the verify step shouldn't break every time
+/// they reshape their schema. `__typename` is always present, so a non-null
+/// `myself { __typename }` is a robust auth check.
+///
+/// Returns the caller-supplied username unchanged. Cults3D doesn't need us
+/// to look up its own canonical handle for this — Basic auth either accepts
+/// the username:key pair or rejects it.
 pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
-    let query = "query { myself { username } }";
+    let query = "query { myself { __typename } }";
     let data = graphql(client, creds, query, serde_json::json!({})).await?;
-    let username = data
+    let typename = data
         .get("myself")
-        .and_then(|m| m.get("username"))
-        .and_then(|u| u.as_str())
-        .ok_or_else(|| anyhow!("verify: no myself.username in response"))?
-        .to_string();
-    Ok(username)
+        .and_then(|m| m.get("__typename"))
+        .and_then(|v| v.as_str());
+    match typename {
+        Some("Myself") => Ok(creds.username.clone()),
+        _ => Err(anyhow!(
+            "verify: myself returned null or unexpected typename — Basic auth \
+             likely rejected. Confirm the username matches the one shown at \
+             cults3d.com/en/api/keys and the api key was copied without \
+             whitespace."
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
