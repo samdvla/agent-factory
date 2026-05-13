@@ -29,6 +29,14 @@ pub const DEFAULT_DAILY_CAP: i64 = 3;
 /// cost us a half-created draft on Etsy.
 pub const ETSY_DIGITAL_FILE_MAX_BYTES: u64 = 19 * 1024 * 1024;
 
+/// Etsy caps digital downloads at 5 files per listing. For bundles we
+/// upload the primary STL at rank 1 plus up to 4 more at ranks 2-5.
+/// Anything beyond gets silently dropped at the supervisor edge — the
+/// designer's bundle cap (BUNDLE_MAX_ITEMS default 4) already keeps us
+/// inside this ceiling; this constant exists as a defensive guard against
+/// an env-var override that pushes the cap higher.
+pub const ETSY_MAX_DIGITAL_FILES: usize = 5;
+
 /// Returned from `publish_draft` when the digital asset is too large for
 /// Etsy. Recognized by the supervisor so it emits a friendlier event and
 /// skips the retry loop.
@@ -46,7 +54,13 @@ pub struct ListingDraft {
     /// Extra preview images (multi-angle 3D renders). Uploaded as rank
     /// 2..N. Empty for 2D / single-thumbnail listings.
     pub extra_png_paths: Vec<PathBuf>,
+    /// Primary digital asset — always uploaded as file rank 1.
     pub svg_path: PathBuf,
+    /// Additional digital files for bundle listings (one extra STL per
+    /// bundle item beyond the primary). Each is uploaded as a separate
+    /// file under the same listing_id with sequential rank 2..N. Empty
+    /// for single-item listings; capped at ETSY_MAX_DIGITAL_FILES - 1.
+    pub extra_svg_paths: Vec<PathBuf>,
     pub job_id: i64,
 }
 
@@ -128,9 +142,57 @@ pub async fn publish_draft(
         create_resp.listing_id,
         &draft.svg_path,
         draft.job_id,
+        1,
     )
     .await
     .context("upload listing digital file")?;
+
+    // Bundle path: upload every additional STL under the same listing at
+    // sequential ranks. Etsy hard-caps at 5 files/listing; we subtract the
+    // primary's slot and refuse anything beyond. Per-file failures are
+    // non-fatal — the primary file is already up, partial bundle still
+    // ships; the supervisor's outcome log captures which item failed so we
+    // can chase it offline.
+    let extras_to_upload: Vec<&PathBuf> = draft
+        .extra_svg_paths
+        .iter()
+        .take(ETSY_MAX_DIGITAL_FILES.saturating_sub(1))
+        .collect();
+    for (idx, extra) in extras_to_upload.iter().enumerate() {
+        let rank = (idx + 2) as i64;
+        // Size-guard each extra so we don't half-create a multi-file listing
+        // when item 3 of 4 is over Etsy's 20 MB cap. Logging a warning + skip
+        // beats a hard fail mid-bundle.
+        if let Ok(meta) = std::fs::metadata(extra) {
+            if meta.len() > ETSY_DIGITAL_FILE_MAX_BYTES {
+                tracing::warn!(
+                    "etsy bundle: skipping extra rank {} {} ({} bytes > {} MB cap)",
+                    rank,
+                    extra.display(),
+                    meta.len(),
+                    ETSY_DIGITAL_FILE_MAX_BYTES / (1024 * 1024),
+                );
+                continue;
+            }
+        }
+        if let Err(e) = upload_file(
+            client,
+            &access_token,
+            shop_id,
+            create_resp.listing_id,
+            extra,
+            draft.job_id,
+            rank,
+        )
+        .await
+        {
+            tracing::warn!(
+                "etsy bundle: extra file rank {} upload failed for listing {}: {e}",
+                rank,
+                create_resp.listing_id,
+            );
+        }
+    }
     Ok(create_resp)
 }
 
@@ -243,6 +305,53 @@ fn mime_for(path: &Path) -> &'static str {
     }
 }
 
+/// Parse `result.asset_paths` into the list of extra digital files to upload
+/// alongside the primary. Single-listing back-compat: when the field is
+/// missing or contains only the primary path, the returned vec is empty and
+/// the publish flow runs unchanged.
+///
+/// Filtering rules:
+///   • Drop non-string entries.
+///   • Drop paths that don't exist on disk.
+///   • Drop the primary path (already uploaded as rank 1).
+///   • Cap at Etsy's per-listing file ceiling minus 1.
+pub fn extract_extra_asset_paths(
+    result: &serde_json::Value,
+    primary: &Path,
+) -> Vec<PathBuf> {
+    result
+        .get("asset_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && p != primary)
+                .take(ETSY_MAX_DIGITAL_FILES.saturating_sub(1))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the upload filename for an Etsy digital asset.
+///
+/// Rank 1 keeps the legacy `agent-factory-asset-{job}.stl` form so anything
+/// pattern-matching on the old filename still works. Rank 2+ embeds the
+/// rank into the filename so the per-listing file list shows each bundle
+/// item as a distinct download (Etsy renders the filename in the buyer's
+/// "Downloads" panel).
+pub fn build_upload_filename(asset_path: &Path, job_id: i64, rank: i64) -> String {
+    let ext = asset_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    if rank <= 1 {
+        format!("agent-factory-asset-{job_id}.{ext}")
+    } else {
+        format!("agent-factory-asset-{job_id}-{rank}.{ext}")
+    }
+}
+
 async fn upload_file(
     client: &reqwest::Client,
     access_token: &str,
@@ -250,6 +359,7 @@ async fn upload_file(
     listing_id: i64,
     asset_path: &Path,
     job_id: i64,
+    rank: i64,
 ) -> Result<()> {
     let url = format!(
         "{}/shops/{}/listings/{}/files",
@@ -259,11 +369,7 @@ async fn upload_file(
     );
     let bytes = std::fs::read(asset_path)
         .with_context(|| format!("read asset {}", asset_path.display()))?;
-    let ext = asset_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin");
-    let file_name = format!("agent-factory-asset-{job_id}.{ext}");
+    let file_name = build_upload_filename(asset_path, job_id, rank);
     let mime = mime_for(asset_path);
     let part = Part::bytes(bytes)
         .file_name(file_name.clone())
@@ -272,7 +378,7 @@ async fn upload_file(
     let form = Form::new()
         .part("file", part)
         .text("name", file_name)
-        .text("rank", "1");
+        .text("rank", rank.to_string());
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
@@ -511,6 +617,13 @@ pub async fn handle_publisher_complete(
         })
         .unwrap_or_default();
 
+    // Bundle digital files. Publisher emits `asset_paths` (list) for both
+    // single + bundle listings; we filter to entries that exist, drop the
+    // primary (already covered by svg_path), and cap at Etsy's per-listing
+    // file ceiling. Single listings → empty extras → behaves identically to
+    // the pre-bundle code path.
+    let extra_svg_paths = extract_extra_asset_paths(result, &svg_path);
+
     let draft = ListingDraft {
         title: title.clone(),
         description,
@@ -520,6 +633,7 @@ pub async fn handle_publisher_complete(
         png_path,
         extra_png_paths,
         svg_path,
+        extra_svg_paths,
         job_id,
     };
 
@@ -698,6 +812,115 @@ mod tests {
         assert!(r2.state.is_none());
     }
 
+    // -------- Bundle (multi-file) tests -----------------------------------
+
+    #[test]
+    fn test_build_upload_filename_rank1_keeps_legacy_form() {
+        let p = PathBuf::from("/tmp/123.stl");
+        let name = build_upload_filename(&p, 123, 1);
+        assert_eq!(name, "agent-factory-asset-123.stl");
+        // Rank=0 (defensive: callers should always pass ≥1) also keeps the
+        // legacy form so we never produce a `-0` filename.
+        assert_eq!(
+            build_upload_filename(&p, 123, 0),
+            "agent-factory-asset-123.stl"
+        );
+    }
+
+    #[test]
+    fn test_build_upload_filename_rank_n_embeds_rank() {
+        let p = PathBuf::from("/tmp/123.stl");
+        assert_eq!(
+            build_upload_filename(&p, 123, 2),
+            "agent-factory-asset-123-2.stl"
+        );
+        assert_eq!(
+            build_upload_filename(&p, 123, 5),
+            "agent-factory-asset-123-5.stl"
+        );
+    }
+
+    #[test]
+    fn test_build_upload_filename_handles_missing_extension() {
+        let p = PathBuf::from("/tmp/noextension");
+        assert_eq!(
+            build_upload_filename(&p, 7, 1),
+            "agent-factory-asset-7.bin"
+        );
+    }
+
+    #[test]
+    fn test_extract_extra_asset_paths_empty_when_missing() {
+        let v = serde_json::json!({ "title": "x" });
+        let primary = PathBuf::from("/tmp/p.stl");
+        assert!(extract_extra_asset_paths(&v, &primary).is_empty());
+    }
+
+    #[test]
+    fn test_extract_extra_asset_paths_drops_primary_and_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary.stl");
+        let extra1 = tmp.path().join("extra1.stl");
+        let extra2 = tmp.path().join("extra2.stl");
+        let ghost = tmp.path().join("ghost.stl"); // never created
+        std::fs::write(&primary, b"a").unwrap();
+        std::fs::write(&extra1, b"b").unwrap();
+        std::fs::write(&extra2, b"c").unwrap();
+
+        let v = serde_json::json!({
+            "asset_paths": [
+                primary.to_string_lossy(),
+                extra1.to_string_lossy(),
+                extra2.to_string_lossy(),
+                ghost.to_string_lossy(),
+            ]
+        });
+        let out = extract_extra_asset_paths(&v, &primary);
+        // primary dropped, ghost dropped, only the two existing extras remain.
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&extra1));
+        assert!(out.contains(&extra2));
+        assert!(!out.contains(&primary));
+    }
+
+    #[test]
+    fn test_extract_extra_asset_paths_caps_at_max_minus_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary.stl");
+        std::fs::write(&primary, b"a").unwrap();
+        let mut paths: Vec<String> = vec![primary.to_string_lossy().into()];
+        // Create 10 extras — more than Etsy's 5-file ceiling.
+        for i in 0..10 {
+            let p = tmp.path().join(format!("e{i}.stl"));
+            std::fs::write(&p, b"x").unwrap();
+            paths.push(p.to_string_lossy().into());
+        }
+        let v = serde_json::json!({ "asset_paths": paths });
+        let out = extract_extra_asset_paths(&v, &primary);
+        // Cap = ETSY_MAX_DIGITAL_FILES - 1 = 4 extras (primary fills slot 5).
+        assert_eq!(out.len(), ETSY_MAX_DIGITAL_FILES.saturating_sub(1));
+    }
+
+    #[test]
+    fn test_extract_extra_asset_paths_ignores_non_string_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary.stl");
+        let extra = tmp.path().join("e.stl");
+        std::fs::write(&primary, b"a").unwrap();
+        std::fs::write(&extra, b"b").unwrap();
+        let v = serde_json::json!({
+            "asset_paths": [
+                primary.to_string_lossy(),
+                42,                       // bogus
+                null,
+                extra.to_string_lossy(),
+                { "not": "a path" },
+            ]
+        });
+        let out = extract_extra_asset_paths(&v, &primary);
+        assert_eq!(out, vec![extra]);
+    }
+
     #[tokio::test]
     async fn test_create_draft_posts_required_fields() {
         let mut server = mockito::Server::new_async().await;
@@ -735,6 +958,7 @@ mod tests {
             png_path: PathBuf::from("/tmp/nope.png"),
             extra_png_paths: vec![],
             svg_path: PathBuf::from("/tmp/nope.svg"),
+            extra_svg_paths: vec![],
             job_id: 1,
         };
         let url = format!("{}/shops/9999/listings", mock_base);

@@ -30,6 +30,10 @@ pub struct HostedAssets {
     /// Release id we just created — useful for cleanup if the publish step fails.
     pub release_id: i64,
     pub tag: String,
+    /// Upload URL template for the release. Cached so callers can append
+    /// extra bundle files to the same release without re-fetching it from
+    /// GitHub. Cults3D consumes the resulting URLs as `fileUrls[]`.
+    pub upload_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,7 +215,50 @@ pub async fn host_listing_assets(
         image_url,
         release_id: release.id,
         tag,
+        upload_url: release.upload_url,
     })
+}
+
+/// Append an extra model file to an EXISTING release (created by
+/// `host_listing_assets`). Returns the public URL. Used by Cults3D's
+/// bundle path: one release per listing carries every STL so the listing
+/// page links to N downloads, not N separate releases. Each filename is
+/// suffixed with an item index so two-stl bundles don't collide.
+pub async fn upload_extra_model(
+    client: &reqwest::Client,
+    upload_url: &str,
+    token: &str,
+    job_id: i64,
+    item_index: usize,
+    model_path: &Path,
+) -> Result<String> {
+    if token.is_empty() {
+        return Err(anyhow!("github asset token is empty"));
+    }
+    let ext = model_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "stl" => "model/stl",
+        "glb" => "model/gltf-binary",
+        "zip" => "application/zip",
+        "obj" => "model/obj",
+        _ => "application/octet-stream",
+    };
+    // Pick a stable, unique-per-listing filename so GitHub doesn't collide.
+    // The original `host_listing_assets` writes the asset under its source
+    // basename, which can clash when two bundle items have nearby ids (the
+    // designer uses job_id*100+idx so they're distinct, but defensive
+    // suffixing keeps the upload deterministic regardless of source path).
+    let file_name = format!(
+        "agent-factory-asset-{job_id}-{idx}.{ext}",
+        job_id = job_id,
+        idx = item_index + 2, // matches Etsy's rank 2..N
+        ext = if ext.is_empty() { "stl".to_string() } else { ext.clone() },
+    );
+    upload_asset(client, upload_url, token, model_path, &file_name, mime).await
 }
 
 /// Auth/permission ping: hit the repo endpoint with the token; success means

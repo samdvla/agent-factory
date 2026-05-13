@@ -165,6 +165,32 @@ pub async fn handle_publisher_complete_cults3d(
         return;
     }
 
+    // Bundle: extra STL files for multi-file Cults3D listings. We host each
+    // in the SAME GitHub release as the primary so the marketplace links
+    // them as a unit (one release per Cults3D creation). Filter to existing
+    // entries that aren't the primary; an empty list means single-file
+    // listing (back-compat).
+    let extra_stl_paths: Vec<PathBuf> = publisher_result
+        .get("asset_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && *p != stl_path)
+                .collect()
+        })
+        .unwrap_or_default();
+    // Cults3D doesn't publish a hard file-count cap on creations. We mirror
+    // Etsy's 5-file ceiling (4 extras) so the same designer-side bundle cap
+    // (BUNDLE_MAX_ITEMS=4) doesn't accidentally split into a longer
+    // marketplace list than every other platform.
+    const CULTS3D_MAX_EXTRA_FILES: usize = 4;
+    let extra_stl_paths: Vec<PathBuf> = extra_stl_paths
+        .into_iter()
+        .take(CULTS3D_MAX_EXTRA_FILES)
+        .collect();
+
     let Some(creds) = creds_from_secrets() else {
         fail("cults3d credentials missing (set username + api_key)".into());
         return;
@@ -216,6 +242,35 @@ pub async fn handle_publisher_complete_cults3d(
         }
     };
 
+    // Bundle: upload each extra STL into the SAME GitHub release so all
+    // bundle files share the listing's tag. Per-file failures are
+    // non-fatal — the primary STL is already hosted and the listing can
+    // ship with N-1 items rather than failing entirely. Each successful
+    // URL gets collected into the file_urls list below.
+    let mut file_urls: Vec<String> = vec![hosted.file_url.clone()];
+    for (idx, extra) in extra_stl_paths.iter().enumerate() {
+        match asset_host_github::upload_extra_model(
+            &client,
+            &hosted.upload_url,
+            &github_token,
+            local_listing_id,
+            idx,
+            extra,
+        )
+        .await
+        {
+            Ok(extra_url) => file_urls.push(extra_url),
+            Err(e) => {
+                tracing::warn!(
+                    "cults3d bundle: extra STL {} of {} ({}) host failed: {e:#}",
+                    idx + 1,
+                    extra_stl_paths.len(),
+                    extra.display(),
+                );
+            }
+        }
+    }
+
     // Categorize.
     let categories = cached_categories(&client, &creds).await;
     let category_id = categories
@@ -226,7 +281,7 @@ pub async fn handle_publisher_complete_cults3d(
         name: title.clone(),
         description,
         image_urls: vec![hosted.image_url.clone()],
-        file_urls: vec![hosted.file_url.clone()],
+        file_urls: file_urls.clone(),
         currency: "USD".into(),
         download_price: price_usd,
         license_code: "cults_cu".into(),
