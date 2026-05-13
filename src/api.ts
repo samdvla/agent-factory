@@ -216,6 +216,19 @@ export const api = {
     invoke("cmd_cults3d_set_daily_cap", { cap }),
   cults3dListPublishes: (limit?: number): Promise<Cults3dPublishRow[]> =>
     invoke("cmd_cults3d_list_publishes", { limit }),
+  pinterestVerify: (
+    accessToken: string,
+    boardId: string,
+  ): Promise<PinterestVerifyOk> =>
+    invoke("cmd_pinterest_verify", { accessToken, boardId }),
+  pinterestStatus: (): Promise<PinterestStatus> => invoke("cmd_pinterest_status"),
+  pinterestSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_pinterest_set_enabled", { enabled }),
+  pinterestSetDailyCap: (cap: number): Promise<void> =>
+    invoke("cmd_pinterest_set_daily_cap", { cap }),
+  pinterestDisconnect: (): Promise<void> => invoke("cmd_pinterest_disconnect"),
+  pinterestListPins: (limit?: number): Promise<PinterestPinRow[]> =>
+    invoke("cmd_pinterest_list_pins", { limit }),
   sketchfabVerify: (apiToken: string): Promise<SketchfabVerifyOk> =>
     invoke("cmd_sketchfab_verify", { apiToken }),
   sketchfabStatus: (): Promise<SketchfabStatus> => invoke("cmd_sketchfab_status"),
@@ -400,6 +413,25 @@ export type Cults3dPublishRow = {
   file_url: string | null;
   image_url: string | null;
   price_usd: number | null;
+  state: string;
+  error: string | null;
+  published_at: number;
+};
+export type PinterestStatus = {
+  creds_present: boolean;
+  board_name: string | null;
+  enabled: boolean;
+  daily_cap: number;
+  today_count: number;
+};
+export type PinterestVerifyOk = { board_name: string };
+export type PinterestPinRow = {
+  id: number;
+  local_listing_id: number | null;
+  pinterest_pin_id: string | null;
+  title: string;
+  url: string | null;
+  etsy_url: string | null;
   state: string;
   error: string | null;
   published_at: number;

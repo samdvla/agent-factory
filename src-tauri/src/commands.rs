@@ -2452,6 +2452,158 @@ pub async fn cmd_cults3d_list_publishes(
         .collect())
 }
 
+// ─── Pinterest (manual access-token paste) ───────────────────────────────
+
+#[derive(Serialize)]
+pub struct PinterestStatus {
+    pub creds_present: bool,
+    pub board_name: Option<String>,
+    pub enabled: bool,
+    pub daily_cap: i64,
+    pub today_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct PinterestVerifyOk {
+    pub board_name: String,
+}
+
+/// Verify the (access_token, board_id) pair by fetching the board from
+/// Pinterest's v5 API. On success persists both + caches the board name so
+/// the Settings UI can show "Connected: <board name>".
+#[tauri::command]
+pub async fn cmd_pinterest_verify(
+    access_token: String,
+    board_id: String,
+) -> Result<PinterestVerifyOk, String> {
+    let t = access_token.trim();
+    let b = board_id.trim();
+    if t.is_empty() || b.is_empty() {
+        return Err("Pinterest access token and board id are both required".into());
+    }
+    let client = reqwest::Client::new();
+    let board_name = crate::pinterest::verify(&client, t, b)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    crate::pinterest::persist(t, b).map_err(|e| format!("save creds: {e}"))?;
+    let _ = secrets::set("pinterest_board_name", &board_name);
+    Ok(PinterestVerifyOk { board_name })
+}
+
+#[tauri::command]
+pub async fn cmd_pinterest_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("pinterest_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_pinterest_set_daily_cap(cap: i64) -> Result<(), String> {
+    if !(0..=50).contains(&cap) {
+        return Err("cap must be 0..=50".into());
+    }
+    secrets::set("pinterest_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_pinterest_disconnect() -> Result<(), String> {
+    crate::pinterest::disconnect().map_err(|e| e.to_string())?;
+    // Also clear the enable flag so a disconnected Pinterest can't fire
+    // half-configured publishes if the operator later toggles enable back on.
+    let _ = secrets::set("pinterest_enabled", "false");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_pinterest_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<PinterestStatus, String> {
+    let creds_present = secrets::get("pinterest_access_token")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        && secrets::get("pinterest_board_id")
+            .ok()
+            .flatten()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+    let board_name = secrets::get("pinterest_board_name").ok().flatten();
+    let enabled = secrets::get("pinterest_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let (today_count, daily_cap) =
+        crate::pinterest_publish::today_status(&state.pool, state.project_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    Ok(PinterestStatus {
+        creds_present,
+        board_name,
+        enabled,
+        daily_cap,
+        today_count,
+    })
+}
+
+#[derive(Serialize)]
+pub struct PinterestPinRow {
+    pub id: i64,
+    pub local_listing_id: Option<i64>,
+    pub pinterest_pin_id: Option<String>,
+    pub title: String,
+    pub url: Option<String>,
+    pub etsy_url: Option<String>,
+    pub state: String,
+    pub error: Option<String>,
+    pub published_at: i64,
+}
+
+#[tauri::command]
+pub async fn cmd_pinterest_list_pins(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<PinterestPinRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            i64,
+        ),
+    >(
+        "SELECT id, local_listing_id, pinterest_pin_id, title, url, etsy_url, state, error, published_at \
+         FROM pinterest_pins WHERE project_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PinterestPinRow {
+            id: r.0,
+            local_listing_id: r.1,
+            pinterest_pin_id: r.2,
+            title: r.3,
+            url: r.4,
+            etsy_url: r.5,
+            state: r.6,
+            error: r.7,
+            published_at: r.8,
+        })
+        .collect())
+}
+
 // ─── Listing-stats feedback loop ─────────────────────────────────────────
 
 #[derive(Serialize)]

@@ -16,6 +16,8 @@ pub mod llm;
 pub mod myminifactory;
 pub mod myminifactory_publish;
 pub mod oauth_server;
+pub mod pinterest;
+pub mod pinterest_publish;
 pub mod pnl;
 pub mod pod_publish;
 pub mod printify;
@@ -188,6 +190,12 @@ pub fn run() {
             commands::cmd_cults3d_status,
             commands::cmd_cults3d_set_daily_cap,
             commands::cmd_cults3d_list_publishes,
+            commands::cmd_pinterest_verify,
+            commands::cmd_pinterest_set_enabled,
+            commands::cmd_pinterest_set_daily_cap,
+            commands::cmd_pinterest_disconnect,
+            commands::cmd_pinterest_status,
+            commands::cmd_pinterest_list_pins,
             commands::cmd_sketchfab_verify,
             commands::cmd_sketchfab_set_enabled,
             commands::cmd_sketchfab_status,

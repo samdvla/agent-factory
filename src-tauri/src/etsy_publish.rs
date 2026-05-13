@@ -624,6 +624,20 @@ pub async fn handle_publisher_complete(
     // the pre-bundle code path.
     let extra_svg_paths = extract_extra_asset_paths(result, &svg_path);
 
+    // Pinterest source image. The publisher emits this path on every
+    // 3D-listing cycle; we don't pre-validate existence here because the
+    // pinterest_publish handler does that itself + records failures. None
+    // means the publisher didn't generate a pin (PINTEREST_PIN_ENABLED=0
+    // or the renderer failed silently).
+    let pinterest_pin_path: Option<PathBuf> = result
+        .get("pinterest_pin_path")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+    // Clone the strings we'll need AFTER the Etsy publish completes — the
+    // draft consumes the originals.
+    let description_for_pin = description.clone();
+    let title_for_pin = title.clone();
+
     let draft = ListingDraft {
         title: title.clone(),
         description,
@@ -660,6 +674,32 @@ pub async fn handle_publisher_complete(
             {
                 tracing::error!("insert etsy_publishes failed: {e}");
             }
+            // Fire Pinterest pin in parallel. Pinterest needs the Etsy
+            // URL (that's the whole funnel), so this only runs after a
+            // successful Etsy publish. Every failure mode inside is
+            // non-fatal — the Etsy listing already shipped.
+            if let Some(pin_path) = pinterest_pin_path.clone() {
+                let pool_for_pin = pool.clone();
+                let bus_for_pin = bus.clone();
+                let project_id_for_pin = project_id;
+                let title_for_pin = title_for_pin.clone();
+                let description_for_pin = description_for_pin.clone();
+                let etsy_url_for_pin = url.clone();
+                tokio::spawn(async move {
+                    crate::pinterest_publish::pin_for_listing(
+                        &pool_for_pin,
+                        project_id_for_pin,
+                        &bus_for_pin,
+                        local_listing_id,
+                        &title_for_pin,
+                        &description_for_pin,
+                        &pin_path,
+                        etsy_url_for_pin.as_deref(),
+                    )
+                    .await;
+                });
+            }
+
             bus.send(SupervisorEvent::EtsyListingPublished {
                 local_listing_id,
                 etsy_listing_id: resp.listing_id,

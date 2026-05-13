@@ -127,6 +127,19 @@ pub enum SupervisorEvent {
         count: i64,
         cap: i64,
     },
+    PinterestPinned {
+        local_listing_id: i64,
+        pin_id: String,
+        url: String,
+    },
+    PinterestPinFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    PinterestCapped {
+        count: i64,
+        cap: i64,
+    },
     EtsyKillSwitchTriggered,
     EtsyDraftRejected {
         local_listing_id: i64,
