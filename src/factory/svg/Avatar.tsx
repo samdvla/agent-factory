@@ -379,6 +379,129 @@ function starPath(cx: number, cy: number, r: number): string {
   return pts.join(" ");
 }
 
+/* ─── Iso body — handoff-style figurine (legs + torso as 3-face boxes) ─── */
+
+function mixHex(a: string, b: string, amount: number): string {
+  const parse = (h: string) => {
+    const s = h.startsWith("#") ? h.slice(1) : h;
+    const n = parseInt(s, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255] as const;
+  };
+  const [ar, ag, ab] = parse(a);
+  const [br, bg, bb] = parse(b);
+  const r = Math.round(ar + (br - ar) * amount);
+  const g = Math.round(ag + (bg - ag) * amount);
+  const bl = Math.round(ab + (bb - ab) * amount);
+  return "#" + ((r << 16) | (g << 8) | bl).toString(16).padStart(6, "0");
+}
+
+const darkerHex = (c: string, a = 0.18) => mixHex(c, "#000000", a);
+const lighterHex = (c: string, a = 0.15) => mixHex(c, "#ffffff", a);
+
+/**
+ * Mini iso 3D figure that fills the same 32×44 viewBox the previous flat
+ * avatar used. Coordinates are SVG-pixel space; we draw shoes, legs, and
+ * torso as 3-face polygons (left / right / top) to give the figurine
+ * dimensional shading without re-implementing the room-iso projection.
+ * The viewBox shape stays identical so role hair / eyes / accessories /
+ * chest stars defined elsewhere still line up over the head.
+ */
+function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; accent: string }) {
+  const uniform = "var(--uniform)";
+  const uniformDark = "var(--uniform-dark)";
+  const tone = (base: string, face: "top" | "right" | "left") =>
+    face === "top" ? lighterHex(base, 0.18)
+      : face === "right" ? darkerHex(base, 0.08)
+      : darkerHex(base, 0.22);
+  const shoeColor = "#15171c";
+
+  // Shoes: two slim parallelograms suggesting iso boots
+  const shoe = (sx: number) => (
+    <g>
+      <polygon
+        points={`${sx - 1.6},2 ${sx + 1.6},2 ${sx + 2.0},0 ${sx - 1.2},0`}
+        fill={shoeColor}
+      />
+      <polygon
+        points={`${sx - 1.2},0 ${sx + 2.0},0 ${sx + 2.0},-1 ${sx - 1.2},-1`}
+        fill={lighterHex(shoeColor, 0.18)}
+      />
+    </g>
+  );
+
+  // Legs: 3-face boxes giving a sense of depth on each leg
+  const leg = (lx: number) => (
+    <g>
+      {/* left/dark face */}
+      <polygon
+        points={`${lx - 1.1},-1 ${lx - 1.1},-12 ${lx + 0.4},-13 ${lx + 0.4},-2`}
+        fill={tone("#1a1d23", "left")}
+      />
+      {/* right/medium face */}
+      <polygon
+        points={`${lx + 0.4},-2 ${lx + 0.4},-13 ${lx + 1.9},-12 ${lx + 1.9},-1`}
+        fill={tone("#1a1d23", "right")}
+      />
+      {/* top of leg under pants — small dark band */}
+      <polygon
+        points={`${lx - 1.1},-12 ${lx + 0.4},-13 ${lx + 1.9},-12 ${lx + 0.4},-11`}
+        fill={tone("#1a1d23", "top")}
+      />
+    </g>
+  );
+
+  const baseY = -12; // legs end here, torso starts above
+  const torsoBottom = baseY;
+  const torsoTop = baseY - torsoH;
+  const torsoLeft = -torsoW / 2;
+  const torsoRight = torsoW / 2;
+  // Depth offset for the iso side face (how far the side juts to the right)
+  const dx = 2.0;
+  const dy = -1.2;
+  return (
+    <g>
+      {shoe(-2.0)}
+      {shoe(2.0)}
+      {leg(-3.0)}
+      {leg(1.0)}
+      {/* Torso left/front face */}
+      <polygon
+        points={`${torsoLeft},${torsoBottom} ${torsoLeft},${torsoTop} ${torsoRight},${torsoTop} ${torsoRight},${torsoBottom}`}
+        fill={uniform}
+      />
+      {/* Torso right side (iso depth) */}
+      <polygon
+        points={`${torsoRight},${torsoBottom} ${torsoRight},${torsoTop} ${torsoRight + dx},${torsoTop + dy} ${torsoRight + dx},${torsoBottom + dy}`}
+        fill={uniformDark}
+      />
+      {/* Torso top (iso depth) */}
+      <polygon
+        points={`${torsoLeft},${torsoTop} ${torsoLeft + dx},${torsoTop + dy} ${torsoRight + dx},${torsoTop + dy} ${torsoRight},${torsoTop}`}
+        fill={lighterHex("#3a342d", 0.18)}
+      />
+      {/* Chest accent (front face only) */}
+      <rect
+        x={torsoLeft + 1.5}
+        y={torsoTop + 3}
+        width={torsoW - 3}
+        height={torsoH - 6}
+        rx={1.5}
+        fill={accent}
+        fillOpacity={0.85}
+      />
+      {/* Shoulder accent stripe across the top of the chest, tinted lighter */}
+      <rect
+        x={torsoLeft + 1.5}
+        y={torsoTop + 2}
+        width={torsoW - 3}
+        height={1.4}
+        fill={lighterHex(accent, 0.22)}
+        fillOpacity={0.85}
+      />
+    </g>
+  );
+}
+
 export default function Avatar({
   role, state, onClick, sizeScale = 1, lifetimeNet, rewards,
 }: {
@@ -447,10 +570,7 @@ export default function Avatar({
         <ellipse cx={0} cy={2} rx={11} ry={3} fill={c} fillOpacity={0.35} />
         <ellipse cx={0} cy={2} rx={7}  ry={2} fill={c} fillOpacity={0.7}  />
         <ellipse cx={0} cy={3} rx={9}  ry={2} fill="#000" fillOpacity={0.45} />
-        <rect x={-3}   y={-12} width={2.2} height={14} rx={1} fill="var(--uniform-dark)" />
-        <rect x={0.8}  y={-12} width={2.2} height={14} rx={1} fill="var(--uniform-dark)" />
-        <rect x={-torsoW / 2}       y={-torsoH - 12} width={torsoW}     height={torsoH + 2} rx={2.5} fill="var(--uniform)" />
-        <rect x={-torsoW / 2 + 1.5} y={-torsoH - 9}  width={torsoW - 3} height={torsoH - 6} rx={1.5} fill={c} fillOpacity={0.85} />
+        <IsoBody torsoH={torsoH} torsoW={torsoW} accent={c} />
         {rewards && rewards.stars > 0 && (() => {
           // 5×2 grid centered in the chest rect. Chest spans x ∈
           // [-torsoW/2+1.5, torsoW/2-1.5] and y ∈ [-torsoH-9, -15]; star
