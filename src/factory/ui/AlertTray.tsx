@@ -43,7 +43,26 @@ export default function AlertTray({ open, onClose }: { open: boolean; onClose: (
               {a.kind === "err" ? "!" : "!"}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="a-title">{a.title}</div>
+              <div className="a-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span>{a.title}</span>
+                {(a.count ?? 1) > 1 && (
+                  <span
+                    title={`Fired ${a.count} times`}
+                    style={{
+                      fontSize: 10,
+                      fontFamily: "var(--font-mono)",
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      background: "var(--glass-fill-soft)",
+                      border: "1px solid var(--glass-border)",
+                      color: "var(--ink-2)",
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    ×{a.count}
+                  </span>
+                )}
+              </div>
               <div className="a-sub">{a.sub}</div>
               <div className="a-time">{timeAgo(a.ts)}</div>
             </div>

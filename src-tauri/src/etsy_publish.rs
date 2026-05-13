@@ -21,6 +21,19 @@ pub const DEFAULT_TAXONOMY_ID: i64 = 2078;
 /// Default daily cap on real Etsy publishes per project.
 pub const DEFAULT_DAILY_CAP: i64 = 3;
 
+/// Etsy's digital-file upload endpoint caps each file at 20 MB. We refuse
+/// anything ≥ 19 MB so there's a small safety margin against multipart-form
+/// overhead pushing a borderline file over the limit. Hitting this cap is
+/// usually a Tripo PBR-textured GLB at full resolution — the fix is mesh
+/// decimation upstream, but we still guard here so a borderline file doesn't
+/// cost us a half-created draft on Etsy.
+pub const ETSY_DIGITAL_FILE_MAX_BYTES: u64 = 19 * 1024 * 1024;
+
+/// Returned from `publish_draft` when the digital asset is too large for
+/// Etsy. Recognized by the supervisor so it emits a friendlier event and
+/// skips the retry loop.
+pub const ETSY_ASSET_TOO_LARGE_TAG: &str = "ETSY_ASSET_TOO_LARGE";
+
 #[derive(Debug, Clone)]
 pub struct ListingDraft {
     pub title: String,
@@ -53,6 +66,22 @@ pub async fn publish_draft(
     shop_id: i64,
     draft: &ListingDraft,
 ) -> Result<CreateListingResponse> {
+    // Size-check the digital file BEFORE we POST to /listings so we don't
+    // leave a half-created draft on Etsy that can't be completed.
+    if let Ok(meta) = std::fs::metadata(&draft.svg_path) {
+        let size = meta.len();
+        if size > ETSY_DIGITAL_FILE_MAX_BYTES {
+            let mb = (size as f64) / (1024.0 * 1024.0);
+            anyhow::bail!(
+                "{}: digital asset {} is {:.1} MB (Etsy cap is {} MB) — skipping publish; compress upstream or pick a smaller Tripo model",
+                ETSY_ASSET_TOO_LARGE_TAG,
+                draft.svg_path.display(),
+                mb,
+                ETSY_DIGITAL_FILE_MAX_BYTES / (1024 * 1024),
+            );
+        }
+    }
+
     let access_token = etsy::ensure_fresh_token(client).await?;
     let create_resp = create_draft(client, &access_token, shop_id, draft)
         .await

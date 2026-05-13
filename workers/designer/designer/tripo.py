@@ -282,6 +282,99 @@ def glb_to_stl(glb_path: str, stl_path: str) -> None:
     scene_or_mesh.export(stl_path, file_type="stl")
 
 
+# Etsy's digital-file upload caps at 20 MB. We aim for ≤ 15 MB so multipart
+# overhead doesn't push borderline files over. Decimation kicks in only when
+# the GLB is already over this size — small models pass through untouched.
+ETSY_FILE_MAX_BYTES = 15 * 1024 * 1024
+
+
+def shrink_glb_for_etsy(glb_path: str) -> None:
+    """If the GLB on disk is larger than `ETSY_FILE_MAX_BYTES`, decimate the
+    mesh in-place via trimesh until it fits. No-op on small files.
+
+    Best-effort: any failure (trimesh missing, broken mesh, export error) is
+    swallowed — the publisher's own size guard will then reject the listing
+    cleanly instead of half-creating a draft. We log the outcome to stderr so
+    operators can tell whether shrinking ran.
+    """
+    import os
+    import sys
+
+    try:
+        size = os.path.getsize(glb_path)
+    except OSError as e:
+        print(f"[tripo] shrink_glb: stat {glb_path} failed: {e}", file=sys.stderr, flush=True)
+        return
+    if size <= ETSY_FILE_MAX_BYTES:
+        return
+
+    print(
+        f"[tripo] shrink_glb: {glb_path} is {size / 1024 / 1024:.1f} MB "
+        f"(over {ETSY_FILE_MAX_BYTES / 1024 / 1024:.0f} MB target), decimating…",
+        file=sys.stderr, flush=True,
+    )
+    try:
+        import trimesh  # type: ignore
+    except ImportError:
+        print("[tripo] shrink_glb: trimesh not available; leaving file alone", file=sys.stderr, flush=True)
+        return
+
+    try:
+        scene_or_mesh = trimesh.load(glb_path, force="mesh")
+        if hasattr(scene_or_mesh, "dump"):
+            scene_or_mesh = scene_or_mesh.dump(concatenate=True)
+        face_count = len(getattr(scene_or_mesh, "faces", []) or [])
+        if face_count == 0:
+            print("[tripo] shrink_glb: no faces to decimate", file=sys.stderr, flush=True)
+            return
+
+        # Estimate target face count from file size — roughly proportional.
+        # Cap at a few well-known retry rungs so we converge quickly instead
+        # of micromanaging per-byte targets.
+        target_ratio = min(0.75, (ETSY_FILE_MAX_BYTES / float(size)) * 0.85)
+        target_faces = max(2000, int(face_count * target_ratio))
+
+        decimated = None
+        # trimesh's quadratic decimation API name varies across versions;
+        # try the most common, fall back to the older.
+        for attempt_ratio in (target_ratio, target_ratio * 0.6, 0.25):
+            try_target = max(2000, int(face_count * attempt_ratio))
+            try:
+                if hasattr(scene_or_mesh, "simplify_quadric_decimation"):
+                    decimated = scene_or_mesh.simplify_quadric_decimation(try_target)
+                elif hasattr(scene_or_mesh, "simplify_quadratic_decimation"):
+                    decimated = scene_or_mesh.simplify_quadratic_decimation(try_target)
+                else:
+                    print("[tripo] shrink_glb: trimesh has no decimation method", file=sys.stderr, flush=True)
+                    return
+            except Exception as e:
+                print(f"[tripo] shrink_glb: decimate to {try_target} failed: {e}", file=sys.stderr, flush=True)
+                continue
+            if decimated is None or not hasattr(decimated, "export"):
+                continue
+            decimated.export(glb_path, file_type="glb")
+            try:
+                new_size = os.path.getsize(glb_path)
+            except OSError:
+                new_size = size
+            print(
+                f"[tripo] shrink_glb: {face_count} → {try_target} faces, "
+                f"{size / 1024 / 1024:.1f} MB → {new_size / 1024 / 1024:.1f} MB",
+                file=sys.stderr, flush=True,
+            )
+            if new_size <= ETSY_FILE_MAX_BYTES:
+                return
+            # Otherwise try another, more aggressive rung.
+            size = new_size
+            target_faces = try_target
+        # If we got here all rungs were tried — leave whatever's on disk.
+        # The publisher's size guard will still reject cleanly if needed.
+        _ = target_faces  # silence linter; we kept the var for tracing
+    except Exception as e:
+        # Don't let mesh weirdness break the whole pipeline.
+        print(f"[tripo] shrink_glb: unexpected error: {e}", file=sys.stderr, flush=True)
+
+
 def _placeholder_preview(png_path: str, prompt: str) -> None:
     """Create a simple branded PNG when Tripo doesn't return a preview.
     Etsy requires at least one listing image — without this the publisher
@@ -358,6 +451,9 @@ def generate_3d_from_image(
     stl_path = os.path.join(assets_dir, f"{job_id}.stl")
     png_path = os.path.join(assets_dir, f"{job_id}.png")
     download_to_path(model_url, glb_path)
+    # Decimate if the file is over Etsy's 20 MB digital-upload cap, before we
+    # convert to STL — keeps the GLB and STL aligned on the same low-poly mesh.
+    shrink_glb_for_etsy(glb_path)
     glb_to_stl(glb_path, stl_path)
     preview_url = pick_preview_url(data)
     if preview_url:

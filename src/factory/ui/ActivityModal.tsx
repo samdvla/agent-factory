@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import ActivityFeed from "./ActivityFeed";
 
 interface Props {
@@ -7,12 +8,13 @@ interface Props {
 }
 
 /**
- * Full-screen modal wrapper around ActivityFeed. The rail item triggers this
- * instead of inline-expanding because the activity cards (SVG previews,
- * tag chips, descriptions) need real width to read well.
+ * Centered, portal-rendered Activity review surface. Uses the same overlay /
+ * frame as ListingReviewModal so every modal in the app shares one design
+ * language. The portal escape is load-bearing: the CommandRail has
+ * backdrop-filter, which creates a containing block for fixed-position
+ * descendants — rendering this inline would clip it to the rail's box.
  */
 export default function ActivityModal({ open, onClose }: Props) {
-  // Esc to close, lock body scroll while open
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -29,40 +31,40 @@ export default function ActivityModal({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
-      className="settings-back"
+      className="review-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Activity — review agent outputs"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      onClick={onClose}
     >
-      <div className="activity-modal">
-        <div className="settings-modal-head">
-          <div className="settings-modal-head-left">
-            <span className="settings-modal-tag" style={{ color: "#b393f5", borderColor: "rgba(179, 147, 245, 0.3)", background: "rgba(179, 147, 245, 0.08)" }}>
-              Review
-            </span>
-            <span className="settings-modal-title">Activity — every output, ratable for training</span>
+      <div
+        className="review-modal review-modal--wide"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="review-modal-header">
+          <div>
+            <div className="review-modal-title">Activity</div>
+            <div className="review-modal-sub">
+              Every agent output — rate up/down to teach the strategist
+            </div>
           </div>
           <button
             type="button"
-            className="settings-close-btn"
+            className="review-modal-close"
             onClick={onClose}
             aria-label="Close activity"
+            title="Close"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            ×
           </button>
-        </div>
-        <div className="activity-modal-body">
+        </header>
+        <div className="review-modal-pane">
           <ActivityFeed alwaysOpen wide />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

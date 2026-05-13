@@ -154,6 +154,9 @@ def generate_3d_from_image(
         _tripo.download_to_path(model_url, glb_path)
     except _tripo.TripoError as e:
         raise MeshyError(f"download glb failed: {e}") from e
+    # Decimate over-large GLBs before STL conversion so both shipped files
+    # share the same low-poly mesh and pass Etsy's 20 MB digital-upload cap.
+    _tripo.shrink_glb_for_etsy(glb_path)
     try:
         _tripo.glb_to_stl(glb_path, stl_path)
     except _tripo.TripoError as e:

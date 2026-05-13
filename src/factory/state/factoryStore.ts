@@ -103,7 +103,26 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     lastActivityAt: Date.now(),
   })),
   pushTicker: (entry) => set((s) => ({ ticker: [entry, ...s.ticker].slice(0, 200) })),
-  pushAlert: (a) => set((s) => ({ alerts: [a, ...s.alerts].slice(0, 50) })),
+  pushAlert: (a) => set((s) => {
+    // Dedupe: if the same title + sub fired in the last 30 seconds, just
+    // bump the counter on the existing alert and refresh its timestamp.
+    // Stops the alert tray from filling up with "Etsy publish failed × 4"
+    // when one bad GLB or stuck Tripo task fires the same error repeatedly.
+    const DEDUPE_WINDOW_MS = 30_000;
+    const head = s.alerts[0];
+    if (
+      head &&
+      head.kind === a.kind &&
+      head.title === a.title &&
+      head.sub === a.sub &&
+      a.ts - head.ts < DEDUPE_WINDOW_MS
+    ) {
+      const next = [...s.alerts];
+      next[0] = { ...head, ts: a.ts, count: (head.count ?? 1) + 1 };
+      return { alerts: next };
+    }
+    return { alerts: [{ ...a, count: 1 }, ...s.alerts].slice(0, 50) };
+  }),
   dismissAlert: (idx) => set((s) => ({ alerts: s.alerts.filter((_, i) => i !== idx) })),
   setPendingGate: (g) => set({ pendingGate: g }),
   selectAgent: (role) => set({ selectedAgent: role, drawerOpen: role !== null }),

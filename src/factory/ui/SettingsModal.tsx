@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api, type EtsyStatus } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 
@@ -2344,6 +2345,23 @@ export default function SettingsModal({
   const [disconnecting, setDisconnecting] = useState(false);
   const capTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Kill switch state — confirmation gate before halting Etsy publishing.
+  const [killConfirm, setKillConfirm] = useState(false);
+  const [killing, setKilling] = useState(false);
+
+  // Smoke-test state — fires a single end-to-end cycle for QA / pre-publish
+  // validation. Steps tick off as supervisor events come in.
+  const [smokeRunning, setSmokeRunning] = useState(false);
+  const [smokeSteps, setSmokeSteps] = useState({
+    research: false,
+    asset: false,
+    listing: false,
+    draft: false,
+  });
+  const [smokeListingId, setSmokeListingId] = useState<number | null>(null);
+  const [smokeDone, setSmokeDone] = useState(false);
+  const [smokeError, setSmokeError] = useState<string | null>(null);
+
   // Autonomous behavior toggles
   const [autonomousLoops, setAutonomousLoops] = useState(false);
   const [autonomousLoopsSaving, setAutonomousLoopsSaving] = useState(false);
@@ -2394,6 +2412,44 @@ export default function SettingsModal({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
+
+  // Listen for supervisor events while the modal is open so smoke-test steps
+  // tick off as research/asset/listing/draft phases complete. Must be defined
+  // BEFORE any early return so the hook count stays stable across renders.
+  useEffect(() => {
+    if (!open) return;
+    let unlisten: UnlistenFn | undefined;
+    listen<Record<string, unknown>>("supervisor:event", (e) => {
+      const evt = e.payload;
+      switch (evt.kind) {
+        case "job_completed":
+          if (evt.role === "research") {
+            setSmokeSteps((s) => ({ ...s, research: true }));
+          } else if (evt.role === "listing") {
+            setSmokeSteps((s) => ({ ...s, listing: true }));
+          }
+          break;
+        case "asset_rasterized":
+          setSmokeSteps((s) => ({ ...s, asset: true }));
+          break;
+        case "etsy_listing_published":
+          setSmokeSteps((s) => ({ ...s, draft: true }));
+          if (typeof evt.local_listing_id === "number") {
+            setSmokeListingId(evt.local_listing_id as number);
+          }
+          break;
+        case "smoke_test_cycle_complete":
+          setSmokeRunning(false);
+          setSmokeDone(true);
+          break;
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -2459,6 +2515,44 @@ export default function SettingsModal({
       console.warn("etsyDisconnect failed", e);
     } finally {
       setDisconnecting(false);
+    }
+  };
+
+  /* -- Etsy kill switch -- */
+  const doKill = async () => {
+    setKilling(true);
+    try {
+      await api.etsyKillSwitch();
+      setEtsyEnabled(false);
+      setKillConfirm(false);
+    } catch (e) {
+      console.warn("etsy kill switch failed", e);
+    } finally {
+      setKilling(false);
+    }
+  };
+
+  /* -- Smoke-test cycle -- */
+  const startSmoke = async () => {
+    setSmokeError(null);
+    setSmokeRunning(true);
+    setSmokeSteps({ research: false, asset: false, listing: false, draft: false });
+    setSmokeListingId(null);
+    setSmokeDone(false);
+    try {
+      await api.startSmokeTest();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSmokeError(msg);
+      setSmokeRunning(false);
+    }
+  };
+  const resumeSmoke = async () => {
+    try {
+      await api.resumeFromSmokeTest();
+    } finally {
+      setSmokeRunning(false);
+      setSmokeDone(false);
     }
   };
 
@@ -2721,6 +2815,98 @@ export default function SettingsModal({
               </div>
             )}
           </section>
+
+          {/* ---- Etsy safety: kill switch ---- */}
+          {etsyStatus?.connected && (
+            <section className="settings-section">
+              <div className="settings-section-title">Safety</div>
+              <div className="settings-field-row">
+                <div className="settings-field-label-col">
+                  <span className="settings-field-label">Emergency kill switch</span>
+                  <span className="settings-helper">
+                    Immediately halts all real Etsy publishing. The toggle above flips to OFF;
+                    re-enable manually when ready.
+                  </span>
+                </div>
+                {!killConfirm ? (
+                  <button
+                    type="button"
+                    className="settings-danger-btn"
+                    onClick={() => setKillConfirm(true)}
+                  >
+                    Kill publishing
+                  </button>
+                ) : (
+                  <div className="settings-confirm-wrap">
+                    <span className="settings-confirm-question">Halt all Etsy publishing now?</span>
+                    <button
+                      type="button"
+                      className="modal-btn"
+                      onClick={() => setKillConfirm(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="modal-btn reject"
+                      onClick={doKill}
+                      disabled={killing}
+                    >
+                      {killing ? "Halting…" : "Yes, kill"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* ---- Diagnostics: smoke test ---- */}
+          {etsyStatus?.connected && (
+            <section className="settings-section">
+              <div className="settings-section-title">Diagnostics</div>
+              <div className="settings-field-row">
+                <div className="settings-field-label-col">
+                  <span className="settings-field-label">Smoke-test cycle</span>
+                  <span className="settings-helper">
+                    Runs one end-to-end cycle (research → asset → listing → draft) so you can
+                    verify the pipeline before turning real publishing back on.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="modal-btn approve"
+                  disabled={smokeRunning}
+                  onClick={startSmoke}
+                >
+                  {smokeRunning ? "Running…" : "Run smoke test"}
+                </button>
+              </div>
+              {smokeRunning && (
+                <ul className="smoke-steps">
+                  <li className={smokeSteps.research ? "ok" : ""}>Research</li>
+                  <li className={smokeSteps.asset    ? "ok" : ""}>Asset</li>
+                  <li className={smokeSteps.listing  ? "ok" : ""}>Listing</li>
+                  <li className={smokeSteps.draft    ? "ok" : ""}>Draft published</li>
+                </ul>
+              )}
+              {smokeDone && (
+                <div className="settings-helper" style={{ marginTop: 8 }}>
+                  <div className="ck ok">
+                    Draft posted{smokeListingId ? ` (listing id ${smokeListingId})` : ""}. Review on Etsy, then resume.
+                  </div>
+                  <button
+                    type="button"
+                    className="modal-btn"
+                    onClick={resumeSmoke}
+                    style={{ marginTop: 8 }}
+                  >
+                    Resume loops
+                  </button>
+                </div>
+              )}
+              {smokeError && <div className="settings-inline-error">{smokeError}</div>}
+            </section>
+          )}
 
           <PrintifySection />
           </>}

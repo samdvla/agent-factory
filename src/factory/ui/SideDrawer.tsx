@@ -79,6 +79,8 @@ function stateGlyph(state: AgentEntry["state"]): string {
   }
 }
 
+const COLLAPSED_KEY = "agentFactory.agentPanel.collapsed.v1";
+
 export default function SideDrawer() {
   const drawerOpen = useFactoryStore((s) => s.drawerOpen);
   const selectedAgentId = useFactoryStore((s) => s.selectedAgent);
@@ -89,11 +91,20 @@ export default function SideDrawer() {
     selectedAgentId ? s.roles[selectedAgentId] : undefined
   );
   const [tab, setTab] = useState<Tab>("log");
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(COLLAPSED_KEY) === "true"; } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch {}
+      return next;
+    });
+  };
 
   const close = () => useFactoryStore.getState().selectAgent(null);
 
-  // Close on Esc — the drawer is non-blocking so the keyboard is the fast way
-  // out (clicking outside also closes via the passthrough scrim).
+  // Esc still closes the panel — fast keyboard exit.
   useEffect(() => {
     if (!drawerOpen) return;
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
@@ -106,72 +117,107 @@ export default function SideDrawer() {
   const summary = thinkingSummary(agent, role);
 
   return (
-    <>
-      {/* Invisible passthrough scrim — clicks outside the drawer close it,
-          but nothing dims or blurs the floor underneath. */}
-      <div className="drawer-scrim is-open" onClick={close} />
-      <aside
-        className="drawer is-open"
-        style={{ "--role-color": role?.hex ?? "var(--accent)" } as React.CSSProperties}
-        onClick={(e) => e.stopPropagation()}
+    <aside
+      className={`agent-panel${collapsed ? " is-collapsed" : ""}`}
+      style={{ "--role-color": role?.hex ?? "var(--accent)" } as React.CSSProperties}
+    >
+      <button
+        type="button"
+        className="agent-panel-head"
+        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Expand agent panel" : "Collapse agent panel"}
+        title={collapsed ? "Expand agent panel" : "Collapse agent panel"}
       >
-        <header className="drawer-head">
-          <div
-            className="drawer-portrait"
-            style={{ background: role?.hex ?? "var(--bg-3)" }}
+        <div
+          className="agent-panel-portrait"
+          style={{ background: role?.hex ?? "var(--bg-3)" }}
+        >
+          {role?.portrait ?? "?"}
+        </div>
+        <div className="agent-panel-titles">
+          <div className="agent-panel-role">{role?.title ?? selectedAgentId}</div>
+          <div className="agent-panel-name">{role?.name ?? selectedAgentId}</div>
+        </div>
+        <span
+          className="agent-panel-close"
+          role="button"
+          tabIndex={0}
+          aria-label="Close agent panel"
+          title="Close"
+          onClick={(e) => { e.stopPropagation(); close(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              close();
+            }
+          }}
+        >
+          <svg viewBox="0 0 16 16" width="9" height="9">
+            <path
+              d="M3 3L13 13M13 3L3 13"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+        </span>
+        <span className="agent-panel-chevron" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="10" height="10">
+            <polyline
+              points="4 6 8 10 12 6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+      </button>
+
+      {!collapsed && <>
+      <div className="agent-panel-meta">
+        <span className="state-pill" data-state={agent.state}>
+          <span className="state-dot" />
+          {agent.state}
+        </span>
+        <span className="model-badge">{agent.model}</span>
+        <span className="drawer-stat">
+          <strong>{agent.tokensToday.toLocaleString()}</strong> tok
+        </span>
+      </div>
+
+      <div className="agent-panel-now" data-state={agent.state}>
+        <span className="agent-panel-now-icon" aria-hidden>{stateGlyph(agent.state)}</span>
+        <div className="agent-panel-now-text">
+          <span className="agent-panel-now-label">Now</span>
+          <span className="agent-panel-now-headline">{summary.headline}</span>
+          {summary.sub && <span className="agent-panel-now-sub">{summary.sub}</span>}
+        </div>
+      </div>
+
+      <nav className="agent-panel-tabs">
+        {(["log", "queue", "chat", "controls"] as Tab[]).map((t) => (
+          <button
+            key={t}
+            className={`agent-panel-tab${tab === t ? " is-active" : ""}`}
+            onClick={() => setTab(t)}
           >
-            {role?.portrait ?? "?"}
-          </div>
-          <div className="drawer-head-info">
-            <div className="drawer-role">{role?.title ?? selectedAgentId}</div>
-            <div className="drawer-name">{role?.name ?? selectedAgentId}</div>
-            <div className="drawer-meta">
-              <span className="state-pill" data-state={agent.state}>
-                <span className="state-dot" />
-                {agent.state}
-              </span>
-              <span className="model-badge">{agent.model}</span>
-              <span className="drawer-stat">
-                <strong>{agent.tokensToday.toLocaleString()}</strong> tok today
-              </span>
-            </div>
-          </div>
-          <button className="drawer-close" onClick={close} aria-label="Close drawer">
-            ×
+            {t}
           </button>
-        </header>
+        ))}
+      </nav>
 
-        {/* Plain-language "what's happening right now" — replaces the need
-            to read log lines just to learn the agent is busy. */}
-        <div className="drawer-think" data-state={agent.state}>
-          <span className="drawer-think-icon" aria-hidden>{stateGlyph(agent.state)}</span>
-          <div className="drawer-think-text">
-            <span className="drawer-think-label">Now</span>
-            <span className="drawer-think-headline">{summary.headline}</span>
-            {summary.sub && <span className="drawer-think-sub">{summary.sub}</span>}
-          </div>
-        </div>
-
-        <nav className="drawer-tabs">
-          {(["log", "queue", "chat", "controls"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              className={`drawer-tab${tab === t ? " is-active" : ""}`}
-              onClick={() => setTab(t)}
-            >
-              {t}
-            </button>
-          ))}
-        </nav>
-
-        <div className="drawer-body">
-          {tab === "log" && <LiveLog agentId={selectedAgentId} />}
-          {tab === "queue" && <QueuePanel agentId={selectedAgentId} />}
-          {tab === "chat" && <ChatPanel agentId={selectedAgentId} />}
-          {tab === "controls" && <ControlsRow agentId={selectedAgentId} />}
-        </div>
-      </aside>
-    </>
+      <div className="agent-panel-body">
+        {tab === "log" && <LiveLog agentId={selectedAgentId} />}
+        {tab === "queue" && <QueuePanel agentId={selectedAgentId} />}
+        {tab === "chat" && <ChatPanel agentId={selectedAgentId} />}
+        {tab === "controls" && <ControlsRow agentId={selectedAgentId} />}
+      </div>
+      </>}
+    </aside>
   );
 }
-

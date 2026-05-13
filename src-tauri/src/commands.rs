@@ -1765,6 +1765,73 @@ pub async fn cmd_rate_job(
         }
         Some(other) => return Err(format!("invalid rating '{other}' — must be 'up' or 'down'")),
     }
+    if let Err(e) = snapshot_operator_feedback_to_disk(&state.pool, state.project_id).await {
+        tracing::warn!("operator feedback snapshot failed: {e}");
+    }
+    // Wake the Self-Improvement Lab so the operator's signal gets relayed into
+    // a worker prompt this cycle — don't wait for the next outcomes batch.
+    // Best-effort: a failure here doesn't invalidate the rating.
+    if let Err(e) = queue::enqueue(
+        &state.pool,
+        state.project_id,
+        "si",
+        serde_json::json!({"trigger": "operator_rating", "job_id": args.job_id}),
+    )
+    .await
+    {
+        tracing::warn!("enqueue si after rating failed: {e}");
+    }
+    Ok(())
+}
+
+/// Roll up the most recent operator ratings into a per-role JSON file the
+/// Python workers read at prompt-build time. Mirrors the rejections.json
+/// pattern: snapshot-on-write, no DB access from Python, role-filtered so
+/// each agent only sees feedback on its own outputs.
+///
+/// File: `~/.agent-factory/operator_feedback.json`
+/// Shape: `{ "by_role": { "<role>": [{ "rating": "up"|"down", "note": str|null, "ts": int }, ...], ... } }`
+pub async fn snapshot_operator_feedback_to_disk(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> anyhow::Result<()> {
+    // Pull the last N ratings across all roles, joined to the originating job
+    // so we know which agent's prompt should see this signal.
+    let rows: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT j.agent_role, f.rating, f.note, f.created_at \
+         FROM job_feedback f \
+         JOIN jobs j ON j.id = f.job_id \
+         WHERE f.rater = 'operator' AND j.project_id = ? \
+         ORDER BY f.created_at DESC LIMIT 80",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_role: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    for (role, rating, note, ts) in rows {
+        // Cap per-role entries so a long rating history can't blow out token
+        // budgets when the agent reads its slice.
+        let bucket = by_role.entry(role).or_default();
+        if bucket.len() >= 15 {
+            continue;
+        }
+        bucket.push(serde_json::json!({
+            "rating": rating,
+            "note": note,
+            "ts": ts,
+        }));
+    }
+    let blob = serde_json::json!({ "by_role": by_role });
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir = PathBuf::from(&home).join(".agent-factory");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("operator_feedback.json");
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&blob)?)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 

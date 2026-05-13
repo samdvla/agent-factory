@@ -8,6 +8,7 @@ import GateModal from "./factory/ui/GateModal";
 import OnboardingWizard from "./factory/ui/OnboardingWizard";
 import SettingsModal from "./factory/ui/SettingsModal";
 import CommandRail from "./factory/ui/CommandRail";
+import PipelinePanel from "./factory/ui/PipelinePanel";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { usePrintifyOperatorBoot } from "./hooks/usePrintifyOperator";
 import { useDemoFloor } from "./hooks/useDemoFloor";
@@ -46,6 +47,12 @@ export default function App() {
   // Open onboarding on cold start if no Anthropic credentials at all —
   // either a direct key OR a complete bridge pair (url + key).
   useEffect(() => {
+    // `?demo=1` bypasses the wizard for screenshots / preview embeds where
+    // the secret-store backend isn't reachable.
+    if (typeof window !== "undefined" && window.location.search.includes("demo=1")) {
+      setWizardOpen(false);
+      return;
+    }
     (async () => {
       const [direct, bridgeUrl, bridgeKey] = await Promise.all([
         api.getSecret("anthropic_api_key").catch(() => null),
@@ -68,10 +75,6 @@ export default function App() {
   return (
     <div className={`app${railCollapsed ? " rail-collapsed" : ""}${sandbox ? " has-sandbox" : ""}`}>
       <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
-      <TopBar
-        onAlertClick={() => setAlertTrayOpen((v) => !v)}
-        onSettingsClick={() => setSettingsOpen(true)}
-      />
       <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
         {sandbox && (
           <div className="sandbox-banner" role="status" aria-label="Sandbox mode">
@@ -81,9 +84,16 @@ export default function App() {
           </div>
         )}
         <SvgFactoryFloor />
+        <TopBar
+          onAlertClick={() => setAlertTrayOpen((v) => !v)}
+          onSettingsClick={() => setSettingsOpen(true)}
+        />
+        <div className="right-rail">
+          <PipelinePanel />
+          <SideDrawer />
+        </div>
       </div>
       <Ticker />
-      <SideDrawer />
       <AlertTray open={alertTrayOpen} onClose={() => setAlertTrayOpen(false)} />
       <GateModal />
       <OnboardingWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />

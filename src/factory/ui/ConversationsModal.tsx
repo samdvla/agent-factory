@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api, type AgentMessageRow, type AgentMessageImportance } from "../../api";
 import { ROLES } from "../state/fixtures";
@@ -39,6 +40,8 @@ function importanceClass(i: AgentMessageImportance): string {
 /**
  * Conversations modal: chronological log of agent-to-agent messages so the
  * boss can see how the team is reasoning together (not just task hand-offs).
+ * Portaled to document.body so the rail's backdrop-filter doesn't clip the
+ * fixed-position overlay to the rail's bounding box.
  */
 export default function ConversationsModal({ open, onClose }: Props) {
   const [messages, setMessages] = useState<AgentMessageRow[]>([]);
@@ -96,53 +99,35 @@ export default function ConversationsModal({ open, onClose }: Props) {
 
   const knownRoles = Object.keys(ROLES);
 
-  return (
+  return createPortal(
     <div
-      className="settings-back"
+      className="review-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Conversations — agent-to-agent message log"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      onClick={onClose}
     >
-      <div className="activity-modal">
-        <div className="settings-modal-head">
-          <div className="settings-modal-head-left">
-            <span
-              className="settings-modal-tag"
-              style={{
-                color: "#9be0b3",
-                borderColor: "rgba(155, 224, 179, 0.3)",
-                background: "rgba(155, 224, 179, 0.08)",
-              }}
-            >
-              Conversations
-            </span>
-            <span className="settings-modal-title">
+      <div
+        className="review-modal review-modal--list"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="review-modal-header">
+          <div>
+            <div className="review-modal-title">Conversations</div>
+            <div className="review-modal-sub">
               Agents talking — design briefs, prompt updates, heads-ups
-            </span>
+            </div>
           </div>
           <button
             type="button"
-            className="settings-close-btn"
+            className="review-modal-close"
             onClick={onClose}
             aria-label="Close conversations"
+            title="Close"
           >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.2"
-              aria-hidden="true"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            ×
           </button>
-        </div>
+        </header>
 
         <div className="conv-filter-row">
           <button
@@ -173,7 +158,7 @@ export default function ConversationsModal({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div className="activity-modal-body" ref={scrollRef}>
+        <div className="review-modal-pane review-modal-pane--list" ref={scrollRef}>
           {messages.length === 0 ? (
             <div className="conv-empty">
               {loading
@@ -231,6 +216,7 @@ export default function ConversationsModal({ open, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

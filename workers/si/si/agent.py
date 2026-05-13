@@ -93,7 +93,7 @@ def _messages_for_json_call(user_content: str) -> list[dict]:
 
 MIN_OUTCOMES = 5
 TAIL_LIMIT = 30
-VALID_ROLES = ("research", "designer", "listing")
+VALID_ROLES = ("research", "designer", "listing", "cs")
 SYSTEM_MIN_LEN = 80
 SYSTEM_MAX_LEN = 2000
 
@@ -340,17 +340,94 @@ def _snapshot_history(
     prompts["_history"] = history
 
 
-def build_si_prompt(outcomes_summary: str, current_prompts: dict) -> tuple[str, str]:
+def _load_operator_feedback_by_role(limit_per_role: int = 12) -> dict[str, list[dict]]:
+    """Read the role-bucketed operator ratings + notes Rust snapshots on every
+    Activity rating. SI is the single agent that consumes this — its job is
+    to distill operator criticism into a small prompt edit and relay it to
+    whichever role most needs the change. Other workers stay clean."""
+    path = os.path.expanduser("~/.agent-factory/operator_feedback.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        by_role = data.get("by_role")
+        if not isinstance(by_role, dict):
+            return {}
+        out: dict[str, list[dict]] = {}
+        for role, arr in by_role.items():
+            if role not in VALID_ROLES or not isinstance(arr, list):
+                continue
+            cleaned: list[dict] = []
+            for item in arr[:limit_per_role]:
+                if not isinstance(item, dict):
+                    continue
+                rating = item.get("rating")
+                if rating not in ("up", "down"):
+                    continue
+                note = item.get("note")
+                cleaned.append({
+                    "rating": rating,
+                    "note": note if isinstance(note, str) and note.strip() else None,
+                })
+            if cleaned:
+                out[role] = cleaned
+        return out
+    except Exception:
+        return {}
+
+
+def summarize_operator_feedback(by_role: dict[str, list[dict]]) -> str:
+    """Render operator feedback per role for the SI synthesis prompt."""
+    if not by_role:
+        return "(no operator ratings yet)"
+    lines: list[str] = []
+    for role in VALID_ROLES:
+        entries = by_role.get(role) or []
+        if not entries:
+            continue
+        lines.append(f"{role}:")
+        for e in entries:
+            rating = e["rating"].upper()
+            note = e.get("note")
+            if note:
+                lines.append(f"  · [{rating}] \"{note[:160]}\"")
+            else:
+                lines.append(f"  · [{rating}] (no note)")
+    return "\n".join(lines) if lines else "(no operator ratings yet)"
+
+
+def has_operator_feedback(by_role: dict[str, list[dict]]) -> bool:
+    return any(entries for entries in by_role.values())
+
+
+def build_si_prompt(
+    outcomes_summary: str,
+    current_prompts: dict,
+    feedback_by_role: dict[str, list[dict]] | None = None,
+) -> tuple[str, str]:
+    feedback_by_role = feedback_by_role or {}
     system = (
-        "You optimize prompts for an autonomous Etsy shop. "
-        "Given recent outcomes by niche and the current system prompts for the research, "
-        "designer, and listing roles, propose ONE small targeted edit to ONE role's "
-        "system_override to push future listings toward higher-revenue patterns. "
-        "Keep edits minimal and specific — the goal is gradual improvement, not rewrites. "
+        "You are the Self-Improvement Lab — the central learning loop for an "
+        "autonomous Etsy shop. Two signals reach you each cycle:\n"
+        " 1. Sales/views outcomes by niche (slow, downstream).\n"
+        " 2. Operator ratings + notes on specific agent outputs from the "
+        "Activity tab (fast, direct human signal).\n\n"
+        "Your job: distill those signals into ONE small, targeted edit to ONE "
+        "role's system_override that relays the lesson to that worker. The "
+        "edit must capture the operator's criticism (or praise) in language "
+        "the worker will actually use next time. Keep edits minimal — "
+        "gradual improvement, not rewrites.\n\n"
+        "PRIORITIZATION:\n"
+        " · Operator feedback outranks outcomes — a human looking at the "
+        "output is the highest-fidelity signal. If the operator down-rated "
+        "a role's output with a note, FIX that exact issue in that role's "
+        "prompt this cycle.\n"
+        " · UP ratings tell you what to lock in. If a pattern just got "
+        "praised, bake the language into the prompt so the worker repeats it.\n"
+        " · Use outcomes to break ties when feedback is silent or split.\n\n"
         "Output JSON only, no prose, no markdown:\n"
-        '{"role": "research|designer|listing|null", '
+        '{"role": "research|designer|listing|cs|null", '
         '"new_system": "<full replacement string for that role\'s system prompt>", '
-        '"reasoning": "<one short sentence>"}\n'
+        '"reasoning": "<one short sentence — cite the operator note if you used it>"}\n'
         'Use role=null (and new_system="") if no change is warranted.'
     )
     prompts_view: dict = {}
@@ -358,18 +435,28 @@ def build_si_prompt(outcomes_summary: str, current_prompts: dict) -> tuple[str, 
         ov = current_prompts.get(r, {}) if isinstance(current_prompts.get(r), dict) else {}
         prompts_view[r] = ov.get("system_override") if isinstance(ov, dict) else None
     user = (
-        f"Recent outcomes:\n{outcomes_summary}\n\n"
+        "Recent operator ratings (HIGHEST PRIORITY — humans rating specific "
+        "outputs in the Activity tab):\n"
+        f"{summarize_operator_feedback(feedback_by_role)}\n\n"
+        f"Recent outcomes (downstream sales signal):\n{outcomes_summary}\n\n"
         f"Current system_overrides (null means using each worker's hardcoded default):\n"
         f"{json.dumps(prompts_view, indent=2)}\n\n"
-        "If recent revenue suggests the prior tweak hurt performance, prefer a small "
-        "targeted edit rather than a sweeping change.\n"
-        "Propose at most ONE edit. Return JSON only."
+        "If operator feedback is present, the edit MUST address the most "
+        "recent DOWN note (or amplify the most recent UP pattern). Propose "
+        "at most ONE edit. Return JSON only."
     )
     return system, user
 
 
-def call_anthropic(api_key: str, outcomes_summary: str, current_prompts: dict) -> tuple[dict, int, int]:
-    system_prompt, user_prompt = build_si_prompt(outcomes_summary, current_prompts)
+def call_anthropic(
+    api_key: str,
+    outcomes_summary: str,
+    current_prompts: dict,
+    feedback_by_role: dict[str, list[dict]] | None = None,
+) -> tuple[dict, int, int]:
+    system_prompt, user_prompt = build_si_prompt(
+        outcomes_summary, current_prompts, feedback_by_role
+    )
 
     body = json.dumps({
         "model": MODEL,
@@ -541,9 +628,14 @@ def handle(method: str, params: dict) -> dict:
 
 def process_job(job_id: int, payload: dict) -> dict:
     outcomes = read_outcomes()
-    if len(outcomes) < MIN_OUTCOMES:
+    feedback_by_role = _load_operator_feedback_by_role()
+    has_feedback = has_operator_feedback(feedback_by_role)
+    # Skip the outcomes-only gate when there's operator feedback: humans
+    # rating outputs is a strong enough signal to relay immediately, no
+    # need to wait for downstream sales.
+    if len(outcomes) < MIN_OUTCOMES and not has_feedback:
         print(
-            f"[si] job_id={job_id} only {len(outcomes)} outcomes — waiting (need ≥{MIN_OUTCOMES})",
+            f"[si] job_id={job_id} only {len(outcomes)} outcomes and no operator feedback — waiting (need ≥{MIN_OUTCOMES} or any rating)",
             file=sys.stderr,
             flush=True,
         )
@@ -624,7 +716,9 @@ def process_job(job_id: int, payload: dict) -> dict:
             file=sys.stderr,
             flush=True,
         )
-        proposal, tokens_in, tokens_out = call_anthropic(api_key, summary, current)
+        proposal, tokens_in, tokens_out = call_anthropic(
+            api_key, summary, current, feedback_by_role
+        )
         role, new_system = _validate_proposal(proposal)
         if role is None:
             print(
@@ -653,6 +747,12 @@ def process_job(job_id: int, payload: dict) -> dict:
             r = proposal.get("reasoning")
             if isinstance(r, str):
                 rationale = r
+        # Tag the history entry so the team can see this tweak was operator-driven.
+        # `_history` is what surfaces in the Prompts panel — operators can audit
+        # exactly which note caused which prompt change.
+        role_feedback = feedback_by_role.get(role) or []
+        if role_feedback:
+            rationale = (rationale + " [relayed from operator feedback]").strip()
         # Persist override.
         current[role] = {"system_override": new_system}
         _snapshot_history(current, role_tweaked=role, prior_overrides=prior_for_role, rationale=rationale)

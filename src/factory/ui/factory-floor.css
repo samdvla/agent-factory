@@ -70,6 +70,40 @@
   --status-bad-edge:  rgba(239, 79, 90, 0.35);
 }
 
+/* ============================================================
+   Glass surface tokens — used by topbar, rail, ticker, modals,
+   drawers, tray, side panels, pipeline panel, etc. Each theme
+   may override these to keep the glass look readable on its
+   own palette. Default (claude + most dark themes) reads well
+   with white-tinted highlights and a soft dark inset shadow;
+   linen overrides further down for light-theme contrast.
+   ============================================================ */
+:root {
+  --glass-fill:          color-mix(in srgb, var(--bg-1) 70%, transparent);
+  --glass-fill-strong:   color-mix(in srgb, var(--bg-1) 85%, transparent);
+  --glass-fill-soft:     color-mix(in srgb, var(--bg-2) 55%, transparent);
+  --glass-border:        color-mix(in srgb, var(--ink-0) 9%, transparent);
+  --glass-border-strong: color-mix(in srgb, var(--ink-0) 14%, transparent);
+  --glass-highlight:     rgba(255, 255, 255, 0.06);
+  --glass-highlight-top: rgba(255, 255, 255, 0.05);
+  --glass-shadow-inset:  rgba(0, 0, 0, 0.30);
+  --glass-frame-shadow:
+    0 18px 38px -16px rgba(0, 0, 0, 0.70),
+    0 2px 0 0 rgba(255, 255, 255, 0.045) inset,
+    0 -1px 0 0 rgba(0, 0, 0, 0.35) inset;
+  --glass-frame-shadow-sm:
+    0 8px 18px -10px rgba(0, 0, 0, 0.55),
+    0 1px 0 0 rgba(255, 255, 255, 0.05) inset;
+  --glass-blur: blur(18px) saturate(140%);
+  --glass-blur-sm: blur(10px) saturate(125%);
+  --glass-gradient: linear-gradient(
+    180deg,
+    var(--glass-highlight-top) 0%,
+    rgba(255, 255, 255, 0.015) 38%,
+    rgba(0, 0, 0, 0.16) 100%
+  );
+}
+
 [data-theme="espresso"] {
   /* ESPRESSO — deep coffee + caramel */
   --bg-0: #12100c;
@@ -332,6 +366,33 @@
   --status-bad:       #993830;
   --status-bad-soft:  rgba(153, 56, 48, 0.13);
   --status-bad-edge:  rgba(153, 56, 48, 0.45);
+
+  /* Linen is a light theme — its glass needs a brighter top sheen, a softer
+     warm shadow, and a slightly less aggressive blur so the cream surfaces
+     don't grey out behind the panel. */
+  --glass-fill:          color-mix(in srgb, var(--bg-1) 80%, transparent);
+  --glass-fill-strong:   color-mix(in srgb, var(--bg-1) 92%, transparent);
+  --glass-fill-soft:     color-mix(in srgb, var(--bg-2) 60%, transparent);
+  --glass-border:        color-mix(in srgb, var(--ink-0) 18%, transparent);
+  --glass-border-strong: color-mix(in srgb, var(--ink-0) 28%, transparent);
+  --glass-highlight:     rgba(255, 255, 255, 0.45);
+  --glass-highlight-top: rgba(255, 255, 255, 0.55);
+  --glass-shadow-inset:  rgba(120, 88, 48, 0.18);
+  --glass-frame-shadow:
+    0 14px 28px -14px rgba(90, 65, 30, 0.38),
+    0 2px 0 0 rgba(255, 255, 255, 0.55) inset,
+    0 -1px 0 0 rgba(140, 105, 60, 0.22) inset;
+  --glass-frame-shadow-sm:
+    0 6px 14px -8px rgba(90, 65, 30, 0.28),
+    0 1px 0 0 rgba(255, 255, 255, 0.6) inset;
+  --glass-blur: blur(14px) saturate(115%);
+  --glass-blur-sm: blur(8px) saturate(110%);
+  --glass-gradient: linear-gradient(
+    180deg,
+    var(--glass-highlight-top) 0%,
+    rgba(255, 255, 255, 0.18) 38%,
+    rgba(90, 65, 30, 0.08) 100%
+  );
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -357,9 +418,8 @@ input, textarea { font: inherit; color: inherit; }
 .app {
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
-  grid-template-rows: var(--topbar-h) 1fr var(--ticker-h);
+  grid-template-rows: 1fr var(--ticker-h);
   grid-template-areas:
-    "rail topbar"
     "rail floor"
     "rail ticker";
   height: 100vh;
@@ -367,7 +427,6 @@ input, textarea { font: inherit; color: inherit; }
   transition: grid-template-columns 0.2s ease;
 }
 
-.app > .topbar    { grid-area: topbar; }
 .app > .rail      { grid-area: rail; }
 .app > .ticker    { grid-area: ticker; }
 .app > .floor-wrap { grid-area: floor; }
@@ -388,55 +447,121 @@ input, textarea { font: inherit; color: inherit; }
   grid-template-columns: var(--rail-w-collapsed) 1fr;
 }
 
-/* ============== Top bar ============== */
+/* ============== Floating chrome (replaces the old top bar) ============== */
 
-.topbar {
+/* Anchored flex rows of floating tiles — each child carries its own glass
+   surface so the row itself stays transparent. Flex auto-spaces the items
+   so adding/removing any tile never causes overlap. */
+.float-row {
+  position: absolute;
+  top: 12px;
+  z-index: 19;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--line);
-  z-index: 20;
-  position: relative;
-  /* Without min-width: 0 the grid cell refuses to shrink below content,
-     pushing the right-edge controls (LIVE / ALL STOP) off-screen when the
-     rail is open at narrow widths. overflow: hidden is a safety net. */
-  min-width: 0;
-  overflow: hidden;
+  gap: 10px;
+  pointer-events: none;
+}
+.float-row > * { pointer-events: auto; }
+.float-row-left { left: 12px; }
+.float-row-right { right: 12px; }
+.float-row-center {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.float-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+.float-brand .brand-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+.float-brand .brand-mark::after {
+  inset: 6px;
+}
+.float-brand-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--ink-0);
+}
+
+/* Push floating chrome below the sandbox banner when it's showing */
+.app.has-sandbox .float-row {
+  top: 42px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   padding-right: 14px;
   margin-right: 4px;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--glass-border);
   height: 100%;
 }
 .brand-mark {
-  width: 22px; height: 22px;
-  border: 1px solid var(--accent);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   position: relative;
   background:
-    linear-gradient(45deg, transparent 47%, var(--accent) 47%, var(--accent) 53%, transparent 53%),
-    linear-gradient(-45deg, transparent 47%, var(--accent) 47%, var(--accent) 53%, transparent 53%);
+    radial-gradient(circle at 30% 28%, color-mix(in srgb, var(--accent) 65%, transparent), transparent 62%),
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 80%, transparent), color-mix(in srgb, var(--accent-warm) 60%, transparent));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) inset,
+    0 4px 10px -4px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.brand-name { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
-.brand-sub  { font-size: 10px; color: var(--ink-2); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
+.brand-mark::after {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border-radius: 2px;
+  background: var(--bg-0);
+  opacity: 0.85;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-0);
+}
+.brand-sub {
+  font-size: 9px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
 
 .project-select {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px 6px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: var(--bg-2);
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
   cursor: pointer;
   min-width: 0;
   flex-shrink: 1;
+  transition: background 0.15s, border-color 0.15s;
 }
-.project-select:hover { background: var(--bg-3); border-color: var(--line-2); }
+.project-select:hover { background: var(--glass-fill); border-color: var(--glass-border-strong); }
 .project-select .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ok); box-shadow: 0 0 8px var(--accent-ok); }
 .project-select .name { font-weight: 500; flex: 1; }
 .project-select .sub  { font-size: 11px; color: var(--ink-2); font-family: var(--font-mono); }
@@ -493,12 +618,13 @@ input, textarea { font: inherit; color: inherit; }
 
 .topbar-pill {
   display: flex; align-items: center; gap: 8px;
-  padding: 0 12px;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-2);
-  font-family: var(--font-mono);
+  padding: 0 14px;
+  height: 30px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  color: var(--ink-1);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -509,24 +635,42 @@ input, textarea { font: inherit; color: inherit; }
   letter-spacing: 0.06em;
 }
 .topbar-pill-value {
-  color: var(--ink-0);
+  color: var(--ink-1);
   font-weight: 500;
 }
 .topbar-net.is-gain .topbar-pill-value { color: #6bd968; }
 .topbar-net.is-loss .topbar-pill-value { color: #ff6b6b; }
 
-.alert-pill, .gate-pill, .topbar-icon {
-  height: 32px;
-  padding: 0 12px;
+.alert-pill, .gate-pill {
+  height: 30px;
+  padding: 0 14px;
   display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-2);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.alert-pill:hover, .gate-pill:hover, .topbar-icon:hover { background: var(--bg-3); }
+.topbar-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  color: var(--ink-1);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.alert-pill:hover, .gate-pill:hover, .topbar-icon:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+  color: var(--ink-0);
+}
 
 .etsy-pill {
   display: flex; align-items: center; gap: 8px;
@@ -889,39 +1033,55 @@ button.etsy-pill {
   font-size: 11px;
 }
 
-.guardian {
-  width: 32px; height: 32px;
-  border: 1px solid var(--line);
-  background: var(--bg-2);
-  border-radius: var(--radius);
-  display: grid; place-items: center;
-  position: relative;
-  cursor: help;
-}
-.guardian svg { width: 16px; height: 16px; }
-.guardian::after {
-  content: ''; position: absolute; right: -2px; top: -2px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent-ok); box-shadow: 0 0 6px var(--accent-ok);
-  border: 2px solid var(--bg-1);
-}
-
 .all-stop {
   height: 32px;
-  padding: 0 14px;
-  border: 1px solid rgba(239,79,90,0.5);
-  border-radius: var(--radius);
-  background: rgba(239,79,90,0.1);
-  color: var(--status-bad);
+  padding: 0 16px;
+  border-radius: 999px;
   font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   display: flex; align-items: center; gap: 8px;
-  transition: all 0.15s;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
 }
-.all-stop:hover { background: rgba(239,79,90,0.2); color: #ffb0b6; }
-.all-stop .stop-glyph { width: 10px; height: 10px; background: var(--accent-bad); border-radius: 1px; }
+.all-stop .stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* Idle state — primary "Start" call to action */
+.all-stop.is-start {
+  border: 1px solid color-mix(in srgb, var(--accent-ok) 45%, var(--glass-border));
+  background: var(--glass-fill-soft);
+  color: var(--accent-ok);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+}
+.all-stop.is-start .stop-glyph {
+  background: var(--accent-ok);
+  border-radius: 50%;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-ok) 70%, transparent);
+}
+.all-stop.is-start:hover {
+  background: var(--glass-fill);
+  border-color: color-mix(in srgb, var(--accent-ok) 65%, var(--glass-border));
+}
+
+/* Running — red "All Stop" kill switch */
+.all-stop.is-stop {
+  border: 1px solid color-mix(in srgb, var(--accent-bad) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent-bad) 12%, var(--glass-fill-soft));
+  color: var(--status-bad);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+}
+.all-stop.is-stop .stop-glyph {
+  background: var(--accent-bad);
+}
+.all-stop.is-stop:hover {
+  background: color-mix(in srgb, var(--accent-bad) 22%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent-bad) 70%, var(--glass-border));
+}
 
 /* ============== Floor (the iso scene) ============== */
 
@@ -1018,8 +1178,13 @@ button.etsy-pill {
 
 .ticker {
   display: flex; align-items: center;
-  background: var(--bg-1);
-  border-top: 1px solid var(--line);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border-top: 1px solid var(--glass-border);
+  box-shadow:
+    0 -1px 0 0 rgba(255, 255, 255, 0.03) inset,
+    0 8px 18px -8px rgba(0, 0, 0, 0.3);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   font-family: var(--font-mono);
   font-size: 11px;
   overflow: hidden;
@@ -1030,8 +1195,8 @@ button.etsy-pill {
   height: 100%;
   display: flex; align-items: center;
   padding: 0 14px;
-  background: var(--bg-2);
-  border-right: 1px solid var(--line);
+  background: var(--glass-fill-soft);
+  border-right: 1px solid var(--glass-border);
   color: var(--ink-2);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1104,13 +1269,12 @@ button.etsy-pill {
   bottom: calc(var(--ticker-h) + 12px);
   width: 400px;
   max-width: calc(100vw - var(--rail-w) - 28px);
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
   border-radius: 14px;
-  box-shadow:
-    0 18px 50px -16px rgba(0,0,0,0.55),
-    0 6px 14px -6px rgba(0,0,0,0.4),
-    0 0 0 1px rgba(0,0,0,0.15);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   transform: translateX(calc(100% + 24px));
   opacity: 0;
   transition:
@@ -1651,13 +1815,15 @@ button.etsy-pill {
 
 .alert-tray {
   position: absolute;
-  top: calc(var(--topbar-h) + 4px);
+  top: 56px;
   right: 16px;
   width: 360px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   z-index: 25;
   opacity: 0;
   pointer-events: none;
@@ -1795,8 +1961,9 @@ button.etsy-pill {
 
 .modal-scrim {
   position: fixed; inset: 0;
-  background: rgba(7,9,12,0.6);
-  backdrop-filter: blur(2px);
+  background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
   display: grid; place-items: center;
   z-index: 60;
   opacity: 0;
@@ -1805,14 +1972,16 @@ button.etsy-pill {
 }
 .modal-scrim.is-open { opacity: 1; pointer-events: auto; }
 .modal {
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
   width: 520px;
   max-width: 92vw;
   max-height: 86vh;
   display: flex; flex-direction: column;
-  box-shadow: var(--shadow);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   transform: scale(0.96);
   transition: transform 0.22s;
 }
@@ -1865,13 +2034,17 @@ button.etsy-pill {
 }
 .modal-btn {
   padding: 8px 18px;
-  border: 1px solid var(--line-2);
-  background: var(--bg-2);
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
   border-radius: var(--radius);
   font-size: 12px; font-weight: 500;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.modal-btn:hover { background: var(--bg-3); }
+.modal-btn:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
 .modal-btn.reject { color: var(--status-bad); border-color: rgba(239,79,90,0.3); }
 .modal-btn.reject:hover { background: rgba(239,79,90,0.1); }
 .modal-btn.approve { color: #1a1207; background: var(--accent-warm); border-color: var(--accent-warm); }
@@ -1907,31 +2080,33 @@ button.etsy-pill {
 /* Zoom controls — floating bottom-right of the stage */
 .zoom-controls {
   position: absolute;
-  right: 14px;
+  left: 14px;
   bottom: 14px;
   z-index: 6;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: var(--shadow);
+  background: var(--glass-gradient), var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: var(--glass-frame-shadow-sm);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   user-select: none;
 }
 .zoom-btn,
 .zoom-readout {
   appearance: none;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
   color: var(--ink-1);
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
-  width: 36px;
-  height: 30px;
-  border-radius: 4px;
+  width: 34px;
+  height: 28px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -1939,7 +2114,7 @@ button.etsy-pill {
 }
 .zoom-btn:hover,
 .zoom-readout:hover {
-  background: var(--bg-3);
+  background: var(--glass-fill);
   border-color: var(--accent);
   color: var(--ink-0);
 }
@@ -3242,98 +3417,173 @@ button.etsy-pill {
 .review-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(7, 9, 12, 0.78);
-  backdrop-filter: blur(2px);
+  background: color-mix(in srgb, var(--bg-0) 60%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(120%);
+  backdrop-filter: blur(8px) saturate(120%);
   z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 32px;
+  animation: review-overlay-in 0.18s ease;
+}
+@keyframes review-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .review-modal {
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  width: min(820px, 100%);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  width: min(880px, 100%);
   max-height: 92vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  animation: review-modal-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+/* Size variants reuse the Review modal frame, just wider for content that
+   needs more breathing room (Activity cards) or a focused list (Conversations). */
+.review-modal--list { width: min(760px, 100%); }
+.review-modal--wide { width: min(1140px, 100%); }
+
+/* Generic body pane for modals whose body isn't the two-column review grid.
+   Pane stays clipped — inner content (.af-list, .conv-list) owns scroll, the
+   same arrangement the original .activity-modal-body relied on. */
+.review-modal-pane {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px 18px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.review-modal-pane--list {
+  padding: 8px 20px 18px;
+}
+.review-modal-pane--list .conv-list {
+  padding-right: 4px;
+}
+@keyframes review-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 .review-modal-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--glass-border);
 }
 .review-modal-title {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--ink-0);
   font-weight: 600;
+  letter-spacing: -0.005em;
 }
 .review-modal-sub {
   font-size: 11px;
   color: var(--ink-2);
-  margin-top: 2px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
 }
 .review-modal-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
   background: transparent;
-  color: var(--ink-1);
-  border: none;
-  font-size: 22px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  font-size: 18px;
   line-height: 1;
-  padding: 0 4px;
   cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .review-modal-close:hover {
   color: var(--ink-0);
+  background: var(--glass-fill-soft);
+  border-color: var(--glass-border);
 }
 .review-modal-body {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
-  padding: 16px;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  padding: 20px;
   overflow-y: auto;
 }
 .review-modal-left,
 .review-modal-right {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 .review-modal-asset {
-  width: 320px;
-  height: 320px;
+  width: 340px;
+  height: 340px;
   max-width: 100%;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
   object-fit: contain;
 }
 .review-modal-asset-empty {
-  width: 320px;
-  height: 320px;
-  background: var(--bg-2);
-  border: 1px dashed var(--line-2);
-  border-radius: 4px;
+  width: 340px;
+  height: 340px;
+  background: var(--glass-fill-soft);
+  border: 1px dashed var(--glass-border-strong);
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--ink-3);
   font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .review-modal-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
   font-size: 11px;
 }
 .review-meta-row {
   display: flex;
   justify-content: space-between;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--line);
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.review-meta-row:last-of-type { border-bottom: 0; }
+.review-meta-row .review-meta-value {
+  text-align: right;
+  min-width: 0;
+  word-break: break-word;
+}
+/* Freeform-text rows (niche) stack the value below the label so long phrases
+   don't get squashed against the right edge. */
+.review-meta-row.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 7px 0 8px;
+}
+.review-meta-row.is-stacked .review-meta-value {
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-0);
+  line-height: 1.4;
 }
 .review-meta-label {
   color: var(--ink-2);
@@ -3375,80 +3625,109 @@ button.etsy-pill {
   font-size: 13px;
   color: var(--ink-0);
   font-weight: 500;
-  padding: 6px 8px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 3px;
+  padding: 8px 10px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
 }
 .review-field-desc {
   width: 100%;
   height: 180px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 8px 10px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 12px;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-1);
   resize: vertical;
   line-height: 1.5;
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+}
+.review-field-desc:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 .review-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 .review-tag {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 3px 9px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 3px 10px;
   font-size: 10px;
   color: var(--ink-1);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
 }
 .review-tag-empty {
   font-size: 11px;
   color: var(--ink-3);
+  font-style: italic;
 }
 .review-modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
+  padding: 14px 20px;
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-fill-soft);
 }
 .review-btn {
-  background: var(--bg-2);
+  background: var(--glass-fill-soft);
   color: var(--ink-0);
-  border: 1px solid var(--line-2);
-  border-radius: 3px;
-  padding: 6px 14px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 8px;
+  padding: 8px 18px;
   font-family: var(--font-mono);
   font-size: 11px;
+  letter-spacing: 0.04em;
   cursor: pointer;
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .review-btn:hover:not(:disabled) {
-  background: var(--bg-3);
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
 }
 .review-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .review-btn.is-activate {
-  background: var(--accent-ok);
-  color: var(--bg-0);
-  border-color: var(--accent-ok);
+  background: color-mix(in srgb, var(--accent-ok) 18%, var(--glass-fill-soft));
+  color: var(--accent-ok);
+  border-color: color-mix(in srgb, var(--accent-ok) 55%, var(--glass-border));
   font-weight: 600;
 }
 .review-btn.is-activate:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--accent-ok) 28%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent-ok) 75%, var(--glass-border));
 }
 .review-btn.is-regen {
   color: var(--accent-warm);
-  border-color: rgba(245, 166, 35, 0.4);
+  border-color: color-mix(in srgb, var(--accent-warm) 35%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent-warm) 8%, var(--glass-fill-soft));
+}
+.review-btn.is-regen:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-warm) 16%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent-warm) 60%, var(--glass-border));
 }
 .review-btn.is-skip {
   color: var(--ink-1);
+}
+.review-btn.is-reject {
+  color: var(--status-bad);
+  border-color: color-mix(in srgb, var(--accent-bad) 38%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent-bad) 8%, var(--glass-fill-soft));
+}
+.review-btn.is-reject:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-bad) 18%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent-bad) 62%, var(--glass-border));
 }
 
 /* ── BudgetPill ──────────────────────────────────────────────────────────── */
@@ -3475,17 +3754,8 @@ button.etsy-pill {
 .smoke-steps li.ok { opacity: 1; color: var(--status-ok); }
 
 /* ── Combined Revenue/Net pill (TopBar) ─────────────────────────────────── */
-.topbar-rev-net {
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 14px;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-2);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  white-space: nowrap;
-}
+/* Visual styling lives on .topbar-pill — this selector only overrides
+   gain/loss coloring on the Net value below. */
 .topbar-rev-sep {
   color: var(--ink-3);
   font-size: 11px;
@@ -3503,8 +3773,13 @@ button.etsy-pill {
   grid-area: rail;
   display: flex;
   flex-direction: column;
-  background: var(--bg-1);
-  border-right: 1px solid var(--line);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border-right: 1px solid var(--glass-border);
+  box-shadow:
+    1px 0 0 0 rgba(255, 255, 255, 0.03) inset,
+    8px 0 18px -8px rgba(0, 0, 0, 0.3);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   overflow-y: auto;
   overflow-x: hidden;
   width: var(--rail-w);
@@ -3521,9 +3796,9 @@ button.etsy-pill {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  height: var(--topbar-h);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
+  height: 48px;
+  background: var(--glass-fill-soft);
+  border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
 }
 .rail-header-label {
@@ -3548,14 +3823,18 @@ button.etsy-pill {
 .rail-card {
   margin: 14px 10px 0;
   padding: 10px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
+  box-shadow:
+    0 1px 0 0 var(--glass-highlight-top) inset,
+    0 4px 10px -8px var(--glass-shadow-inset);
   flex-shrink: 0;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
 .rail-card:hover {
-  border-color: #3a3d44;
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
 }
 .rail-card-header {
   font-size: 10px;
@@ -3686,6 +3965,397 @@ button.etsy-pill {
   width: 100%;
   font-size: 12px;
   padding: 4px 0;
+}
+
+/* ====================================================================
+   New rail Etsy panel (post-rework). Lives inside .rail-etsy-card.
+   ==================================================================== */
+
+.etsy-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.etsy-rail-killed-banner {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-bad) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-bad) 45%, transparent);
+  color: var(--status-bad);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.etsy-rail-disconnected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.etsy-rail-disconnected-msg {
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.etsy-rail-error {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--status-bad);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-bad) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-bad) 10%, transparent);
+}
+.etsy-rail-connect-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--glass-fill-soft));
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.etsy-rail-connect-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--glass-border));
+}
+.etsy-rail-connect-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.etsy-rail-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.etsy-rail-status:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
+.etsy-rail-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-ok);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent-ok) 70%, transparent);
+  flex-shrink: 0;
+}
+.etsy-rail-status-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+.etsy-rail-status-label {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.etsy-rail-status-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.etsy-rail-status-icon {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.etsy-rail-status:hover .etsy-rail-status-icon {
+  color: var(--ink-1);
+}
+
+.etsy-rail-tabs {
+  display: grid;
+  /* minmax(0, 1fr) lets columns shrink below their natural content width so
+     long labels like REJECTED can ellipsis instead of overflowing the
+     strip. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+}
+.etsy-rail-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 2px;
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.etsy-rail-tab:hover {
+  color: var(--ink-0);
+  background: var(--glass-fill);
+}
+.etsy-rail-tab.is-active {
+  background: var(--glass-fill);
+  color: var(--ink-0);
+  box-shadow:
+    0 1px 0 0 var(--glass-highlight-top) inset,
+    0 0 0 1px var(--glass-border);
+}
+.etsy-rail-tab-label {
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.etsy-rail-tab-count {
+  flex-shrink: 0;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, var(--glass-fill));
+  color: var(--accent);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.etsy-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  /* Hide the scrollbar — scroll still works via wheel/trackpad. The bottom
+     edge fade hints at more content when there's overflow. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+.etsy-rail-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+.etsy-rail-empty {
+  padding: 14px 8px;
+  text-align: center;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+
+.etsy-rail-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  background: var(--glass-fill-soft);
+  transition: background 0.15s, border-color 0.15s;
+}
+.etsy-rail-row:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
+
+.etsy-rail-state {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+.etsy-rail-state.state-draft {
+  color: var(--accent-warm);
+  border-color: color-mix(in srgb, var(--accent-warm) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-warm) 12%, transparent);
+}
+.etsy-rail-state.state-queued {
+  color: var(--ink-1);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.etsy-rail-state.state-active {
+  color: var(--accent-ok);
+  border-color: color-mix(in srgb, var(--accent-ok) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-ok) 12%, transparent);
+}
+.etsy-rail-state.state-rejected {
+  color: var(--status-bad);
+  border-color: color-mix(in srgb, var(--accent-bad) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-bad) 10%, transparent);
+}
+.etsy-rail-state.state-inactive,
+.etsy-rail-state.state-expired {
+  color: var(--ink-3);
+  border-color: var(--glass-border);
+  background: var(--glass-fill);
+}
+
+.etsy-rail-row-title {
+  font-size: 11px;
+  color: var(--ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.etsy-rail-row-link {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.etsy-rail-row-link:hover {
+  color: var(--ink-0);
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
+
+.etsy-rail-row-review {
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent-ok) 45%, var(--glass-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-ok) 12%, var(--glass-fill-soft));
+  color: var(--accent-ok);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.etsy-rail-row-review:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-ok) 22%, var(--glass-fill-soft));
+  border-color: color-mix(in srgb, var(--accent-ok) 70%, var(--glass-border));
+}
+.etsy-rail-row-review:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.etsy-rail-accordion {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  background: var(--glass-fill-soft);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.etsy-rail-accordion:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
+.etsy-rail-accordion-label {
+  flex: 1;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  text-align: left;
+}
+.etsy-rail-accordion.is-open .etsy-rail-accordion-label {
+  color: var(--ink-0);
+}
+.etsy-rail-accordion-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--glass-fill);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: center;
+}
+.etsy-rail-accordion-count.is-live {
+  background: color-mix(in srgb, var(--accent) 20%, var(--glass-fill));
+  color: var(--accent);
+}
+.etsy-rail-accordion-caret {
+  color: var(--ink-3);
+  transition: transform 0.22s ease;
+}
+.etsy-rail-accordion.is-open .etsy-rail-accordion-caret {
+  transform: rotate(90deg);
+  color: var(--ink-1);
+}
+
+.etsy-rail-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 4px 0;
+}
+.etsy-rail-mini-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--glass-fill-soft);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--ink-1);
+}
+.etsy-rail-mini-id { color: var(--ink-2); }
+.etsy-rail-mini-meta { color: var(--ink-2); font-size: 10px; }
+.etsy-rail-mini-rev { color: var(--accent-ok); font-weight: 600; }
+.etsy-rail-mini-snippet {
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Panel rows (Cycles / Prompts / Wealth) ──────────────────────────────── */
@@ -3933,17 +4603,18 @@ button.etsy-pill {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px 4px 8px;
-  height: 36px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  padding: 4px 12px 4px 10px;
+  height: 34px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
   color: var(--ink-1);
   font-family: var(--font-mono);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
-.etsy-status:hover { background: var(--bg-3); border-color: var(--line-2); }
+.etsy-status:hover { background: var(--glass-fill); border-color: var(--glass-border-strong); }
 .etsy-status:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .etsy-status-dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -3987,18 +4658,66 @@ button.etsy-pill {
 .etsy-status.is-connected .etsy-status-sub { color: var(--status-ok); }
 .etsy-status.is-disconnected .etsy-status-sub { color: var(--ink-2); }
 
-/* ── Mode toggle (Live vs Sandbox) ──────────────────────────────────────── */
-.mode-toggle { cursor: pointer; }
-.mode-toggle.is-live .dot {
-  background: var(--status-ok);
-  box-shadow: 0 0 8px var(--status-ok)aa;
+/* ── Mode toggle: single source of truth for LIVE / DRY-RUN / SANDBOX ───── */
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--ink-1);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.mode-toggle.is-sandbox .dot {
-  background: var(--accent-warm, #f5a623);
-  box-shadow: 0 0 8px rgba(245, 166, 35, 0.7);
+.mode-toggle:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+}
+.mode-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  box-shadow: 0 0 0 0 transparent;
+}
+.mode-toggle-label { white-space: nowrap; }
+
+.mode-toggle.is-live {
+  color: var(--accent-ok);
+  border-color: color-mix(in srgb, var(--accent-ok) 45%, var(--glass-border));
+  background: var(--glass-fill-soft);
+}
+.mode-toggle.is-live .mode-toggle-dot {
+  background: var(--accent-ok);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-ok) 70%, transparent);
+}
+.mode-toggle.is-dry-run {
+  color: var(--status-warn);
+  border-color: color-mix(in srgb, var(--status-warn) 35%, var(--glass-border));
+  background: color-mix(in srgb, var(--status-warn) 6%, var(--glass-fill-soft));
+}
+.mode-toggle.is-dry-run .mode-toggle-dot {
+  background: var(--status-warn);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-warn) 60%, transparent);
+}
+.mode-toggle.is-sandbox {
+  color: var(--accent-warm);
+  border-color: color-mix(in srgb, var(--accent-warm) 35%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent-warm) 7%, var(--glass-fill-soft));
+}
+.mode-toggle.is-sandbox .mode-toggle-dot {
+  background: var(--accent-warm);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-warm) 70%, transparent);
   animation: mode-sandbox-pulse 2.4s ease-in-out infinite;
 }
-.mode-toggle.is-sandbox .name { color: var(--accent-warm, #f5a623); }
 @keyframes mode-sandbox-pulse {
   0%, 100% { opacity: 0.7; }
   50%      { opacity: 1; }
@@ -4143,10 +4862,12 @@ button.etsy-pill {
   width: 560px;
   max-width: 94vw;
   max-height: 88vh;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4941,24 +5662,6 @@ button.etsy-pill {
   border-color: var(--status-bad-soft);
 }
 
-/* ---- Mode badge (TopBar) ---- */
-.mode-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: var(--radius);
-  border: 1px solid;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  font-weight: 700;
-}
-.mode-badge.live    { border-color: var(--status-ok-edge); color: var(--status-ok); background: var(--status-ok-soft); }
-.mode-badge.dry-run { border-color: var(--status-warn-edge); color: var(--status-warn); background: var(--status-warn-soft); }
-.mode-badge.sandbox { border-color: #1a3e5a; color: #7bc6e8; background: rgba(123, 198, 232, 0.07); }
-.mode-badge-label { white-space: nowrap; }
-
 /* ========================================================================
    ActivityModal — full-screen review surface
    ======================================================================== */
@@ -5076,7 +5779,25 @@ button.etsy-pill {
 .review-modal-3d-downloads {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 2px;
+}
+.review-modal-3d-downloads .asset-viewer-dl {
+  padding: 5px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-fill-soft);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  color: var(--ink-1);
+  text-decoration: none;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.review-modal-3d-downloads .asset-viewer-dl:hover {
+  background: var(--glass-fill);
+  border-color: var(--glass-border-strong);
+  color: var(--ink-0);
 }
 
 /* ========================================================================
@@ -5947,10 +6668,12 @@ button.etsy-pill {
   height: min(820px, 92vh);
   display: flex;
   flex-direction: column;
-  background: var(--bg-1);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--glass-gradient), var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
   border-radius: 10px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   overflow: hidden;
 }
 
@@ -6091,3 +6814,627 @@ button.etsy-pill {
 .asset-3d-modal-dl:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* =====================================================================
+   Pipeline Panel — top-right glass overlay showing per-stage progress
+   ===================================================================== */
+
+/* ─── Right rail: stacks pipeline panel + agent panel in the same column ─── */
+.right-rail {
+  position: absolute;
+  /* Sits below the floating actions cluster (top:12px + ~32px height + 8px gap) */
+  top: 56px;
+  right: 12px;
+  bottom: 12px;
+  width: 280px;
+  z-index: 18;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none; /* children re-enable */
+}
+.right-rail > * {
+  pointer-events: auto;
+}
+.has-sandbox .right-rail {
+  top: 86px;
+}
+
+.pipeline-panel {
+  flex: 0 0 auto;
+  padding: 12px 12px 11px;
+  border-radius: 12px;
+  color: var(--ink-0);
+  font-family: var(--font-sans);
+  background: var(--glass-gradient), var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  transition: padding 0.2s ease;
+}
+.pipeline-panel.is-collapsed {
+  padding: 9px 12px;
+}
+
+.pipeline-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0 0 11px;
+  padding: 0 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--glass-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.pipeline-panel-head:hover {
+  opacity: 0.85;
+}
+.pipeline-panel-head:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.pipeline-panel.is-collapsed .pipeline-panel-head {
+  margin: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.pipeline-panel-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-2);
+  transition: transform 0.22s ease, color 0.15s;
+}
+.pipeline-panel.is-collapsed .pipeline-panel-chevron {
+  transform: rotate(-90deg);
+}
+.pipeline-panel-head:hover .pipeline-panel-chevron {
+  color: var(--ink-0);
+}
+
+.pipeline-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pipeline-panel-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  box-shadow: 0 0 0 0 transparent;
+}
+.pipeline-panel-dot[data-status="live"] {
+  background: var(--accent);
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.18),
+    0 0 8px rgba(var(--accent-rgb), 0.55);
+  animation: pipeline-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes pipeline-dot-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 3px rgba(var(--accent-rgb), 0.18),
+      0 0 8px rgba(var(--accent-rgb), 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(var(--accent-rgb), 0.06),
+      0 0 14px rgba(var(--accent-rgb), 0.85);
+  }
+}
+
+.pipeline-panel-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-0);
+}
+
+.pipeline-panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.pipeline-panel-state {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+.pipeline-panel-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-1);
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+}
+
+.pipeline-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pipeline-step {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  position: relative;
+  padding: 4px 0;
+  transition: opacity 0.25s ease;
+}
+
+.pipeline-step.is-pending { opacity: 0.5; }
+.pipeline-step.is-completed { opacity: 0.95; }
+.pipeline-step.is-current { opacity: 1; }
+
+.pipeline-step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 16px;
+  position: relative;
+  padding-top: 2px;
+}
+
+.pipeline-step-node {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-fill-soft);
+  z-index: 1;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.pipeline-step.is-completed .pipeline-step-node {
+  background: var(--accent-ok);
+  border-color: color-mix(in srgb, var(--accent-ok) 65%, transparent);
+  color: var(--bg-0);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-ok) 20%, transparent);
+}
+.pipeline-step.is-current .pipeline-step-node {
+  background: rgba(var(--accent-rgb), 0.22);
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.14),
+    0 0 12px rgba(var(--accent-rgb), 0.55);
+}
+.pipeline-step.is-pending .pipeline-step-node {
+  background: var(--glass-fill-soft);
+}
+
+.pipeline-step-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.pipeline-step-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.95);
+  animation: pipeline-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pipeline-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(0.65); opacity: 0.55; }
+}
+
+.pipeline-step-connector {
+  flex: 1;
+  width: 1px;
+  margin-top: 2px;
+  margin-bottom: -4px;
+  background: linear-gradient(
+    180deg,
+    var(--glass-border-strong) 0%,
+    var(--glass-border) 100%
+  );
+}
+.pipeline-step.is-completed .pipeline-step-connector {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-ok) 60%, transparent) 0%,
+    color-mix(in srgb, var(--accent-ok) 20%, transparent) 100%
+  );
+}
+.pipeline-step.is-last .pipeline-step-connector {
+  display: none;
+}
+
+.pipeline-step-body {
+  min-width: 0;
+  padding-bottom: 3px;
+}
+
+.pipeline-step-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pipeline-step-name {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--ink-0);
+}
+.pipeline-step.is-pending .pipeline-step-name { color: var(--ink-2); }
+.pipeline-step.is-current .pipeline-step-name { color: var(--ink-0); font-weight: 600; }
+
+.pipeline-step-sub {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+  margin-top: 1px;
+}
+
+.pipeline-step-time {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pipeline-step-time.is-live {
+  color: var(--accent-warm);
+}
+.pipeline-step-time.is-live.almost {
+  color: var(--accent-ok);
+  animation: pipeline-almost-pulse 1s ease-in-out infinite;
+}
+.pipeline-step-time.is-live.over {
+  color: var(--status-bad);
+}
+.pipeline-step-time.is-done {
+  color: var(--ink-2);
+}
+.pipeline-step-time.is-pending {
+  color: var(--ink-3);
+  font-style: italic;
+}
+@keyframes pipeline-almost-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+.pipeline-time-glyph {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 5px currentColor;
+}
+
+.pipeline-step-bar {
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--glass-fill-soft);
+  overflow: hidden;
+  position: relative;
+}
+.pipeline-step-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.5) 0%,
+    var(--accent) 50%,
+    var(--accent-warm) 100%
+  );
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6);
+}
+.pipeline-step-bar.indeterminate .pipeline-step-bar-fill {
+  width: 38% !important;
+  animation: pipeline-bar-slide 1.8s ease-in-out infinite;
+}
+@keyframes pipeline-bar-slide {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(280%); }
+}
+
+.pipeline-panel-footer {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--glass-border);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  letter-spacing: 0.03em;
+  text-align: center;
+}
+
+/* =====================================================================
+   Agent Panel — appears under the Pipeline Panel in the right rail when
+   an agent is tapped. Same glass style; click the header to hide.
+   ===================================================================== */
+
+.agent-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--ink-0);
+  font-family: var(--font-sans);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--glass-gradient), var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-frame-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  animation: agent-panel-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@keyframes agent-panel-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.agent-panel-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--glass-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 0.15s, opacity 0.15s;
+}
+.agent-panel-head:hover {
+  background: var(--glass-fill-soft);
+}
+.agent-panel-head:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.agent-panel-portrait {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--bg-0);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--role-color, var(--accent)) 18%, transparent);
+}
+
+.agent-panel-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.agent-panel-role {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-2);
+}
+.agent-panel-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-0);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-panel-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--ink-2);
+  border-radius: 50%;
+  transition: color 0.15s, transform 0.22s ease;
+}
+.agent-panel-head:hover .agent-panel-chevron {
+  color: var(--ink-0);
+}
+.agent-panel.is-collapsed .agent-panel-chevron {
+  transform: rotate(-90deg);
+}
+
+.agent-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--ink-3);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.agent-panel-close:hover {
+  color: var(--ink-0);
+  background: var(--glass-fill-soft);
+}
+.agent-panel-close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-panel.is-collapsed {
+  flex: 0 0 auto;
+}
+.agent-panel.is-collapsed .agent-panel-head {
+  border-bottom: 0;
+}
+
+.agent-panel-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.agent-panel-meta .drawer-stat {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.agent-panel-now {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px 11px;
+  border-bottom: 1px solid var(--glass-border);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb), 0.05),
+    transparent
+  );
+}
+.agent-panel-now-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  color: var(--role-color, var(--accent));
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.agent-panel-now[data-state="working"] .agent-panel-now-icon {
+  animation: drawer-think-spin 3.2s linear infinite;
+}
+.agent-panel-now[data-state="awaiting"] .agent-panel-now-icon,
+.agent-panel-now[data-state="walking"] .agent-panel-now-icon {
+  animation: drawer-think-pulse 1.6s ease-in-out infinite;
+}
+.agent-panel-now[data-state="crashed"] .agent-panel-now-icon {
+  color: var(--accent-bad);
+  border-color: color-mix(in srgb, var(--accent-bad) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-bad) 12%, transparent);
+}
+
+.agent-panel-now-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-panel-now-label {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-2);
+  opacity: 0.7;
+}
+.agent-panel-now-headline {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-0);
+  font-weight: 500;
+}
+.agent-panel-now-sub {
+  font-size: 10.5px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.agent-panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-fill-soft);
+  flex: 0 0 auto;
+}
+.agent-panel-tab {
+  flex: 1;
+  padding: 8px 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  border: 0;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.agent-panel-tab:hover { color: var(--ink-1); background: var(--glass-fill); }
+.agent-panel-tab.is-active {
+  color: var(--role-color, var(--accent));
+  border-bottom-color: var(--role-color, var(--accent));
+  background: transparent;
+}
+
+.agent-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.agent-panel-body::-webkit-scrollbar { width: 5px; }
+.agent-panel-body::-webkit-scrollbar-track { background: transparent; }
+.agent-panel-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+
+

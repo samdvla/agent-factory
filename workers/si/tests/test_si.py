@@ -153,6 +153,94 @@ def test_null_role_proposal_no_change(tmp_path, monkeypatch):
     assert not os.path.exists(tmp_path / ".agent-factory" / "prompts.json")
 
 
+def _seed_operator_feedback(tmp_path, by_role: dict) -> None:
+    af = tmp_path / ".agent-factory"
+    af.mkdir(parents=True, exist_ok=True)
+    (af / "operator_feedback.json").write_text(json.dumps({"by_role": by_role}))
+
+
+def test_operator_feedback_bypasses_outcomes_gate(tmp_path, monkeypatch):
+    """A single operator rating must wake SI even with zero outcomes — the
+    human is rating specific outputs and that signal shouldn't wait for the
+    next sales batch."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _seed_operator_feedback(tmp_path, {
+        "designer": [{"rating": "down", "note": "thumbnails too busy at small size"}],
+    })
+
+    new_system = (
+        "You are the Designer. Simplify thumbnails for legibility at 200px — "
+        "bold single subjects, two-color palettes, no fine line work that "
+        "vanishes when rendered small. Return JSON only."
+    )
+    payload = _make_response_bytes(json.dumps({
+        "role": "designer",
+        "new_system": new_system,
+        "reasoning": "operator flagged busy thumbnails — simplify",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(99, {"trigger": "operator_rating"})
+
+    assert result["ok"] is True
+    assert result["role_tweaked"] == "designer"
+    written = json.loads((tmp_path / ".agent-factory" / "prompts.json").read_text())
+    assert written["designer"]["system_override"] == new_system
+    # History entry should be tagged so the team can see this was a relay.
+    history = written["_history"]
+    assert history[-1]["role_tweaked"] == "designer"
+    assert "operator feedback" in (history[-1].get("rationale") or "").lower()
+
+
+def test_operator_feedback_surfaces_in_prompt():
+    """Operator notes must appear verbatim in the user prompt SI sends so the
+    model can cite them when rewriting the role's system_override."""
+    feedback = {
+        "designer": [
+            {"rating": "down", "note": "thumbnails too busy at small size"},
+            {"rating": "up", "note": "love the flat-vector risograph palette"},
+        ],
+        "research": [
+            {"rating": "down", "note": "niche too narrow, broader audience next time"},
+        ],
+    }
+    _system, user = si_agent.build_si_prompt(
+        "(no outcomes yet)", {}, feedback
+    )
+    assert "thumbnails too busy at small size" in user
+    assert "love the flat-vector risograph palette" in user
+    assert "niche too narrow" in user
+    assert "HIGHEST PRIORITY" in user
+
+
+def test_si_can_tune_cs_role(tmp_path, monkeypatch):
+    """CS is now a valid SI target — operator feedback on customer-service
+    replies must produce a CS prompt edit, not be silently dropped."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _seed_operator_feedback(tmp_path, {
+        "cs": [{"rating": "down", "note": "replies sound robotic, more warmth"}],
+    })
+
+    new_system = (
+        "You are the Customer Service agent. All replies should sound warm "
+        "and human — open with empathy, never start with 'Hi! How can I help?'. "
+        "Keep under 60 words. Return JSON only."
+    )
+    payload = _make_response_bytes(json.dumps({
+        "role": "cs",
+        "new_system": new_system,
+        "reasoning": "operator: replies sound robotic",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(101, {"trigger": "operator_rating"})
+
+    assert result["ok"] is True
+    assert result["role_tweaked"] == "cs"
+    written = json.loads((tmp_path / ".agent-factory" / "prompts.json").read_text())
+    assert written["cs"]["system_override"] == new_system
+
+
 def test_read_outcomes_skips_malformed_lines(tmp_path):
     p = tmp_path / "outcomes.jsonl"
     p.write_text(

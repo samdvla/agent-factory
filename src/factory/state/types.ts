@@ -76,6 +76,10 @@ export type TickerEntry = { ts: number; source: string; text: string };
 
 export type AlertItem = {
   kind: "warn" | "err"; title: string; sub: string; ts: number; agent?: string;
+  /** Number of times this same alert has fired in quick succession. The
+   *  store collapses identical alerts within a short window and bumps this
+   *  counter instead of stacking duplicates. */
+  count?: number;
 };
 
 export type GateRequest = {

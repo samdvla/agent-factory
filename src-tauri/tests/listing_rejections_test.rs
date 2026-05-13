@@ -6,7 +6,17 @@
 
 use agent_factory_lib::db;
 use sqlx::SqlitePool;
+use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
+
+/// Tests that mutate the process-global HOME env var must serialize — cargo
+/// runs tests in parallel threads and `env::set_var` is process-wide, so a
+/// concurrent test would otherwise read the wrong HOME and assert against
+/// the wrong tmp dir.
+fn home_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 async fn setup() -> (TempDir, SqlitePool, i64) {
     let tmp = TempDir::new().unwrap();
@@ -240,6 +250,7 @@ async fn snapshot_writes_json_python_can_parse() {
     use agent_factory_lib::commands::snapshot_rejections_to_disk;
     use std::env;
 
+    let _guard = home_lock().lock().unwrap();
     let (tmp, pool, project_id) = setup().await;
     // Isolate HOME so the snapshot doesn't touch the real ~/.agent-factory.
     let home_guard = env::var("HOME").ok();
@@ -286,6 +297,80 @@ async fn snapshot_writes_json_python_can_parse() {
     assert_eq!(arr[1]["niche"].as_str(), Some("dnd minis"));
 
     // Restore HOME for any later tests.
+    match home_guard {
+        Some(h) => env::set_var("HOME", h),
+        None => env::remove_var("HOME"),
+    }
+}
+
+#[tokio::test]
+async fn operator_feedback_snapshot_groups_by_role_and_caps_per_role() {
+    use agent_factory_lib::commands::snapshot_operator_feedback_to_disk;
+    use std::env;
+
+    let _guard = home_lock().lock().unwrap();
+    let (tmp, pool, project_id) = setup().await;
+    let home_guard = env::var("HOME").ok();
+    env::set_var("HOME", tmp.path());
+
+    // Seed jobs across roles + ratings.
+    for (job_id, role) in [
+        (1_i64, "designer"),
+        (2, "designer"),
+        (3, "research"),
+        (4, "listing"),
+    ] {
+        sqlx::query(
+            "INSERT INTO jobs (id, project_id, agent_role, status, payload_json, scheduled_at) \
+             VALUES (?, ?, ?, 'done', '{}', '2026-05-12T00:00:00Z')",
+        )
+        .bind(job_id)
+        .bind(project_id)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (job_id, rating, note, ts) in [
+        (1_i64, "down", Some("too generic"), 3_000_i64),
+        (2_i64, "up", None, 4_000_i64),
+        (3_i64, "down", Some("niche too narrow"), 2_000_i64),
+        (4_i64, "up", Some("great tags"), 1_000_i64),
+    ] {
+        sqlx::query(
+            "INSERT INTO job_feedback (job_id, rating, note, rater, created_at) \
+             VALUES (?, ?, ?, 'operator', ?)",
+        )
+        .bind(job_id)
+        .bind(rating)
+        .bind(note)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    snapshot_operator_feedback_to_disk(&pool, project_id).await.unwrap();
+
+    let text = std::fs::read_to_string(tmp.path().join(".agent-factory").join("operator_feedback.json"))
+        .expect("snapshot exists");
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let by_role = parsed.get("by_role").and_then(|v| v.as_object()).expect("by_role");
+
+    let designer = by_role.get("designer").and_then(|v| v.as_array()).expect("designer");
+    assert_eq!(designer.len(), 2);
+    // Newest-first within role.
+    assert_eq!(designer[0]["rating"].as_str(), Some("up"));
+    assert_eq!(designer[1]["rating"].as_str(), Some("down"));
+    assert_eq!(designer[1]["note"].as_str(), Some("too generic"));
+
+    let research = by_role.get("research").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(research.len(), 1);
+    assert_eq!(research[0]["note"].as_str(), Some("niche too narrow"));
+
+    let listing = by_role.get("listing").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(listing.len(), 1);
+
     match home_guard {
         Some(h) => env::set_var("HOME", h),
         None => env::remove_var("HOME"),

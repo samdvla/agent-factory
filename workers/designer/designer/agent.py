@@ -893,7 +893,11 @@ def handle(method: str, params: dict) -> dict:
                         print(f"[designer] 3d generation failed: {e}", file=sys.stderr, flush=True)
                         asset["asset_path"] = None
                         model_used = MODEL
-                        svg_glyph = f"3d failed: {str(e)[:60]}"
+                        # 240 chars is enough to keep the HTTP status + first
+                        # part of the response body / error message, which is
+                        # what's needed to diagnose Tripo / Meshy failures
+                        # (401 / 404 / 429 / 5xx vs network).
+                        svg_glyph = f"3d failed: {str(e)[:240]}"
         else:
             # Second call: Sonnet generates real SVG markup we save to disk.
             # Any failure here is logged and the pipeline continues text-only.
