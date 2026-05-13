@@ -159,6 +159,126 @@ def test_3d_system_prompt_mentions_ip_risk():
     assert "ip_risk" in system.lower() or "IP_RISK" in system
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Bundle normalization — phase 2 of the bundles-first push.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_3d_system_prompt_mentions_bundles():
+    """The 3D system prompt must teach the model how / when to emit bundles."""
+    system, _ = build_demand_brief_prompt(product_type_preference="stl_file")
+    assert "BUNDLE" in system or "bundle" in system
+    # The schema must include the bundle field so the model knows it's an
+    # available output slot.
+    assert "bundle" in system
+
+
+def test_normalize_bundle_passes_clean_bundle_through(monkeypatch):
+    """A well-formed bundle on a 3D brief survives normalization."""
+    monkeypatch.delenv("BUNDLE_GENERATION_ENABLED", raising=False)
+    brief = {
+        "niche": "egyptian altar trio",
+        "product_type": "stl_file",
+        "bundle": {
+            "items": ["Anubis bust", "Bastet bust", "Ra bust"],
+            "shared_theme": "egyptian altar",
+        },
+    }
+    _normalize_brief(brief)
+    assert isinstance(brief["bundle"], dict)
+    assert brief["bundle"]["items"] == ["Anubis bust", "Bastet bust", "Ra bust"]
+    assert brief["bundle"]["shared_theme"] == "egyptian altar"
+
+
+def test_normalize_bundle_strips_when_2d():
+    """2D product types never get bundles — bundles are about multi-file
+    STL listings on Etsy + Cults3D. A 2D brief with a stray bundle field
+    must be silently stripped."""
+    brief = {
+        "niche": "boho stickers",
+        "product_type": "sticker",
+        "bundle": {"items": ["a", "b", "c"]},
+    }
+    _normalize_brief(brief)
+    assert brief["bundle"] is None
+
+
+def test_normalize_bundle_strips_when_disabled(monkeypatch):
+    """BUNDLE_GENERATION_ENABLED=0 must strip the bundle field entirely so
+    the designer never burns Tripo/Meshy credits on bundle expansion."""
+    monkeypatch.setenv("BUNDLE_GENERATION_ENABLED", "0")
+    brief = {
+        "niche": "egyptian altar trio",
+        "product_type": "stl_file",
+        "bundle": {"items": ["Anubis bust", "Bastet bust", "Ra bust"]},
+    }
+    _normalize_brief(brief)
+    assert brief["bundle"] is None
+
+
+def test_normalize_bundle_strips_too_short():
+    """A 'bundle' of 1 item is just a single — must be stripped so the
+    listing-side bundle copy doesn't get applied to a single-file listing."""
+    brief = {
+        "niche": "x",
+        "product_type": "stl_file",
+        "bundle": {"items": ["only one"]},
+    }
+    _normalize_brief(brief)
+    assert brief["bundle"] is None
+
+
+def test_normalize_bundle_caps_at_max():
+    """Schema allows up to 6 items but the realistic ceiling is 6 — anything
+    above gets truncated so we don't blow the Tripo/Meshy spend budget on
+    a single cycle."""
+    brief = {
+        "niche": "modular dungeon set",
+        "product_type": "stl_file",
+        "bundle": {"items": [f"item{i}" for i in range(10)]},
+    }
+    _normalize_brief(brief)
+    assert isinstance(brief["bundle"], dict)
+    assert len(brief["bundle"]["items"]) == 6
+
+
+def test_normalize_bundle_dedupes_items():
+    """Duplicate item names sneak in if the model loses focus — dedup so
+    designer doesn't generate the same item twice."""
+    brief = {
+        "niche": "x",
+        "product_type": "stl_file",
+        "bundle": {"items": ["wolf pendant", "Wolf Pendant", "raven pendant"]},
+    }
+    _normalize_brief(brief)
+    assert isinstance(brief["bundle"], dict)
+    # Deduped case-insensitively
+    names_lower = [s.lower() for s in brief["bundle"]["items"]]
+    assert len(names_lower) == len(set(names_lower))
+    assert "wolf pendant" in names_lower
+    assert "raven pendant" in names_lower
+
+
+def test_normalize_bundle_fills_missing_theme():
+    """When the model omits shared_theme, we fall back to the niche so the
+    listing copy has something to render."""
+    brief = {
+        "niche": "egyptian altar trio",
+        "product_type": "stl_file",
+        "bundle": {"items": ["Anubis", "Bastet", "Ra"]},
+    }
+    _normalize_brief(brief)
+    assert brief["bundle"]["shared_theme"] == "egyptian altar trio"
+
+
+def test_normalize_bundle_none_when_missing():
+    """No bundle on the brief → field gets set to None so downstream readers
+    can rely on the key existing."""
+    brief = {"niche": "x", "product_type": "stl_file"}
+    _normalize_brief(brief)
+    assert brief["bundle"] is None
+
+
 def test_rejection_avoid_block_injects_into_system(tmp_path, monkeypatch):
     """When rejections.json is present, the system prompt sent to Anthropic
     must contain an AVOID block listing the rejected niches/titles."""

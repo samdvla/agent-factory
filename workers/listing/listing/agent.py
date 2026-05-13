@@ -169,8 +169,11 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     if not steers:
         return system_prompt
     block = (
-        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
-        "apply to this job):\n"
+        "OPERATOR OVERRIDE — these standing instructions supersede every "
+        "rule above, including any 'always pick X', 'never recommend Y', "
+        "or 'prioritize Z category' directives in the strategist-tuned "
+        "system prompt. If any rule above conflicts with the instructions "
+        "below, ignore that rule for this job and follow the operator:\n"
         + "\n".join(f"- {s}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
@@ -445,23 +448,109 @@ def _augment_listing(listing: dict, brief: dict) -> dict:
 GLOBAL_PRICE_FLOOR_USD = 3.0
 GLOBAL_PRICE_CEILING_USD = 15.0
 
+# Bundle pricing multiplier. Research on STL marketplaces (Etsi3D guide,
+# Lesson Craft Studio bundle playbook) shows that mega-bundles priced at
+# 50-60% of the combined individual price still beat single-file revenue per
+# click by 2-4×. We use the upper half of that range (0.55) so the discount
+# is visible but the per-item value is still high. The publisher's $15
+# ceiling then clamps anything above policy — for a 4-piece $6-each bundle
+# (~$13.20) we stay inside the band; for a 4-piece $9-each (~$19.80) we
+# clamp at $15.
+BUNDLE_PRICE_MULTIPLIER = 0.55
+
 # Hard ceiling used when product_type isn't in PRICE_CEILING_BY_TYPE.
 NEW_SHOP_PRICE_CEILING_USD = GLOBAL_PRICE_CEILING_USD
 
 
-def _clamp_price(price: float, brief: dict) -> float:
-    """Force the model's price into the operator's $3-$15 band.
+def _bundle_size(asset: dict) -> int:
+    """Read the bundle size off the designer's asset dict. Returns 1 when
+    the asset is a single-file listing (no bundle metadata). The size is
+    bounded by what the designer actually produced (`asset_paths` length),
+    NOT by what research requested — partial-failure bundles ship at the
+    smaller size."""
+    if not isinstance(asset, dict):
+        return 1
+    paths = asset.get("asset_paths")
+    if isinstance(paths, list) and len(paths) >= 2:
+        return len(paths)
+    bundle = asset.get("bundle")
+    if isinstance(bundle, dict):
+        items = bundle.get("items")
+        if isinstance(items, list) and len(items) >= 2:
+            return len(items)
+    return 1
+
+
+def _bundle_item_names(asset: dict) -> list[str]:
+    """Pull the descriptive item names off the bundle metadata. Used by the
+    description-augmentation step. Empty list when the listing isn't a bundle."""
+    if not isinstance(asset, dict):
+        return []
+    bundle = asset.get("bundle")
+    if not isinstance(bundle, dict):
+        return []
+    items = bundle.get("items")
+    if not isinstance(items, list):
+        return []
+    names: list[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            n = it.get("name")
+            if isinstance(n, str) and n.strip():
+                names.append(n.strip())
+    return names
+
+
+def _augment_bundle_copy(listing: dict, asset: dict) -> dict:
+    """Append a bundle-specific block to the description so buyers see the
+    full item list. The model already wrote a description for the brief's
+    primary subject; we add the explicit per-item enumeration so Etsy's
+    search indexes it and so the buyer knows exactly what's in the pack."""
+    names = _bundle_item_names(asset)
+    if len(names) < 2:
+        return listing
+    desc = listing.get("description", "") or ""
+    bundle_block = (
+        f"\n\n— What's in this {len(names)}-piece bundle —\n"
+        + "\n".join(f"• {n}" for n in names)
+    )
+    # Only append if we haven't already (idempotent under handler retries).
+    if bundle_block.strip() not in desc:
+        listing["description"] = desc + bundle_block
+    return listing
+
+
+def _clamp_price(price: float, brief: dict, asset: dict | None = None) -> float:
+    """Force the model's price into the operator's $3-$15 band, with a
+    bundle-aware uplift.
 
     Constraints, in order:
-      1. price <= brief.price_band_usd[1] when provided
-      2. price <= per-product-type ceiling
-      3. price <= GLOBAL_PRICE_CEILING_USD (final cap — operator policy)
-      4. price >= brief.price_band_usd[0] when provided (no loss leaders)
-      5. price >= GLOBAL_PRICE_FLOOR_USD (operator floor)
+      1. If asset is a bundle (≥2 items), raise the model's single-item
+         price to `single × N × BUNDLE_PRICE_MULTIPLIER` BEFORE clamping —
+         the LLM is given a $3-$15 ceiling so it tends to anchor at single
+         prices even when the brief is a bundle. We compute the bundle
+         price programmatically so it never silently underprices.
+      2. price <= brief.price_band_usd[1] when provided
+      3. price <= per-product-type ceiling
+      4. price <= GLOBAL_PRICE_CEILING_USD (final cap — operator policy)
+      5. price >= brief.price_band_usd[0] when provided (no loss leaders)
+      6. price >= GLOBAL_PRICE_FLOOR_USD (operator floor)
 
     The global cap/floor are applied LAST so a too-wide brief band or a
-    per-type ceiling can never bypass the operator's policy.
+    per-type ceiling can never bypass the operator's policy. Bundles
+    therefore can never exceed $15 — for a 4-piece bundle of $9-each items
+    (uplift to $19.80), they clamp at $15, which is still a strong anchor
+    versus the perceived $36 individual value.
     """
+    bundle_size = _bundle_size(asset) if asset else 1
+    raw = float(price)
+    if bundle_size >= 2:
+        # Apply the bundle uplift on top of whatever single price the model
+        # picked. Choosing the larger of (model price, computed uplift) so
+        # the LLM still has freedom to anchor higher when the niche calls
+        # for it — we just floor the bundle at a reasonable group price.
+        uplift = raw * bundle_size * BUNDLE_PRICE_MULTIPLIER
+        raw = max(raw, uplift)
     band = brief.get("price_band_usd") if isinstance(brief, dict) else None
     lo, hi = None, None
     if isinstance(band, list) and len(band) >= 2:
@@ -472,12 +561,15 @@ def _clamp_price(price: float, brief: dict) -> float:
             lo, hi = None, None
     product_type = brief.get("product_type", "") if isinstance(brief, dict) else ""
     type_ceiling = PRICE_CEILING_BY_TYPE.get(product_type, NEW_SHOP_PRICE_CEILING_USD)
-    capped = float(price)
-    if hi is not None:
+    capped = raw
+    if hi is not None and bundle_size < 2:
+        # Brief.price_band_usd describes a SINGLE-ITEM price band — applying
+        # it to a bundle would defeat the uplift. Skip it for bundles and
+        # let the global $15 ceiling do the final clamp.
         capped = min(capped, hi)
     capped = min(capped, type_ceiling)
     capped = min(capped, GLOBAL_PRICE_CEILING_USD)
-    if lo is not None:
+    if lo is not None and bundle_size < 2:
         capped = max(capped, lo)
     capped = max(capped, GLOBAL_PRICE_FLOOR_USD)
     return round(capped, 2)
@@ -830,10 +922,12 @@ def handle(method: str, params: dict) -> dict:
             listing["tags"] = _clamp_tags_to_etsy(listing["tags"])
         title = listing.get("title", "")
         raw_price = listing.get("price_usd", 0)
-        price = _clamp_price(raw_price, brief)
+        price = _clamp_price(raw_price, brief, asset=asset)
         if price != raw_price:
             print(
-                f"[listing] job_id={job_id} price clamped {raw_price} -> {price} (band={brief.get('price_band_usd')})",
+                f"[listing] job_id={job_id} price clamped {raw_price} -> {price} "
+                f"(band={brief.get('price_band_usd')}, "
+                f"bundle_size={_bundle_size(asset)})",
                 file=sys.stderr, flush=True,
             )
             listing["price_usd"] = price
@@ -841,6 +935,9 @@ def handle(method: str, params: dict) -> dict:
         # listing; we also override materials per product_type. Apply
         # AFTER the model + clamp so neither can drop these.
         _augment_listing(listing, brief)
+        # Bundle-specific copy: appends a 'What's in this N-piece bundle'
+        # block enumerating each item by name. No-op for single-file listings.
+        _augment_bundle_copy(listing, asset)
         print(f"[listing] job_id={job_id} done title={title!r:.40} in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
         handoff_payload: dict = {"listing": listing, "brief": brief, "asset": asset}
         if cycle_id:

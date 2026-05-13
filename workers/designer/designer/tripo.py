@@ -35,6 +35,24 @@ POLL_INTERVAL_SEC = 5
 POLL_TIMEOUT_SEC = 240
 
 
+def _gate_mesh_or_raise(glb_path: str, stl_path: str, job_id: int) -> None:
+    """Run the shared mesh quality gate on a Tripo output. Translates a
+    MeshQualityError into TripoError so the designer's existing 3D-failure
+    classifier / no-asset-produced path handles it uniformly with provider
+    errors. Repair pass (fix_normals + fill_holes) happens inside the gate."""
+    from . import mesh_quality as _mq
+    try:
+        metrics = _mq.gate_or_raise(glb_path, stl_path)
+        print(
+            f"[tripo] job_id={job_id} mesh quality ok "
+            f"faces={metrics.get('face_count')} vol={metrics.get('volume', 0):.2f} "
+            f"watertight={metrics.get('is_watertight')}",
+            file=sys.stderr, flush=True,
+        )
+    except _mq.MeshQualityError as e:
+        raise TripoError(f"Tripo mesh failed quality gate: {e}") from e
+
+
 class TripoError(Exception):
     """Raised for any non-recoverable Tripo failure (bad request, task failed,
     download failed). Callers should treat this the same as a generation
@@ -568,6 +586,7 @@ def generate_3d_from_image(
     # size alone let oversized STLs through). Keeps the GLB and STL aligned
     # on the same low-poly mesh either way.
     ensure_stl_under_cap(glb_path, stl_path)
+    _gate_mesh_or_raise(glb_path, stl_path, job_id)
     preview_url = pick_preview_url(data)
     if preview_url:
         try:
@@ -622,6 +641,7 @@ def generate_3d(
     print(f"[tripo] job_id={job_id} downloaded glb ({os.path.getsize(glb_path)} bytes)", file=sys.stderr, flush=True)
     ensure_stl_under_cap(glb_path, stl_path)
     print(f"[tripo] job_id={job_id} converted stl ({os.path.getsize(stl_path)} bytes)", file=sys.stderr, flush=True)
+    _gate_mesh_or_raise(glb_path, stl_path, job_id)
     # Listing thumbnail: prefer Tripo's preview render; placeholder otherwise.
     preview_url = pick_preview_url(data)
     if preview_url:

@@ -2,6 +2,15 @@
 name = "publisher-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
+# Pillow powers pinterest_pin.py — the 1000×1500 vertical pin we render
+# from the designer's preview PNG. Research (Pinvine 2026 Strategy, Printify
+# Pinterest-for-Etsy guide) shows Pinterest drives ~41% of Etsy's external
+# traffic — the biggest single off-platform source for our 3D listings. The
+# pin is generated locally and saved to disk; actual posting to Pinterest's
+# API is intentionally NOT in this worker (operator credential boundary).
+dependencies = [
+    "Pillow>=10.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

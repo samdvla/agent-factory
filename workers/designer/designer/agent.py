@@ -291,8 +291,11 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     if not steers:
         return system_prompt
     block = (
-        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
-        "apply to this job):\n"
+        "OPERATOR OVERRIDE — these standing instructions supersede every "
+        "rule above, including any 'always pick X', 'never recommend Y', "
+        "or 'prioritize Z category' directives in the strategist-tuned "
+        "system prompt. If any rule above conflicts with the instructions "
+        "below, ignore that rule for this job and follow the operator:\n"
         + "\n".join(f"- {s}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
@@ -954,6 +957,138 @@ def _maybe_higgsfield_enhance(
     return enhanced or preview_png
 
 
+# Bundle generation. Each bundle item is another full Tripo/Meshy generation
+# (~$0.20-$0.40 of provider credit + ~60-120s), so the cap matters. 4 is the
+# point where buyer attention plateaus on an Etsy gallery (Etsy shows 5 image
+# tiles before scroll) and where our per-cycle wall-clock leaves headroom for
+# listing + publish before the supervisor's 900s outer timeout. Override per
+# operator policy via BUNDLE_MAX_ITEMS; 0 disables bundles entirely.
+BUNDLE_MAX_ITEMS_DEFAULT = 4
+
+
+def _bundle_enabled() -> bool:
+    return os.environ.get("BUNDLE_GENERATION_ENABLED", "1").strip() == "1"
+
+
+def _bundle_max_items() -> int:
+    try:
+        n = int(os.environ.get("BUNDLE_MAX_ITEMS", str(BUNDLE_MAX_ITEMS_DEFAULT)))
+    except ValueError:
+        return BUNDLE_MAX_ITEMS_DEFAULT
+    return max(0, n)
+
+
+def _generate_bundle_items(
+    brief: dict,
+    asset: dict,
+    job_id: int,
+    assets_dir: str,
+    tripo_key: str,
+    meshy_key: str,
+) -> list[dict]:
+    """Run text-to-3D once per bundle item. Returns the list of successful
+    items as `{name, asset_path, glb_path, preview_png, model}` dicts.
+
+    Skipped silently when:
+      • bundle field missing / malformed (research-side normalizer guarantees
+        a well-formed list of 2-6 strings when bundles are enabled)
+      • no 3D provider key available
+
+    On a partial failure (some items succeed, some fail) the caller decides:
+      • ≥ 2 items → bundle listing
+      • 1 item     → degraded single listing
+      • 0 items    → fall through to existing single-item path
+
+    Bundle items always use text-to-3D (not image-to-3D). Image-to-3D's
+    Higgsfield credit is per-character and bundle items are typed item
+    descriptions, not character renders. Cheaper, simpler, more reliable.
+    """
+    if not _bundle_enabled():
+        return []
+    bundle = brief.get("bundle") if isinstance(brief, dict) else None
+    if not isinstance(bundle, dict):
+        return []
+    items_raw = bundle.get("items")
+    if not isinstance(items_raw, list) or len(items_raw) < 2:
+        return []
+    max_n = _bundle_max_items()
+    if max_n <= 1:
+        return []
+    items_named = [s for s in items_raw[:max_n] if isinstance(s, str) and s.strip()]
+    if len(items_named) < 2:
+        return []
+
+    preferred = _image_to_3d_provider()
+    provider: str | None = None
+    if preferred == "tripo" and tripo_key:
+        provider = "tripo"
+    elif preferred == "meshy" and meshy_key:
+        provider = "meshy"
+    elif tripo_key:
+        provider = "tripo"
+    elif meshy_key:
+        provider = "meshy"
+    if provider is None:
+        print(
+            "[designer] bundle skipped — no Tripo/Meshy key configured",
+            file=sys.stderr, flush=True,
+        )
+        return []
+
+    shared_theme = bundle.get("shared_theme")
+    if not isinstance(shared_theme, str) or not shared_theme.strip():
+        shared_theme = brief.get("niche", "") or "bundle"
+    base_direction = (
+        asset.get("brief_for_image_gen")
+        or brief.get("design_direction")
+        or shared_theme
+    )
+
+    successful: list[dict] = []
+    for idx, item_name in enumerate(items_named):
+        # Sub-job id keeps every bundle item's asset files on disk-unique. Files
+        # are written to {assets_dir}/{sub_job_id}.{glb,stl,png}; the renderer
+        # uses these for thumbnails so collisions would silently swap models.
+        sub_job_id = job_id * 100 + idx
+        per_item_prompt = (
+            f"{item_name}. {base_direction}. Shared theme: {shared_theme}. "
+            f"Single static mesh, printable, consistent style with the rest of "
+            f"the {shared_theme} set."
+        ).strip()
+        try:
+            if provider == "tripo":
+                from . import tripo as t3d
+                glb, stl, png = t3d.generate_3d(
+                    tripo_key, per_item_prompt, job_id=sub_job_id, assets_dir=assets_dir
+                )
+                model = "tripo-text-to-model"
+            else:
+                from . import meshy as m3d
+                glb, stl, png = m3d.generate_3d(
+                    meshy_key, per_item_prompt, job_id=sub_job_id, assets_dir=assets_dir
+                )
+                model = "meshy-text-to-3d"
+        except Exception as e:
+            # One item failing must NOT abort the bundle. Log + continue —
+            # the caller decides whether to ship as a smaller bundle, a
+            # single-item degraded listing, or hard-fail.
+            print(
+                f"[designer] bundle item {idx+1}/{len(items_named)} "
+                f"'{item_name}' failed: {e}",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        successful.append({
+            "name": item_name,
+            "asset_path": stl,
+            "glb_path": glb,
+            "preview_png": png,
+            "model": model,
+        })
+
+    return successful
+
+
 def handle(method: str, params: dict) -> dict:
     if method != "process_job":
         return {"ok": False, "error": f"unknown method {method}"}
@@ -986,7 +1121,10 @@ def handle(method: str, params: dict) -> dict:
         dimensions = asset.get("dimensions", "")
 
         if is_3d:
-            # 3D product route. Two strategies:
+            # 3D product route. Three strategies, in priority order:
+            #   (0) brief.bundle present + enabled → generate N items via
+            #       text-to-3D loop, then ship as a multi-file listing.
+            #       Skipped if fewer than 2 items succeed.
             #   (1) character-style brief + Higgsfield CLI authed →
             #       Nano Banana Pro ref render (via Higgsfield CLI) →
             #       image-to-3D (tripo or meshy). Better face/silhouette
@@ -1000,18 +1138,117 @@ def handle(method: str, params: dict) -> dict:
             )
             assets_dir = os.path.join(data_dir, "assets")
 
-            # Lazy import — falls through to text-to-3D if the module or CLI
-            # is unavailable, never raises.
-            try:
-                from . import nanobanana as _nb
-                nb_available = _nb.is_configured()
-            except Exception as e:
-                print(f"[designer] nanobanana check failed: {e}", file=sys.stderr, flush=True)
-                nb_available = False
+            # Strategy 0: bundle expansion. Returns the list of successfully
+            # generated bundle items. Empty list means "skip — fall through to
+            # single-item path" (bundle missing / disabled / all items failed).
+            bundle_items = _generate_bundle_items(
+                brief=brief,
+                asset=asset,
+                job_id=job_id,
+                assets_dir=assets_dir,
+                tripo_key=tripo_key,
+                meshy_key=meshy_key,
+            )
+            if len(bundle_items) >= 2:
+                primary = bundle_items[0]
+                asset["asset_path"] = primary["asset_path"]
+                asset["glb_path"] = primary["glb_path"]
+                asset["preview_png"] = primary["preview_png"]
+                asset["asset_paths"] = [it["asset_path"] for it in bundle_items]
+                asset["glb_paths"] = [it["glb_path"] for it in bundle_items]
+                asset["preview_pngs"] = [it["preview_png"] for it in bundle_items]
+                asset["bundle"] = {
+                    "items": bundle_items,
+                    "shared_theme": (
+                        brief.get("bundle", {}).get("shared_theme")
+                        if isinstance(brief.get("bundle"), dict) else None
+                    ),
+                }
+                asset["dimensions"] = (
+                    f"3D printable bundle ({len(bundle_items)} STLs + GLBs)"
+                )
+                model_used = primary["model"]
+                svg_glyph = f"stl ✓ bundle ({len(bundle_items)} items)"
+                print(
+                    f"[designer] job_id={job_id} bundle "
+                    f"({len(bundle_items)} items, theme="
+                    f"{asset['bundle']['shared_theme']!r}) ready",
+                    file=sys.stderr, flush=True,
+                )
+                # Skip the single-item branches below — bundle path owns the
+                # asset dict from here on.
+                bundle_done = True
+            elif len(bundle_items) == 1:
+                # Bundle partially failed but one item survived. Use it as a
+                # single-file listing rather than throw away the work — the
+                # listing copy will still describe a single item.
+                primary = bundle_items[0]
+                asset["asset_path"] = primary["asset_path"]
+                asset["glb_path"] = primary["glb_path"]
+                asset["preview_png"] = primary["preview_png"]
+                asset["preview_pngs"] = [primary["preview_png"]]
+                asset["dimensions"] = "3D printable (.stl + .glb, bundle degraded)"
+                model_used = primary["model"]
+                svg_glyph = "stl ✓ (bundle degraded to single)"
+                print(
+                    f"[designer] job_id={job_id} bundle degraded: only 1 of "
+                    f"{len(brief.get('bundle', {}).get('items', []))} "
+                    "items survived; shipping as single",
+                    file=sys.stderr, flush=True,
+                )
+                bundle_done = True
+            else:
+                bundle_done = False
 
-            i23 = None
-            image3d_timed_out = False
-            if nb_available and _is_character_brief(brief) and (tripo_key or meshy_key):
+            if bundle_done:
+                # Bundle (or degraded-single) path took over. Continue to the
+                # downstream listing/publisher handoff at the end of the
+                # function — same shape as the existing happy path.
+                # Set the unused variables that the post-3D block expects.
+                try:
+                    import time as _t
+                    from . import preview as _preview
+                    t0 = _t.time()
+                    angle_paths = _preview.try_render_angles(
+                        asset["glb_path"], output_dir=assets_dir,
+                        job_id=job_id, resolution=768,
+                    )
+                    if angle_paths:
+                        # Prepend angle renders to the existing preview list
+                        # (bundle path already populated preview_pngs with each
+                        # item's primary thumbnail).
+                        asset["preview_pngs"] = angle_paths + asset.get(
+                            "preview_pngs", []
+                        )
+                    print(
+                        f"[designer] job_id={job_id} bundle angle previews done "
+                        f"({len(angle_paths)} files, {_t.time()-t0:.1f}s)",
+                        file=sys.stderr, flush=True,
+                    )
+                except Exception as e:
+                    print(
+                        f"[designer] bundle angle render failed: {e} "
+                        "— shipping with item thumbnails only",
+                        file=sys.stderr, flush=True,
+                    )
+                # Bundle path took over. Skip strategy-1/2 below.
+                i23 = None
+                image3d_timed_out = False
+                nb_available = False
+            else:
+                # Bundle wasn't applicable — proceed with strategy 1/2 below.
+                # Lazy import — falls through to text-to-3D if the module or
+                # CLI is unavailable, never raises.
+                try:
+                    from . import nanobanana as _nb
+                    nb_available = _nb.is_configured()
+                except Exception as e:
+                    print(f"[designer] nanobanana check failed: {e}", file=sys.stderr, flush=True)
+                    nb_available = False
+
+                i23 = None
+                image3d_timed_out = False
+            if not bundle_done and nb_available and _is_character_brief(brief) and (tripo_key or meshy_key):
                 try:
                     i23 = _run_image_to_3d(
                         brief=brief,
@@ -1028,7 +1265,11 @@ def handle(method: str, params: dict) -> dict:
                     # fresh slot at the provider.
                     image3d_timed_out = True
 
-            if i23 is not None:
+            if bundle_done:
+                # Bundle path already populated asset, model_used, svg_glyph.
+                # Skip strategy-1/2.
+                pass
+            elif i23 is not None:
                 glb_path, stl_path, preview_png, model_used = i23
                 print(
                     f"[designer] job_id={job_id} image-to-3d done glb={glb_path}",

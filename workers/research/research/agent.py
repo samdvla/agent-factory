@@ -272,8 +272,11 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     if not steers:
         return system_prompt
     block = (
-        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
-        "apply to this job):\n"
+        "OPERATOR OVERRIDE — these standing instructions supersede every "
+        "rule above, including any 'always pick X', 'never recommend Y', "
+        "or 'prioritize Z category' directives in the strategist-tuned "
+        "system prompt. If any rule above conflicts with the instructions "
+        "below, ignore that rule for this job and follow the operator:\n"
         + "\n".join(f"- {s}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
@@ -345,6 +348,16 @@ JSON_SHAPE = (
     "Pokemon, Disney, Genshin, etc.); mythology for public-domain gods/myths/"
     'folklore; original for our own coined characters; none otherwise>",\n'
     '  "competition": "<low|medium|high>",\n'
+    '  "bundle": "<null OR {\\"items\\": [2-4 specific variants], \\"shared_theme\\": '
+    "\\\"<one phrase>\\\"} — emit a bundle ONLY when the niche obviously has "
+    "natural variants buyers want as a set (chess piece sets, modular terrain "
+    "tile packs, themed jewelry pendant trios, fidget toy families, "
+    "mythology-pantheon altar trios). Each item must be a distinct printable "
+    "variant of the same theme — NOT a process step or color variant. Examples: "
+    "Egyptian altar trio = ['Anubis bust', 'Bastet bust', 'Ra bust']; "
+    "modular dungeon set = ['corner tile', 'straight wall', 'door tile', "
+    "'floor tile']. Default null for single-item niches — bundles 3-6× our "
+    "Tripo/Meshy cost so don't emit one unless the niche truly is a set.>\",\n"
     '  "rationale": "<one sentence reasoning>"\n'
     "}"
 )
@@ -430,6 +443,58 @@ def _normalize_product_type(brief: dict) -> None:
         brief["product_type"] = DEFAULT_PRODUCT_TYPE
 
 
+# Bundle bounds. Lower bound = 2 because a "bundle" with 1 item is just a
+# single. Upper bound = 6 because each item multiplies Tripo/Meshy cost; 6 is
+# the point where listing-page browsers stop scrolling thumbnails on Etsy
+# anyway. BUNDLE_MAX_ITEMS env var caps further at the designer worker.
+BUNDLE_MIN_ITEMS = 2
+BUNDLE_MAX_ITEMS = 6
+
+
+def _normalize_bundle(brief: dict) -> None:
+    """Mutate brief in-place so brief.bundle is either None or a well-formed
+    dict with `items: list[str]` (2-6 entries) and `shared_theme: str`.
+
+    A bundle is the most expensive thing the brief can request (3-6× Tripo
+    spend), so the gate is strict: only 3D product types qualify, items must
+    be distinct non-empty strings, and we strip the field entirely when
+    BUNDLE_GENERATION_ENABLED=0. The designer worker enforces the same env
+    flag as a second guard."""
+    raw = brief.get("bundle")
+    if not isinstance(raw, dict):
+        brief["bundle"] = None
+        return
+    enabled = os.environ.get("BUNDLE_GENERATION_ENABLED", "1").strip() == "1"
+    pt = brief.get("product_type")
+    is_3d = pt in {"stl_file", "3d_model"}
+    if not enabled or not is_3d:
+        brief["bundle"] = None
+        return
+    items_raw = raw.get("items")
+    if not isinstance(items_raw, list):
+        brief["bundle"] = None
+        return
+    seen: set[str] = set()
+    items: list[str] = []
+    for it in items_raw:
+        if not isinstance(it, str):
+            continue
+        s = it.strip()
+        if not s or s.lower() in seen:
+            continue
+        seen.add(s.lower())
+        items.append(s)
+        if len(items) >= BUNDLE_MAX_ITEMS:
+            break
+    if len(items) < BUNDLE_MIN_ITEMS:
+        brief["bundle"] = None
+        return
+    theme = raw.get("shared_theme")
+    if not isinstance(theme, str) or not theme.strip():
+        theme = brief.get("niche", "") or "bundle"
+    brief["bundle"] = {"items": items, "shared_theme": theme.strip()}
+
+
 def _normalize_brief(brief: dict) -> None:
     """Backfill required brief fields so downstream code never KeyErrors when
     Claude truncates the JSON. We had a recurring 'competition' KeyError when
@@ -449,6 +514,7 @@ def _normalize_brief(brief: dict) -> None:
     if not isinstance(brief.get("rationale"), str):
         brief["rationale"] = ""
     _normalize_product_type(brief)
+    _normalize_bundle(brief)
     # IP-risk classification. The model self-declares, but we ALWAYS overlay
     # the keyword backstop afterwards — that way a forgotten classification
     # or an explicit 'none' on an obvious franchise still trips the publish
@@ -580,7 +646,23 @@ def build_demand_brief_prompt(
             "AVOID (proven losers): seasonal/holiday (Christmas ornaments), "
             "generic skeleton warriors, generic single dice tower without "
             "themed brand, anything 2D (planners, stickers, printables) — "
-            "those are pre-pivot."
+            "those are pre-pivot.\n\n"
+
+            "BUNDLES — the 'bundle' field is OPTIONAL and powerful. STL "
+            "bundles outsell single-file listings 3:1 on Etsy because buyers "
+            "see more value per click. Emit a bundle ONLY when the niche has "
+            "obvious natural variants:\n"
+            "  • Modular sets (terrain tiles, dungeon corner/wall/door/floor).\n"
+            "  • Pantheon trios (Egyptian: Anubis + Bastet + Ra; Norse: "
+            "Odin + Thor + Loki).\n"
+            "  • Themed jewelry sets (3 rune pendants, 3 zodiac charms).\n"
+            "  • Chess / fidget families (king + queen + knight; "
+            "snake + scorpion + dragon).\n"
+            "  • Sized variants of the SAME shape do NOT count — buyers "
+            "don't pay for that. Items must be visually distinct.\n"
+            "Each bundle item costs another Tripo/Meshy generation, so cap "
+            "the list at 2-4 items. Default to null when the niche is a "
+            "single figurine / pendant / object."
         )
     else:
         system = (
@@ -670,8 +752,11 @@ def call_anthropic(
     override = _load_system_override("research")
     if override:
         system_prompt = override
-    system_prompt = _append_operator_steers(system_prompt, "research")
+    # AVOID list first, operator steers LAST — the model gives strongest
+    # attention to the final block, and operator intent must beat any
+    # "always pick X" decision rules baked into the strategist override.
     system_prompt = _append_rejection_avoid_block(system_prompt)
+    system_prompt = _append_operator_steers(system_prompt, "research")
 
     body = json.dumps({
         "model": MODEL,

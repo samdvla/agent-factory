@@ -129,7 +129,7 @@ def test_buyer_panel_called_when_api_key_set(tmp_path, monkeypatch):
 
     assert result["ok"] is True
     assert result["sales_w1"] == 5
-    assert result["model"] == "claude-sonnet-4-6"
+    assert result["model"] == "claude-opus-4-7"
     assert result["tokens_in"] == 80
     assert result["tokens_out"] == 30
     assert "strong niche fit" in result["ticker_text"]

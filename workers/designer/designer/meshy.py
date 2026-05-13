@@ -36,6 +36,24 @@ class MeshyError(Exception):
     the designer; the pipeline continues with text-only output."""
 
 
+def _gate_mesh_or_raise(glb_path: str, stl_path: str, job_id: int) -> None:
+    """Same shared gate as tripo._gate_mesh_or_raise — repair + validate
+    Meshy output. MeshQualityError gets wrapped in MeshyError so the
+    designer's existing failure classifier and no-asset-produced path
+    treat mesh-quality rejects identically to provider errors."""
+    from . import mesh_quality as _mq
+    try:
+        metrics = _mq.gate_or_raise(glb_path, stl_path)
+        print(
+            f"[meshy] job_id={job_id} mesh quality ok "
+            f"faces={metrics.get('face_count')} vol={metrics.get('volume', 0):.2f} "
+            f"watertight={metrics.get('is_watertight')}",
+            file=sys.stderr, flush=True,
+        )
+    except _mq.MeshQualityError as e:
+        raise MeshyError(f"Meshy mesh failed quality gate: {e}") from e
+
+
 def _post(url: str, body: dict, api_key: str, timeout: int = 60) -> dict:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -160,6 +178,7 @@ def generate_3d_from_image(
         _tripo.ensure_stl_under_cap(glb_path, stl_path)
     except _tripo.TripoError as e:
         raise MeshyError(f"glb→stl failed: {e}") from e
+    _gate_mesh_or_raise(glb_path, stl_path, job_id)
     thumb = pick_thumbnail_url(data)
     if thumb:
         try:
@@ -278,6 +297,7 @@ def generate_3d(
     except _tripo.TripoError as e:
         raise MeshyError(f"glb→stl failed: {e}") from e
     print(f"[meshy] job_id={job_id} converted stl ({os.path.getsize(stl_path)} bytes)", file=sys.stderr, flush=True)
+    _gate_mesh_or_raise(glb_path, stl_path, job_id)
 
     thumb = pick_thumbnail_url(final_data)
     if thumb:
