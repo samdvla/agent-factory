@@ -23,9 +23,11 @@ import urllib.error
 MODEL = "claude-opus-4-7"
 # Sized to comfortably emit a 10k-char `improved_system_prompt` + a ~500-char
 # rationale + the JSON envelope (each is ~25% extra tokens after escaping).
-# Previous 2500 hit Sonnet's max_tokens mid-string and the JSON parser
-# rejected the truncated payload, wasting the call.
-MAX_TOKENS = 4000
+# Observed in production: 4000 still cut a designer-tuning response mid-string
+# at char 9831 ("Unterminated string starting at line 1 column 9831"), so we
+# bump to 6000 for headroom AND added repair-on-truncate below so a future
+# bump-needed event degrades gracefully instead of wasting the call.
+MAX_TOKENS = 6000
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 # Minimum number of completed designer cycles before we'll attempt a tweak.
@@ -40,6 +42,17 @@ TAIL_LIMIT = 30
 # strategist's tuned variants legitimately run 6-9k chars).
 SYSTEM_MIN_LEN = 400
 SYSTEM_MAX_LEN = 10000
+
+# Bounds for the orchestrator strategist_notes payload. Notes are ADVISORY
+# (appended to the orchestrator's user prompt), not a full prompt replacement
+# like the designer override — so we want them tight and surgical, not long.
+NOTES_MIN_LEN = 80
+NOTES_MAX_LEN = 1500
+
+# Recent-drafts window passed to the orchestrator meta-strategist. Larger
+# than the strategist's outcome TAIL_LIMIT because the orchestrator needs
+# anti-concentration signal, not just revenue signal.
+ORCH_DRAFTS_TAIL_LIMIT = 25
 
 
 def _data_dir() -> str:
@@ -385,10 +398,81 @@ def call_anthropic(api_key: str, system: str, user: str) -> tuple[dict, int, int
     start = text.find("{")
     if start == -1:
         raise ValueError("strategist response had no JSON object")
-    obj, _end = json.JSONDecoder().raw_decode(text[start:])
+    body = text[start:]
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError as e:
+        # Try a single repair pass: when Anthropic hits max_tokens mid-string,
+        # the response ends inside an unterminated value (the symptom we
+        # observed at char 9831). Close the open string and close any open
+        # objects — we lose the tail of the last field but keep the rest.
+        # Only kick in for the specific 'Unterminated string' error; other
+        # decode errors propagate so we see real bugs.
+        if "Unterminated string" not in str(e):
+            raise
+        repaired = _repair_truncated_json(body)
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(repaired)
+            print(
+                f"[strategist] recovered truncated JSON ({len(body)} chars → "
+                f"closed at char {len(repaired)}); response hit max_tokens "
+                f"and was repaired",
+                file=sys.stderr, flush=True,
+            )
+        except json.JSONDecodeError:
+            # Repair didn't save us — surface the original error so the
+            # outer caller's "bad response shape" handler kicks in.
+            raise e
     if not isinstance(obj, dict):
         raise ValueError(f"strategist response was not an object: {type(obj).__name__}")
     return obj, tokens_in, tokens_out
+
+
+def _repair_truncated_json(body: str) -> str:
+    """Close the most-recently-opened string and any unclosed `{` / `[`.
+
+    Used when an LLM response hit max_tokens mid-string. We can't recover
+    the tail of the cut-off value, but we CAN close the JSON so the parser
+    accepts what we have (the head of the truncated field plus everything
+    before it). Caller decides whether the recovered payload is usable.
+
+    The walker mirrors the orchestrator's `_collapse_newlines_in_strings`
+    state machine: tracks in-string + escape state, then appends the
+    closing characters needed to balance.
+    """
+    in_string = False
+    escape = False
+    stack: list[str] = []  # holds '{' or '['
+    for c in body:
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                stack.append("{")
+            elif c == "[":
+                stack.append("[")
+            elif c == "}":
+                if stack and stack[-1] == "{":
+                    stack.pop()
+            elif c == "]":
+                if stack and stack[-1] == "[":
+                    stack.pop()
+    tail = ""
+    if in_string:
+        # An unescaped " ends the string. The character before us was
+        # inside the value, so just close it.
+        tail += '"'
+    # Close any opens in reverse order.
+    for opener in reversed(stack):
+        tail += "}" if opener == "{" else "]"
+    return body + tail
 
 
 def handle(method: str, params: dict) -> dict:
@@ -397,7 +481,228 @@ def handle(method: str, params: dict) -> dict:
     return process_job(params.get("job_id", 0), params.get("payload", {}))
 
 
+def _read_recent_drafts(limit: int = ORCH_DRAFTS_TAIL_LIMIT) -> list[dict]:
+    """Read the last N publisher records (drafts the pipeline already
+    produced). Used by the orchestrator-tuning path to surface
+    anti-concentration signal — distinct from the strategist's outcome
+    feed which only contains items with actual sales."""
+    p = os.path.join(_data_dir(), "publisher_output.json")
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return data[-limit:]
+
+
+def build_orchestrator_notes_prompt(
+    current_notes: str | None,
+    outcomes: list[dict],
+    recent_drafts: list[dict],
+) -> tuple[str, str]:
+    """Synthesis prompt for tuning the orchestrator (Strategy Lead).
+
+    Unlike the designer-tuning path, this does NOT rewrite the orchestrator's
+    full system prompt — the orchestrator's prompt is assembled dynamically
+    each cycle (pool selection, product rotation, focus mode). Instead we
+    produce a short ADVISORY note that the orchestrator appends to its user
+    prompt as the last thing the model reads before picking a niche. This
+    keeps the dynamic assembly intact while still giving the meta-strategist
+    a high-attention slot.
+    """
+    cur = current_notes or "(no prior notes — the orchestrator is running on its built-in category list only)"
+    drafts_summary = "(no recent drafts yet)"
+    if recent_drafts:
+        recent_niches = [d.get("niche") for d in recent_drafts[-10:] if d.get("niche")]
+        if recent_niches:
+            drafts_summary = "Last drafts: " + " | ".join(str(n) for n in recent_niches)
+
+    system = (
+        "PERSONA — You are the Strategy Lead's TUNER. The orchestrator (a "
+        "Claude Opus call) picks ONE niche_seed per cycle and hands it down "
+        "the pipeline. You don't rewrite its full system prompt — that's "
+        "assembled dynamically each cycle. Instead you produce a SHORT "
+        "advisory note that the orchestrator reads as the last thing before "
+        "it decides. Your note becomes the LAST block in the orchestrator's "
+        "user prompt (last tokens = strongest attention), so make every "
+        "sentence pull weight on the decision.\n\n"
+        "WHAT THE ORCHESTRATOR ALREADY SEES on its own:\n"
+        " • Its hardcoded category universe (tabletop minis, jewelry, "
+        "decor, cosplay, seasonal, everyday-carry, educational, pet).\n"
+        " • Recent outcomes bucketed into Top performers / Promising "
+        "(traction but no sales) / Underperformers — read straight from "
+        "outcomes.jsonl.\n"
+        " • Recent drafts with over-concentrated theme words flagged.\n"
+        " • Operator steers (highest-priority overrides) and rejections.\n"
+        " • Live trend signals (Reddit / Google Trends / YouTube).\n\n"
+        "WHAT YOUR NOTE SHOULD ADD on top of that:\n"
+        " • Cross-niche patterns the orchestrator can't infer from a single "
+        "outcome row — e.g. 'every mythology niche we shipped at 28mm "
+        "stalled on conversion; the 80mm desk figurines converted. Bias "
+        "scale up next cycle.'\n"
+        " • Adjacency suggestions: when X sells well, what should we try "
+        "NEXT — not what to copy.\n"
+        " • Diagnoses of failure modes: if Promising niches are stacking up "
+        "(traffic but no sales), that's a listing/price problem, not a "
+        "niche-pick problem; the orchestrator should keep picking similar.\n"
+        " • Bias instructions when one category is over-explored vs another "
+        "starved (you can see this from outcome volume distribution).\n\n"
+        "WHAT YOUR NOTE SHOULD NOT DO:\n"
+        " • Reproduce the orchestrator's hardcoded category list.\n"
+        " • Issue generic 'focus on what sells' advice — useless.\n"
+        " • Pick a specific niche — that's the orchestrator's job.\n"
+        " • Mention SVG, stickers, planners, or any pre-pivot product.\n"
+        " • Exceed 1500 chars. Aim for 400-900 — surgical, not exhaustive.\n\n"
+        "OUTPUT FORMAT — return JSON ONLY, no markdown fences:\n"
+        "{\n"
+        '  "strategist_notes": "<short paragraph or 3-5 bullet lines of '
+        'tuning guidance>",\n'
+        '  "rationale": "<2-3 sentences: what pattern you noticed, why this '
+        'note moves the needle>"\n'
+        "}\n"
+        f"The notes must be between {NOTES_MIN_LEN} and {NOTES_MAX_LEN} chars."
+    )
+
+    user = (
+        "Recent outcomes (most recent last):\n"
+        f"{summarize_outcomes(outcomes)}\n\n"
+        f"{drafts_summary}\n\n"
+        "Current strategist_notes the orchestrator is reading:\n"
+        f"---\n{cur}\n---\n\n"
+        "Produce a fresh, surgical strategist_notes payload."
+    )
+    return system, user
+
+
+def _process_orchestrator_tuning(job_id: int) -> dict:
+    """Meta-strategist tick for the orchestrator. Reads outcomes + recent
+    drafts, asks Claude for a short advisory note, writes it to
+    prompts.json under `orchestrator.strategist_notes`. The orchestrator
+    worker reads this on its next job."""
+    outcomes = read_outcomes()
+    if len(outcomes) < MIN_OUTCOMES:
+        print(
+            f"[strategist→orchestrator] job_id={job_id} only "
+            f"{len(outcomes)} outcomes — need ≥{MIN_OUTCOMES}",
+            file=sys.stderr, flush=True,
+        )
+        return {
+            "ok": True,
+            "ticker_text": f"strategist · orch tuning waiting ({len(outcomes)}/{MIN_OUTCOMES} outcomes)",
+            "role_tweaked": None,
+            "model": MODEL,
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY not set",
+                "ticker_text": "strategist→orchestrator failed: no API key"}
+
+    prompts = read_prompts()
+    current_notes: str | None = None
+    if isinstance(prompts.get("orchestrator"), dict):
+        cur = prompts["orchestrator"].get("strategist_notes")
+        if isinstance(cur, str):
+            current_notes = cur
+    recent_drafts = _read_recent_drafts()
+
+    system, user = build_orchestrator_notes_prompt(current_notes, outcomes, recent_drafts)
+    try:
+        result, tokens_in, tokens_out = call_anthropic(api_key, system, user)
+    except Exception as e:
+        msg = str(e)
+        print(f"[strategist→orchestrator] job_id={job_id} ANTHROPIC ERROR: {msg}",
+              file=sys.stderr, flush=True)
+        return {"ok": False, "error": msg,
+                "ticker_text": f"strategist→orchestrator failed: {msg[:80]}"}
+
+    notes = result.get("strategist_notes")
+    rationale = result.get("rationale") or ""
+    if not isinstance(notes, str):
+        return {"ok": False, "error": "no strategist_notes in response",
+                "ticker_text": "strategist→orchestrator: bad response shape"}
+    if not (NOTES_MIN_LEN <= len(notes) <= NOTES_MAX_LEN):
+        return {
+            "ok": False,
+            "error": f"notes length {len(notes)} outside [{NOTES_MIN_LEN},{NOTES_MAX_LEN}]",
+            "ticker_text": "strategist→orchestrator rejected: bad length",
+        }
+
+    orch_section = prompts.get("orchestrator") if isinstance(prompts.get("orchestrator"), dict) else {}
+    orch_section["strategist_notes"] = notes
+    orch_section["last_strategist_rationale"] = rationale
+    orch_section["last_strategist_ts"] = int(time.time())
+    prompts["orchestrator"] = orch_section
+    try:
+        write_prompts(prompts)
+    except Exception as e:
+        return {"ok": False, "error": f"prompts write failed: {e}",
+                "ticker_text": "strategist→orchestrator failed: write error"}
+
+    print(
+        f"[strategist→orchestrator] job_id={job_id} updated notes "
+        f"({len(notes)} chars). rationale: {rationale[:120]}",
+        file=sys.stderr, flush=True,
+    )
+    summary = rationale.strip() or "Tightened orchestrator notes based on recent outcomes."
+    messages = [
+        {
+            "from": "strategist",
+            "to": "orchestrator",
+            "topic": "notes_update",
+            "importance": "heads_up",
+            "content": (
+                f"Strategy Lead — refreshed your strategist_notes. They load on "
+                f"your next niche-pick job.\n\n"
+                f"Pattern across the last {len(outcomes)} outcomes: {summary}\n\n"
+                f"Advisory only — operator steers still win in the prompt order."
+            ),
+        },
+        {
+            "from": "strategist",
+            "to": "*",
+            "topic": "notes_update",
+            "importance": "info",
+            "content": (
+                f"Refreshed the Strategy Lead's notes off the last {len(outcomes)} outcomes. "
+                f"Headline: {summary[:200]}"
+            ),
+        },
+    ]
+    return {
+        "ok": True,
+        "role_tweaked": "orchestrator",
+        "rationale": rationale,
+        "ticker_text": f"strategist → orchestrator: {rationale[:80]}",
+        "model": MODEL,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "messages": messages,
+    }
+
+
 def process_job(job_id: int, payload: dict) -> dict:
+    # Dispatch by `target` field. Default "designer" preserves the original
+    # behavior (the Rust loop alternates "designer" / "orchestrator" by
+    # tick; old enqueues without `target` continue to tune the designer).
+    target = "designer"
+    if isinstance(payload, dict):
+        t = payload.get("target")
+        if isinstance(t, str) and t.strip():
+            target = t.strip().lower()
+    if target == "orchestrator":
+        return _process_orchestrator_tuning(job_id)
+    if target != "designer":
+        return {"ok": False,
+                "error": f"unknown strategist target: {target}",
+                "ticker_text": f"strategist: unknown target {target}"}
+
     outcomes = read_outcomes()
     if len(outcomes) < MIN_OUTCOMES:
         print(
@@ -465,6 +770,7 @@ def process_job(job_id: int, payload: dict) -> dict:
     # Designer is the direct recipient; the broadcast keeps research / listing
     # aware that the playbook just shifted under them.
     summary = rationale.strip() or "Tightened designer prompt based on recent outcomes."
+    outcome_count = len(read_outcomes())
     messages = [
         {
             "from": "strategist",
@@ -472,8 +778,8 @@ def process_job(job_id: int, payload: dict) -> dict:
             "topic": "prompt_update",
             "importance": "heads_up",
             "content": (
-                f"Updated your system prompt ({len(improved)} chars). "
-                f"Why: {summary}"
+                f"Mara — refreshed your system prompt. It lands on your next job.\n\n"
+                f"What changed, based on the last {outcome_count} outcomes: {summary}"
             ),
         },
         {
@@ -482,8 +788,8 @@ def process_job(job_id: int, payload: dict) -> dict:
             "topic": "prompt_update",
             "importance": "info",
             "content": (
-                f"Designer playbook refreshed after {len(read_outcomes())} outcomes. "
-                f"Headline: {summary[:160]}"
+                f"Refreshed Mara's system prompt off the last {outcome_count} outcomes. "
+                f"Headline: {summary[:200]}"
             ),
         },
     ]

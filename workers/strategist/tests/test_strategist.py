@@ -149,3 +149,201 @@ def test_rejects_bad_length_override(tmp_path, monkeypatch):
     assert "outside" in result["error"]
     # No prompts.json should have been written.
     assert not (tmp_path / "prompts.json").exists()
+
+
+# --- orchestrator-tuning path (meta-strategist) ---
+#
+# Same worker, dispatched by payload.target. target="orchestrator" writes
+# advisory `strategist_notes` into prompts.json under the orchestrator
+# section. The notes are short (NOTES_MIN_LEN..NOTES_MAX_LEN), distinct
+# from the designer's full system_override.
+
+
+from strategist.agent import (  # noqa: E402
+    NOTES_MIN_LEN,
+    NOTES_MAX_LEN,
+    build_orchestrator_notes_prompt,
+)
+
+
+def test_build_orchestrator_notes_prompt_mentions_orchestrator_responsibilities():
+    """The synthesis prompt must teach the model what the orchestrator
+    actually does (picks niche_seed) and what the model should AVOID
+    producing (full prompt rewrites, generic advice, specific niches)."""
+    system, user = build_orchestrator_notes_prompt(None, [], [])
+    sys_l = system.lower()
+    assert "niche_seed" in sys_l or "niche-seed" in sys_l
+    assert "strategist_notes" in sys_l
+    assert "advisory" in sys_l
+    # No prompt-replacement framing.
+    assert "improved_system_prompt" not in sys_l
+
+
+def test_orchestrator_target_below_min_outcomes_returns_waiting(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    out_path = tmp_path / "outcomes.jsonl"
+    out_path.write_text(json.dumps({"niche": "x", "sales": 0}) + "\n")
+    result = process_job(7, {"target": "orchestrator"})
+    assert result["ok"] is True
+    assert result["role_tweaked"] is None
+    assert "waiting" in result["ticker_text"].lower()
+
+
+def test_orchestrator_target_writes_strategist_notes(tmp_path, monkeypatch):
+    """When target=orchestrator and outcomes are sufficient, the notes land
+    in prompts.json under orchestrator.strategist_notes."""
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    out_path = tmp_path / "outcomes.jsonl"
+    out_path.write_text("\n".join(
+        json.dumps({"niche": f"n{i}", "sales": i, "revenue_usd": i * 2.0})
+        for i in range(MIN_OUTCOMES + 1)
+    ))
+    notes_payload = "n" * (NOTES_MIN_LEN + 50)
+    fake_response = {
+        "strategist_notes": notes_payload,
+        "rationale": "Mythology niches saturating; bias scale up.",
+    }
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *a):
+            return False
+
+        def read(self_inner):
+            return json.dumps({
+                "content": [{"type": "text", "text": json.dumps(fake_response)}],
+                "usage": {"input_tokens": 80, "output_tokens": 300},
+            }).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp())
+
+    result = process_job(21, {"target": "orchestrator"})
+    assert result["ok"] is True
+    assert result["role_tweaked"] == "orchestrator"
+    prompts = json.loads((tmp_path / "prompts.json").read_text())
+    assert prompts["orchestrator"]["strategist_notes"] == notes_payload
+    assert "mythology" in prompts["orchestrator"]["last_strategist_rationale"].lower()
+    # Designer section must be untouched.
+    assert "designer" not in prompts or "system_override" not in prompts.get("designer", {})
+
+
+def test_orchestrator_target_rejects_bad_notes_length(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    out_path = tmp_path / "outcomes.jsonl"
+    out_path.write_text("\n".join(
+        json.dumps({"niche": f"n{i}", "sales": 1}) for i in range(MIN_OUTCOMES + 1)
+    ))
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *a):
+            return False
+
+        def read(self_inner):
+            return json.dumps({
+                "content": [{"type": "text", "text": json.dumps({
+                    "strategist_notes": "too short",
+                    "rationale": "tried",
+                })}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp())
+
+    result = process_job(33, {"target": "orchestrator"})
+    assert result["ok"] is False
+    assert "outside" in result["error"]
+    # prompts.json must not exist — bad-length reject leaves disk clean.
+    assert not (tmp_path / "prompts.json").exists()
+
+
+def test_unknown_target_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    result = process_job(99, {"target": "publisher"})
+    assert result["ok"] is False
+    assert "unknown" in result["error"].lower()
+
+
+# --- JSON repair on max_tokens truncation ---
+#
+# Anthropic responses that hit max_tokens mid-string produce
+# "Unterminated string starting at line 1 column N" from json.JSONDecoder.
+# The repair pass closes the open string + any open braces so we recover
+# the head of the partial response instead of wasting the call.
+
+
+from strategist.agent import (  # noqa: E402
+    _repair_truncated_json,
+    call_anthropic,
+)
+
+
+def test_repair_truncated_json_closes_open_string_and_object():
+    """Simulate the exact failure mode: response truncated mid-value of
+    improved_system_prompt. Repair must close the string and the object."""
+    truncated = (
+        '{"improved_system_prompt": "You are the Designer. Be precise.\\n'
+        'Subject + pose specificity helps the model produce printable'
+    )
+    fixed = _repair_truncated_json(truncated)
+    # Must produce parseable JSON.
+    obj = json.loads(fixed)
+    assert isinstance(obj, dict)
+    assert obj["improved_system_prompt"].startswith("You are the Designer.")
+
+
+def test_repair_truncated_json_handles_nested_objects():
+    truncated = '{"a": {"b": "value with no close'
+    fixed = _repair_truncated_json(truncated)
+    obj = json.loads(fixed)
+    assert obj["a"]["b"].startswith("value with no close")
+
+
+def test_repair_truncated_json_noop_on_complete_payload():
+    """Already-closed JSON should round-trip unchanged."""
+    complete = '{"a": 1, "b": "two"}'
+    assert _repair_truncated_json(complete) == complete
+
+
+def test_call_anthropic_recovers_from_truncated_response(monkeypatch):
+    """End-to-end: call_anthropic must call the repair when the LLM cuts off
+    mid-string. The recovered object should still have the head of the
+    truncated field."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    # Simulate Anthropic response with an unterminated string — max_tokens
+    # fired mid-prompt. The "{" prefill makes the body start at the
+    # second character so we drop it like production does.
+    truncated_text = (
+        '{"improved_system_prompt": "You are the Designer at an AI-run shop. '
+        + "x" * 100  # padding so the truncation is obviously mid-string
+    )
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *a):
+            return False
+
+        def read(self_inner):
+            return json.dumps({
+                "content": [{"type": "text", "text": truncated_text}],
+                "usage": {"input_tokens": 100, "output_tokens": 3000},
+            }).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp())
+
+    obj, tin, tout = call_anthropic("k-test", "sys", "user")
+    assert isinstance(obj, dict)
+    assert obj["improved_system_prompt"].startswith("You are the Designer")
+    assert tin == 100
+    assert tout == 3000
