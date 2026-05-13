@@ -873,14 +873,18 @@ pub struct EtsyPublishRow {
     pub url: Option<String>,
     pub published_at: i64,
     pub activated_at: Option<i64>,
+    pub parent_listing_id: Option<i64>,
 }
 
 #[tauri::command]
 pub async fn cmd_etsy_list_publishes(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<EtsyPublishRow>, String> {
-    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, Option<String>, i64, Option<i64>)>(
-        "SELECT id, local_listing_id, etsy_listing_id, state, title, url, published_at, activated_at \
+    let rows = sqlx::query_as::<
+        _,
+        (i64, i64, i64, String, String, Option<String>, i64, Option<i64>, Option<i64>),
+    >(
+        "SELECT id, local_listing_id, etsy_listing_id, state, title, url, published_at, activated_at, parent_listing_id \
          FROM etsy_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
     )
     .bind(state.project_id)
@@ -898,6 +902,7 @@ pub async fn cmd_etsy_list_publishes(
             url: r.5,
             published_at: r.6,
             activated_at: r.7,
+            parent_listing_id: r.8,
         })
         .collect())
 }
@@ -1337,17 +1342,28 @@ pub async fn cmd_resume_from_smoke_test() -> Result<(), String> {
     Ok(())
 }
 
-/// Phase-2 stub for the Regenerate button: drops the local etsy_publishes
-/// row for this listing and enqueues a fresh orchestrator cycle. We do NOT
-/// touch the real Etsy listing (it stays as a draft on Etsy's side) — the
-/// user can clean it up manually.
+/// Legacy alias for cmd_etsy_regenerate_draft. The Discard button was
+/// renamed to Regenerate when the Queue tab was introduced — this entry
+/// stays so external tooling that still calls the old name keeps working.
 #[tauri::command]
 pub async fn cmd_etsy_discard_draft(
     state: State<'_, Arc<AppState>>,
     local_listing_id: i64,
 ) -> Result<(), String> {
+    cmd_etsy_regenerate_draft(state, local_listing_id).await
+}
+
+/// Regenerate: move the draft into the Queue tab (state='queued') and
+/// enqueue an orchestrator job that will produce a successor draft using
+/// this listing as feedback. We keep the row so the Queue tab can show
+/// lineage until the successor is activated.
+#[tauri::command]
+pub async fn cmd_etsy_regenerate_draft(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<(), String> {
     sqlx::query(
-        "DELETE FROM etsy_publishes \
+        "UPDATE etsy_publishes SET state = 'queued' \
          WHERE project_id = ? AND local_listing_id = ? AND state = 'draft'",
     )
     .bind(state.project_id)
@@ -1359,16 +1375,254 @@ pub async fn cmd_etsy_discard_draft(
         &state.pool,
         state.project_id,
         "orchestrator",
-        serde_json::json!({"trigger": "regenerate", "discarded_listing_id": local_listing_id}),
+        serde_json::json!({
+            "trigger": "regenerate",
+            "regenerate_from": local_listing_id,
+        }),
     )
     .await
     .map_err(|e| e.to_string())?;
     state
         .bus
-        .send(SupervisorEvent::EtsyListingPublishFailed {
-            local_listing_id,
-            reason: "discarded by user (regenerate requested)".into(),
-        });
+        .send(SupervisorEvent::EtsyDraftRegenerated { local_listing_id });
+    Ok(())
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ListingRejectionRow {
+    pub id: i64,
+    pub local_listing_id: i64,
+    pub cycle_id: Option<String>,
+    pub title: String,
+    pub niche: Option<String>,
+    /// JSON array of tag strings (as stored).
+    pub tags_json: String,
+    pub description: String,
+    /// Unix millis.
+    pub rejected_at: i64,
+    pub reason: Option<String>,
+}
+
+/// Reject: transition the draft to 'rejected', persist a learning record,
+/// snapshot the recent rejections to ~/.agent-factory/rejections.json so the
+/// Python research worker can inject an "Avoid:" block into its system
+/// prompt, and emit a refresh event.
+#[tauri::command]
+pub async fn cmd_etsy_reject_draft(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+    reason: Option<String>,
+) -> Result<(), String> {
+    // Pull the metadata we need for the learning record. Title comes from the
+    // publish row; description / tags / niche / cycle_id come from the same
+    // sources cmd_etsy_listing_review_info reads.
+    let title: String = sqlx::query_scalar(
+        "SELECT title FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .unwrap_or_default();
+
+    // publisher_output.json: description, tags, niche.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let pub_path = PathBuf::from(&home).join(".agent-factory").join("publisher_output.json");
+    let mut description = String::new();
+    let mut tags: Vec<String> = Vec::new();
+    let mut niche: Option<String> = None;
+    if let Ok(text) = std::fs::read_to_string(&pub_path) {
+        if let Ok(records) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(arr) = records.as_array() {
+                if let Some(rec) = arr.iter().rev().find(|r| {
+                    r.get("listing_id").and_then(|v| v.as_i64()) == Some(local_listing_id)
+                }) {
+                    description = rec
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    tags = rec
+                        .get("tags")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|t| t.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    niche = rec.get("niche").and_then(|v| v.as_str()).map(String::from);
+                }
+            }
+        }
+    }
+
+    // cycle_id from pipeline_cycles (if any).
+    let cycle_id: Option<String> = sqlx::query_scalar(
+        "SELECT cycle_id FROM pipeline_cycles \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let rejected_at = chrono::Utc::now().timestamp_millis();
+    let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+
+    let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'rejected' \
+         WHERE project_id = ? AND local_listing_id = ?",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO listing_rejections \
+         (project_id, local_listing_id, cycle_id, title, niche, tags_json, description, rejected_at, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .bind(cycle_id.as_deref())
+    .bind(&title)
+    .bind(niche.as_deref())
+    .bind(&tags_json)
+    .bind(&description)
+    .bind(rejected_at)
+    .bind(reason.as_deref())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    if let Err(e) = snapshot_rejections_to_disk(&state.pool, state.project_id).await {
+        tracing::warn!("rejections snapshot failed: {e}");
+    }
+
+    state
+        .bus
+        .send(SupervisorEvent::EtsyDraftRejected { local_listing_id });
+    Ok(())
+}
+
+/// Restore: pull a rejected listing back into Drafts. Removes the matching
+/// rejection learning rows so the orchestrator's avoid-list doesn't keep
+/// fighting the user's reversal.
+#[tauri::command]
+pub async fn cmd_etsy_restore_rejected(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<(), String> {
+    let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'draft' \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'rejected'",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "DELETE FROM listing_rejections \
+         WHERE project_id = ? AND local_listing_id = ?",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    if let Err(e) = snapshot_rejections_to_disk(&state.pool, state.project_id).await {
+        tracing::warn!("rejections snapshot failed: {e}");
+    }
+
+    state
+        .bus
+        .send(SupervisorEvent::EtsyDraftRestored { local_listing_id });
+    Ok(())
+}
+
+/// Cancel a queued regeneration: flip the row back to 'rejected'. The
+/// orchestrator job that was enqueued may still run; the publisher will
+/// see the row is no longer in 'queued' and drop the successor link.
+#[tauri::command]
+pub async fn cmd_etsy_cancel_regeneration(
+    state: State<'_, Arc<AppState>>,
+    local_listing_id: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'rejected' \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'queued'",
+    )
+    .bind(state.project_id)
+    .bind(local_listing_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    state
+        .bus
+        .send(SupervisorEvent::EtsyDraftRejected { local_listing_id });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_etsy_list_rejections(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<ListingRejectionRow>, String> {
+    let limit = limit.unwrap_or(100).clamp(1, 500);
+    let rows: Vec<ListingRejectionRow> = sqlx::query_as(
+        "SELECT id, local_listing_id, cycle_id, title, niche, tags_json, description, rejected_at, reason \
+         FROM listing_rejections WHERE project_id = ? ORDER BY rejected_at DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Write the most recent rejection summaries to a JSON file the Python
+/// research worker reads at prompt-build time. Snapshot-on-write keeps the
+/// worker side trivial — no DB connection from Python, no IPC.
+///
+/// File: `~/.agent-factory/rejections.json`
+/// Shape: `{ "rejections": [{ "title": str, "niche": str | null }, ...] }`
+///
+/// Public so the integration test can exercise the exact path Python depends on.
+pub async fn snapshot_rejections_to_disk(pool: &SqlitePool, project_id: i64) -> anyhow::Result<()> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT title, niche FROM listing_rejections \
+         WHERE project_id = ? ORDER BY rejected_at DESC LIMIT 30",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    let entries: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(title, niche)| serde_json::json!({ "title": title, "niche": niche }))
+        .collect();
+    let blob = serde_json::json!({ "rejections": entries });
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir = PathBuf::from(&home).join(".agent-factory");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("rejections.json");
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&blob)?)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 

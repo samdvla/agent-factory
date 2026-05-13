@@ -244,6 +244,54 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     return system_prompt.rstrip() + "\n\n" + block
 
 
+def _load_rejection_avoid_list(limit: int = 12) -> list[dict]:
+    """Read the rejection learning file written by Rust on every operator
+    Reject action. Returns up to `limit` recent entries — each `{title, niche}`.
+    Best-effort: missing or malformed file returns []."""
+    path = os.path.expanduser("~/.agent-factory/rejections.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        arr = data.get("rejections")
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for item in arr[:limit]:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title")
+            niche = item.get("niche")
+            if isinstance(title, str) and title.strip():
+                out.append({"title": title.strip(), "niche": niche if isinstance(niche, str) else None})
+        return out
+    except Exception:
+        return []
+
+
+def _append_rejection_avoid_block(system_prompt: str) -> str:
+    """Append an Avoid: block listing recently rejected niches/titles so the
+    research model steers away from re-proposing them. No-op when the file
+    is empty or missing."""
+    entries = _load_rejection_avoid_list()
+    if not entries:
+        return system_prompt
+    lines: list[str] = []
+    for e in entries:
+        niche = e.get("niche")
+        title = e["title"]
+        if niche:
+            lines.append(f'- {niche} — "{title[:80]}"')
+        else:
+            lines.append(f'- "{title[:80]}"')
+    block = (
+        "AVOID — the operator already rejected these ideas. Pick a different "
+        "niche AND a meaningfully different angle from each entry. Treat the "
+        "list as forbidden territory, not a starting point:\n"
+        + "\n".join(lines)
+    )
+    return system_prompt.rstrip() + "\n\n" + block
+
+
 JSON_SHAPE = (
     "{\n"
     '  "niche": "<short specific niche, e.g. \'minimalist line art prints\' '
@@ -526,6 +574,7 @@ def call_anthropic(
     if override:
         system_prompt = override
     system_prompt = _append_operator_steers(system_prompt, "research")
+    system_prompt = _append_rejection_avoid_block(system_prompt)
 
     body = json.dumps({
         "model": MODEL,

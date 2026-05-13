@@ -159,6 +159,53 @@ def test_3d_system_prompt_mentions_ip_risk():
     assert "ip_risk" in system.lower() or "IP_RISK" in system
 
 
+def test_rejection_avoid_block_injects_into_system(tmp_path, monkeypatch):
+    """When rejections.json is present, the system prompt sent to Anthropic
+    must contain an AVOID block listing the rejected niches/titles."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    (af_dir / "rejections.json").write_text(json.dumps({
+        "rejections": [
+            {"title": "Ugly goblin warrior STL", "niche": "dnd minis"},
+            {"title": "Generic dragon bust", "niche": None},
+        ]
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from research.agent import call_anthropic
+    call_anthropic("k-test")
+    system = captured["body"]["system"]
+    assert "AVOID" in system
+    assert "dnd minis" in system
+    assert "Ugly goblin warrior STL" in system
+    assert "Generic dragon bust" in system
+
+
+def test_rejection_avoid_block_no_file_is_noop(tmp_path, monkeypatch):
+    """Missing rejections.json must NOT crash and must NOT inject an AVOID block."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    captured = _capture_anthropic_system(monkeypatch)
+    from research.agent import call_anthropic
+    call_anthropic("k-test")
+    assert "AVOID" not in captured["body"]["system"]
+
+
+def test_rejection_avoid_block_malformed_file_is_noop(tmp_path, monkeypatch):
+    """Malformed rejections.json must NOT crash — the helper returns []."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    (af_dir / "rejections.json").write_text("not json {")
+    captured = _capture_anthropic_system(monkeypatch)
+    from research.agent import call_anthropic
+    call_anthropic("k-test")
+    assert "AVOID" not in captured["body"]["system"]
+
+
 def test_loose_json_handles_trailing_prose():
     """Regression test for the 2026-05-12 pipeline halt: Claude returned
     valid JSON followed by an explanatory paragraph. Bare json.loads raised

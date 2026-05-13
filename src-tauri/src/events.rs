@@ -128,6 +128,15 @@ pub enum SupervisorEvent {
         cap: i64,
     },
     EtsyKillSwitchTriggered,
+    EtsyDraftRejected {
+        local_listing_id: i64,
+    },
+    EtsyDraftRegenerated {
+        local_listing_id: i64,
+    },
+    EtsyDraftRestored {
+        local_listing_id: i64,
+    },
     PnlCycleClosed {
         cycle_id: String,
         niche: Option<String>,

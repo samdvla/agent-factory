@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, type ListingReviewInfo, type JobAssetInfo } from "../../api";
 
 /**
@@ -12,23 +13,35 @@ import { api, type ListingReviewInfo, type JobAssetInfo } from "../../api";
  * mount. All fetch errors are non-fatal — the modal renders with whatever
  * fields resolved, missing values display as "—".
  */
+export type ListingReviewMode = "drafts" | "queue" | "active" | "rejected";
+
 type Props = {
   localListingId: number;
   fallbackTitle?: string;
+  mode?: ListingReviewMode;
   onClose: () => void;
   onActivate: (localListingId: number) => Promise<void>;
 };
 
+type Working =
+  | "activate"
+  | "regenerate"
+  | "reject"
+  | "restore"
+  | "cancel"
+  | null;
+
 function ListingReviewModalImpl({
   localListingId,
   fallbackTitle,
+  mode = "drafts",
   onClose,
   onActivate,
 }: Props) {
   const [info, setInfo] = useState<ListingReviewInfo | null>(null);
   const [asset, setAsset] = useState<JobAssetInfo | null>(null);
   const [svg, setSvg] = useState<string | null>(null);
-  const [working, setWorking] = useState<"activate" | "discard" | null>(null);
+  const [working, setWorking] = useState<Working>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,15 +96,64 @@ function ListingReviewModalImpl({
       setWorking(null);
     }
   };
-  const onDiscardClick = async () => {
-    if (!window.confirm("Discard this draft and request a fresh cycle?"))
+  const onRegenerateClick = async () => {
+    if (
+      !window.confirm(
+        "Queue this draft for regeneration? It moves to the Queue tab and a new draft will be produced.",
+      )
+    )
       return;
-    setWorking("discard");
+    setWorking("regenerate");
     try {
-      await api.etsyDiscardDraft(localListingId);
+      await api.etsyRegenerateDraft(localListingId);
       onClose();
     } catch (e) {
-      console.warn("discard draft failed", e);
+      console.warn("regenerate draft failed", e);
+    } finally {
+      setWorking(null);
+    }
+  };
+  const onRejectClick = async () => {
+    if (
+      !window.confirm(
+        "Reject this idea? It moves to the Rejected tab and the orchestrator will steer away from similar niches.",
+      )
+    )
+      return;
+    setWorking("reject");
+    try {
+      await api.etsyRejectDraft(localListingId);
+      onClose();
+    } catch (e) {
+      console.warn("reject draft failed", e);
+    } finally {
+      setWorking(null);
+    }
+  };
+  const onRestoreClick = async () => {
+    setWorking("restore");
+    try {
+      await api.etsyRestoreRejected(localListingId);
+      onClose();
+    } catch (e) {
+      console.warn("restore rejected failed", e);
+    } finally {
+      setWorking(null);
+    }
+  };
+  const onCancelRegenClick = async () => {
+    if (
+      !window.confirm(
+        "Cancel this regeneration? The row moves to Rejected and the queued orchestrator job becomes a no-op.",
+      )
+    )
+      return;
+    setWorking("cancel");
+    try {
+      await api.etsyCancelRegeneration(localListingId);
+      onClose();
+    } catch (e) {
+      console.warn("cancel regeneration failed", e);
     } finally {
       setWorking(null);
     }
@@ -116,9 +178,9 @@ function ListingReviewModalImpl({
     return null;
   }, [asset]);
 
-  return (
-    <div className="review-modal-overlay" role="dialog" aria-modal="true">
-      <div className="review-modal">
+  return createPortal(
+    <div className="review-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="review-modal" onClick={(e) => e.stopPropagation()}>
         <header className="review-modal-header">
           <div>
             <div className="review-modal-title">{headline}</div>
@@ -199,11 +261,11 @@ function ListingReviewModalImpl({
               </div>
             )}
             <div className="review-modal-meta">
-              <div className="review-meta-row">
+              <div className="review-meta-row is-stacked" data-key="niche">
                 <span className="review-meta-label">Niche</span>
                 <span className="review-meta-value">{info?.niche || "—"}</span>
               </div>
-              <div className="review-meta-row">
+              <div className="review-meta-row" data-key="cost">
                 <span className="review-meta-label">Cost</span>
                 <span className="review-meta-value">
                   {info?.total_cost_usd != null
@@ -211,7 +273,7 @@ function ListingReviewModalImpl({
                     : "—"}
                 </span>
               </div>
-              <div className="review-meta-row">
+              <div className="review-meta-row" data-key="revenue">
                 <span className="review-meta-label">Est. revenue</span>
                 <span className="review-meta-value">
                   {info?.estimated_revenue_usd != null
@@ -219,7 +281,7 @@ function ListingReviewModalImpl({
                     : "—"}
                 </span>
               </div>
-              <div className="review-meta-row">
+              <div className="review-meta-row" data-key="net">
                 <span className="review-meta-label">Projected net</span>
                 <span
                   className={`review-meta-value${
@@ -280,34 +342,73 @@ function ListingReviewModalImpl({
         </div>
 
         <footer className="review-modal-footer">
-          <button
-            type="button"
-            className="review-btn is-regen"
-            onClick={onDiscardClick}
-            disabled={working !== null}
-            title="Discard this draft and enqueue a fresh cycle"
-          >
-            {working === "discard" ? "…" : "Regenerate"}
-          </button>
-          <button
-            type="button"
-            className="review-btn is-skip"
-            onClick={onClose}
-            disabled={working !== null}
-          >
-            Skip
-          </button>
-          <button
-            type="button"
-            className="review-btn is-activate"
-            onClick={onActivateClick}
-            disabled={working !== null}
-          >
-            {working === "activate" ? "…" : "Activate"}
-          </button>
+          {mode === "drafts" && (
+            <>
+              <button
+                type="button"
+                className="review-btn is-regen"
+                onClick={onRegenerateClick}
+                disabled={working !== null}
+                title="Queue this draft and enqueue a fresh cycle"
+              >
+                {working === "regenerate" ? "…" : "Regenerate"}
+              </button>
+              <button
+                type="button"
+                className="review-btn is-reject"
+                onClick={onRejectClick}
+                disabled={working !== null}
+                title="Reject this idea — moves to Rejected tab and steers future cycles away"
+              >
+                {working === "reject" ? "…" : "Reject"}
+              </button>
+              <button
+                type="button"
+                className="review-btn is-activate"
+                onClick={onActivateClick}
+                disabled={working !== null}
+              >
+                {working === "activate" ? "…" : "Activate"}
+              </button>
+            </>
+          )}
+          {mode === "queue" && (
+            <button
+              type="button"
+              className="review-btn is-reject"
+              onClick={onCancelRegenClick}
+              disabled={working !== null}
+              title="Cancel this regeneration — moves row back to Rejected"
+            >
+              {working === "cancel" ? "…" : "Cancel regeneration"}
+            </button>
+          )}
+          {mode === "rejected" && (
+            <button
+              type="button"
+              className="review-btn is-activate"
+              onClick={onRestoreClick}
+              disabled={working !== null}
+              title="Restore this listing to Drafts"
+            >
+              {working === "restore" ? "…" : "Restore to Drafts"}
+            </button>
+          )}
+          {mode === "active" && (
+            <button
+              type="button"
+              className="review-btn is-activate"
+              onClick={onClose}
+              disabled={working !== null}
+              title="Close"
+            >
+              Close
+            </button>
+          )}
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

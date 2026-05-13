@@ -16,11 +16,24 @@ export type EtsyPublishRow = {
   id: number;
   local_listing_id: number;
   etsy_listing_id: number;
-  state: string; // 'draft' | 'active' | 'inactive' | 'expired'
+  state: string; // 'draft' | 'queued' | 'active' | 'rejected' | 'inactive' | 'expired'
   title: string;
   url: string | null;
   published_at: number;
   activated_at: number | null;
+  parent_listing_id: number | null;
+};
+
+export type ListingRejectionRow = {
+  id: number;
+  local_listing_id: number;
+  cycle_id: string | null;
+  title: string;
+  niche: string | null;
+  tags_json: string;
+  description: string;
+  rejected_at: number;
+  reason: string | null;
 };
 
 export type ActivateResult = {
@@ -149,6 +162,19 @@ export const api = {
     }),
   etsyDiscardDraft: (localListingId: number) =>
     invoke<void>("cmd_etsy_discard_draft", { localListingId }),
+  etsyRegenerateDraft: (localListingId: number) =>
+    invoke<void>("cmd_etsy_regenerate_draft", { localListingId }),
+  etsyRejectDraft: (localListingId: number, reason?: string | null) =>
+    invoke<void>("cmd_etsy_reject_draft", {
+      localListingId,
+      reason: reason ?? null,
+    }),
+  etsyRestoreRejected: (localListingId: number) =>
+    invoke<void>("cmd_etsy_restore_rejected", { localListingId }),
+  etsyCancelRegeneration: (localListingId: number) =>
+    invoke<void>("cmd_etsy_cancel_regeneration", { localListingId }),
+  etsyListRejections: (limit?: number) =>
+    invoke<ListingRejectionRow[]>("cmd_etsy_list_rejections", { limit }),
   budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
   startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
   resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),

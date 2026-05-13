@@ -331,6 +331,12 @@ export function applySupervisorEvent(
       store.bumpEtsyPublishesRev();
       break;
     }
+    case "etsy_draft_rejected":
+    case "etsy_draft_regenerated":
+    case "etsy_draft_restored": {
+      store.bumpEtsyPublishesRev();
+      break;
+    }
     case "etsy_receipt_ingested": {
       const receiptId = (evt as any).receipt_id as number | undefined;
       const txns = (evt as any).transactions_count as number | undefined;
