@@ -41,6 +41,30 @@ export type ActivateResult = {
   url: string | null;
 };
 
+export type EtsyResyncResult = {
+  checked: number;
+  expired: number;
+  updated_state: number;
+  unchanged: number;
+  errors: number;
+};
+export type MarketplaceResyncStats = EtsyResyncResult;
+export type MarketplaceId =
+  | "etsy"
+  | "cults3d"
+  | "sketchfab"
+  | "mmf"
+  | "gumroad"
+  | "pinterest";
+export type ResyncAllResult = {
+  etsy: MarketplaceResyncStats;
+  cults3d: MarketplaceResyncStats;
+  sketchfab: MarketplaceResyncStats;
+  mmf: MarketplaceResyncStats;
+  gumroad: MarketplaceResyncStats;
+  pinterest: MarketplaceResyncStats;
+};
+
 export type CycleSummary = {
   cycle_id: string;
   niche: string | null;
@@ -124,9 +148,25 @@ export interface AgentTodayStats {
   failed_today: number;
 }
 
+export interface RevenueBySource {
+  source: string;
+  net_usd: number;
+  sales_count: number;
+}
+
+export interface SpendByModel {
+  model: string;
+  usd: number;
+  calls: number;
+}
+
 export interface TodayStats {
   budget_today_usd: number;
   revenue_today_usd: number;
+  budget_lifetime_usd: number;
+  revenue_lifetime_usd: number;
+  revenue_by_source: RevenueBySource[];
+  spend_by_model: SpendByModel[];
   per_agent: AgentTodayStats[];
 }
 
@@ -157,6 +197,11 @@ export const api = {
       localListingId,
     }),
   etsyKillSwitch: () => invoke<void>("cmd_etsy_kill_switch"),
+  etsyResyncListings: () => invoke<EtsyResyncResult>("cmd_etsy_resync_listings"),
+  resyncMarketplace: (marketplace: MarketplaceId): Promise<MarketplaceResyncStats> =>
+    invoke("cmd_resync_marketplace", { marketplace }),
+  resyncAllMarketplaces: (): Promise<ResyncAllResult> =>
+    invoke("cmd_resync_all_marketplaces"),
   listRecentCycles: (limit?: number) =>
     invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit }),
   listWealth: () => invoke<AgentWealth[]>("cmd_list_wealth"),
@@ -283,6 +328,11 @@ export const api = {
   mmfVerify: (apiKey: string): Promise<MmfVerifyOk> =>
     invoke("cmd_mmf_verify", { apiKey }),
   mmfStatus: (): Promise<MmfStatus> => invoke("cmd_mmf_status"),
+  mmfStartOAuth: (clientId: string, clientSecret: string): Promise<OAuthInit> =>
+    invoke("cmd_mmf_start_oauth", { clientId, clientSecret }),
+  mmfDisconnect: (): Promise<void> => invoke("cmd_mmf_disconnect"),
+  mmfLastOAuthError: (): Promise<string | null> =>
+    invoke("cmd_mmf_last_oauth_error"),
   mmfSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_mmf_set_enabled", { enabled }),
   mmfSetSellPaid: (sell: boolean): Promise<void> =>
@@ -516,6 +566,8 @@ export type MmfStatus = {
   sell_paid: boolean;
   daily_cap: number;
   today_count: number;
+  client_id: string | null;
+  oauth_user_id: string | null;
 };
 export type MmfVerifyOk = { account: string };
 export type MmfPublishRow = {

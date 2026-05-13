@@ -138,11 +138,11 @@ def generate_reference_image(
     aspect_ratio: str = DEFAULT_ASPECT_RATIO,
     model: str = DEFAULT_MODEL,
     timeout: int = DEFAULT_TIMEOUT_SEC,
-) -> str:
-    """Render `prompt` to `{assets_dir}/{job_id}-ref.png` and return the
-    path. Signature matches nanobanana.generate_reference_image so call
-    sites don't branch — nanobanana.py dispatches here when the Gemini
-    key is set.
+) -> tuple[str, str]:
+    """Render `prompt` to `{assets_dir}/{job_id}-ref.png`. Returns
+    `(path, backend_model)` — the model name is the budget-ledger
+    identifier the caller stamps on its provider_calls entry, so the
+    supervisor can record an accurate per-call cost.
 
     `api_key` is accepted for back-compat with the older signature but
     ignored; the real key comes from GEMINI_IMAGE_API_KEY env.
@@ -213,4 +213,4 @@ def generate_reference_image(
         f"[gemini_image] job_id={job_id} saved {len(image_bytes)} bytes → {dest}",
         file=sys.stderr, flush=True,
     )
-    return dest
+    return dest, model

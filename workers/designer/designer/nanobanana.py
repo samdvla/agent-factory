@@ -147,9 +147,16 @@ def generate_reference_image(
     aspect_ratio: str = DEFAULT_ASPECT_RATIO,
     model: str = DEFAULT_MODEL,
     timeout: int = DEFAULT_TIMEOUT_SEC,
-) -> str:
+) -> tuple[str, str]:
     """Render `prompt` to a reference PNG saved at
-    `{assets_dir}/{job_id}-ref.png`. Returns the absolute path.
+    `{assets_dir}/{job_id}-ref.png`. Returns `(path, backend_model)`.
+
+    `backend_model` is the budget-ledger identifier for the model that
+    actually generated the image — `gemini-3.1-flash-image-preview` /
+    `gemini-3-pro-image-preview` when the direct Gemini path runs,
+    or the Higgsfield CLI model id (`nano_banana_2`) when falling back
+    to the CLI. Callers stamp this into provider_calls so the
+    supervisor records the right per-call cost.
 
     `api_key` is accepted for backwards compatibility with the previous
     Gemini-direct signature, but ignored — Higgsfield CLI handles its
@@ -263,7 +270,7 @@ def generate_reference_image(
         f"[nanobanana] job_id={job_id} saved {size} bytes → {path}",
         file=sys.stderr, flush=True,
     )
-    return path
+    return path, model
 
 
 def verify_api_key(api_key: str | None = None) -> None:

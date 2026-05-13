@@ -1017,6 +1017,386 @@ pub async fn cmd_etsy_activate_listing(
     })
 }
 
+#[derive(Serialize, Default, Clone)]
+pub struct MarketplaceResyncStats {
+    pub checked: i64,
+    /// Listings the marketplace returned 404 for — we mark these
+    /// `expired` locally. The Etsy panel tabs already hide that state;
+    /// other marketplaces will too once the panel re-fetches.
+    pub expired: i64,
+    /// Listings whose remote state differed from ours; we updated the
+    /// local row to match. Currently only set by Etsy (the only
+    /// marketplace where we read remote state out of the API response).
+    pub updated_state: i64,
+    pub unchanged: i64,
+    pub errors: i64,
+}
+
+#[derive(Serialize, Default)]
+pub struct ResyncAllResult {
+    pub etsy: MarketplaceResyncStats,
+    pub cults3d: MarketplaceResyncStats,
+    pub sketchfab: MarketplaceResyncStats,
+    pub mmf: MarketplaceResyncStats,
+    pub gumroad: MarketplaceResyncStats,
+    pub pinterest: MarketplaceResyncStats,
+}
+
+/// Generic URL-existence check across any of our marketplace tables.
+/// Used for every marketplace where listings live at a stable public URL
+/// (Cults3D, Sketchfab, MMF, Gumroad, Pinterest). Etsy needs API-based
+/// resync instead because drafts aren't publicly visible.
+///
+/// `table` and `url_col` are hardcoded callers — never user-provided — so
+/// the runtime-formatted SQL is safe from injection.
+async fn resync_via_public_url(
+    client: &reqwest::Client,
+    pool: &sqlx::SqlitePool,
+    project_id: i64,
+    table: &'static str,
+    url_col: &'static str,
+) -> MarketplaceResyncStats {
+    let mut stats = MarketplaceResyncStats::default();
+    let select_sql = format!(
+        "SELECT id, {url_col}, state FROM {table} WHERE project_id = ?"
+    );
+    let update_sql = format!("UPDATE {table} SET state = 'expired' WHERE id = ?");
+
+    let rows: Vec<(i64, Option<String>, String)> =
+        match sqlx::query_as(&select_sql).bind(project_id).fetch_all(pool).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("resync {table}: SELECT failed: {e}");
+                return stats;
+            }
+        };
+
+    for (id, url_opt, state) in rows {
+        stats.checked += 1;
+        // 'expired' rows stay parked — we don't bother re-checking them.
+        if state == "expired" {
+            stats.unchanged += 1;
+            continue;
+        }
+        // Rows that never got a public URL recorded (pending / errored
+        // publishes) are skipped — there's nothing to check against.
+        let Some(url) = url_opt.filter(|u| !u.is_empty()) else {
+            stats.unchanged += 1;
+            continue;
+        };
+        let resp = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("resync {table}: GET {url} failed: {e}");
+                stats.errors += 1;
+                continue;
+            }
+        };
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            if let Err(e) = sqlx::query(&update_sql)
+                .bind(id)
+                .execute(pool)
+                .await
+            {
+                tracing::warn!("resync {table}: UPDATE expired failed for id={id}: {e}");
+                stats.errors += 1;
+                continue;
+            }
+            stats.expired += 1;
+        } else {
+            stats.unchanged += 1;
+        }
+    }
+    stats
+}
+
+/// Resync every marketplace in one shot. Etsy uses its API to detect
+/// pruned drafts (which aren't publicly addressable); the others use a
+/// plain HTTP GET to the stored public listing URL and mark 404s as
+/// expired. Returns per-marketplace stats so the UI can render a single
+/// "Synced N listings: X expired" line.
+#[tauri::command]
+pub async fn cmd_resync_all_marketplaces(
+    state: State<'_, Arc<AppState>>,
+) -> Result<ResyncAllResult, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut result = ResyncAllResult::default();
+
+    // Etsy — API-based. Best effort: failures here don't sink the rest.
+    match etsy_resync_inner(&state, &client).await {
+        Ok(s) => result.etsy = s,
+        Err(e) => {
+            tracing::warn!("resync etsy failed: {e}");
+            result.etsy.errors = 1;
+        }
+    }
+
+    // The remaining marketplaces share the URL-existence path.
+    result.cults3d =
+        resync_via_public_url(&client, &state.pool, state.project_id, "cults3d_publishes", "url")
+            .await;
+    result.sketchfab = resync_via_public_url(
+        &client,
+        &state.pool,
+        state.project_id,
+        "sketchfab_publishes",
+        "url",
+    )
+    .await;
+    result.mmf =
+        resync_via_public_url(&client, &state.pool, state.project_id, "mmf_publishes", "url")
+            .await;
+    result.gumroad = resync_via_public_url(
+        &client,
+        &state.pool,
+        state.project_id,
+        "gumroad_publishes",
+        "short_url",
+    )
+    .await;
+    result.pinterest = resync_via_public_url(
+        &client,
+        &state.pool,
+        state.project_id,
+        "pinterest_pins",
+        "url",
+    )
+    .await;
+
+    // Single refresh signal so the Etsy panel re-reads (other panels poll
+    // every 15s, so they'll pick up changes naturally).
+    let etsy_changed = result.etsy.expired + result.etsy.updated_state;
+    if etsy_changed > 0 {
+        state.bus.send(SupervisorEvent::EtsyDraftRestored {
+            local_listing_id: 0,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Etsy's resync path, factored out so cmd_resync_all_marketplaces can
+/// call it without going through Tauri's command frame.
+async fn etsy_resync_inner(
+    state: &State<'_, Arc<AppState>>,
+    client: &reqwest::Client,
+) -> Result<MarketplaceResyncStats, String> {
+    let etsy_status = etsy::load_status();
+    if !etsy_status.connected {
+        return Err("Etsy not connected".into());
+    }
+    let shop_id = etsy_status
+        .shop_id
+        .ok_or_else(|| "shop_id missing — reconnect Etsy".to_string())?;
+    if secrets::get("etsy_api_keystring")
+        .map_err(|e| e.to_string())?
+        .map(|k| k.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("etsy_api_keystring not in keychain".into());
+    }
+
+    let rows: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT local_listing_id, etsy_listing_id, state FROM etsy_publishes \
+         WHERE project_id = ?",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let access_token = etsy::ensure_fresh_token(client)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let api_key = etsy::api_key_header().map_err(|e| e.to_string())?;
+
+    let mut result = MarketplaceResyncStats::default();
+
+    for (local_id, etsy_id, local_state) in rows {
+        result.checked += 1;
+        let url = format!(
+            "{}/shops/{}/listings/{}",
+            etsy::API_BASE,
+            shop_id,
+            etsy_id
+        );
+        let resp = match client
+            .get(&url)
+            .bearer_auth(&access_token)
+            .header("x-api-key", &api_key)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("etsy resync GET failed for {etsy_id}: {e}");
+                result.errors += 1;
+                continue;
+            }
+        };
+        let status_code = resp.status();
+        if status_code == reqwest::StatusCode::NOT_FOUND {
+            if local_state == "expired" {
+                result.unchanged += 1;
+                continue;
+            }
+            if let Err(e) = sqlx::query(
+                "UPDATE etsy_publishes SET state = 'expired' \
+                 WHERE project_id = ? AND local_listing_id = ?",
+            )
+            .bind(state.project_id)
+            .bind(local_id)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::warn!("etsy resync UPDATE expired failed for {local_id}: {e}");
+                result.errors += 1;
+                continue;
+            }
+            result.expired += 1;
+            continue;
+        }
+        if !status_code.is_success() {
+            tracing::warn!(
+                "etsy resync GET HTTP {} for listing {}",
+                status_code, etsy_id
+            );
+            result.errors += 1;
+            continue;
+        }
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("etsy resync parse JSON failed for {etsy_id}: {e}");
+                result.errors += 1;
+                continue;
+            }
+        };
+        let remote_state = body
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("draft");
+        if remote_state == local_state {
+            result.unchanged += 1;
+            continue;
+        }
+        if let Err(e) = sqlx::query(
+            "UPDATE etsy_publishes SET state = ? \
+             WHERE project_id = ? AND local_listing_id = ?",
+        )
+        .bind(remote_state)
+        .bind(state.project_id)
+        .bind(local_id)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!("etsy resync UPDATE state failed for {local_id}: {e}");
+            result.errors += 1;
+            continue;
+        }
+        result.updated_state += 1;
+    }
+
+    Ok(result)
+}
+
+/// Thin wrapper so the existing per-Etsy resync button keeps working.
+#[tauri::command]
+pub async fn cmd_etsy_resync_listings(
+    state: State<'_, Arc<AppState>>,
+) -> Result<MarketplaceResyncStats, String> {
+    let client = reqwest::Client::new();
+    let r = etsy_resync_inner(&state, &client).await?;
+    if r.expired + r.updated_state > 0 {
+        state.bus.send(SupervisorEvent::EtsyDraftRestored {
+            local_listing_id: 0,
+        });
+    }
+    Ok(r)
+}
+
+/// Resync a single marketplace. The frontend calls this per-panel from a
+/// "Sync with <marketplace>" button. Dispatches by name — same helpers
+/// the resync-all command uses. Etsy uses its API path; everything else
+/// uses public URL existence checks.
+#[tauri::command]
+pub async fn cmd_resync_marketplace(
+    state: State<'_, Arc<AppState>>,
+    marketplace: String,
+) -> Result<MarketplaceResyncStats, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let stats = match marketplace.as_str() {
+        "etsy" => {
+            let r = etsy_resync_inner(&state, &client).await?;
+            if r.expired + r.updated_state > 0 {
+                state.bus.send(SupervisorEvent::EtsyDraftRestored {
+                    local_listing_id: 0,
+                });
+            }
+            r
+        }
+        "cults3d" => {
+            resync_via_public_url(
+                &client,
+                &state.pool,
+                state.project_id,
+                "cults3d_publishes",
+                "url",
+            )
+            .await
+        }
+        "sketchfab" => {
+            resync_via_public_url(
+                &client,
+                &state.pool,
+                state.project_id,
+                "sketchfab_publishes",
+                "url",
+            )
+            .await
+        }
+        "mmf" => {
+            resync_via_public_url(
+                &client,
+                &state.pool,
+                state.project_id,
+                "mmf_publishes",
+                "url",
+            )
+            .await
+        }
+        "gumroad" => {
+            resync_via_public_url(
+                &client,
+                &state.pool,
+                state.project_id,
+                "gumroad_publishes",
+                "short_url",
+            )
+            .await
+        }
+        "pinterest" => {
+            resync_via_public_url(
+                &client,
+                &state.pool,
+                state.project_id,
+                "pinterest_pins",
+                "url",
+            )
+            .await
+        }
+        other => return Err(format!("unknown marketplace: {other}")),
+    };
+    Ok(stats)
+}
+
 /// Read-only: most recent closed cycles for the UI's P&L panel. Hot-path
 /// safe — pull-based, no events emitted per-job.
 #[tauri::command]
@@ -1833,9 +2213,34 @@ pub struct AgentTodayStats {
 }
 
 #[derive(serde::Serialize)]
+pub struct RevenueBySource {
+    pub source: String,
+    pub net_usd: f64,
+    pub sales_count: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct SpendByModel {
+    pub model: String,
+    pub usd: f64,
+    pub calls: i64,
+}
+
+#[derive(serde::Serialize)]
 pub struct TodayStats {
+    /// Today-only LLM + provider + Etsy spend. Daily caps still read
+    /// this number. Kept for backwards compat with the existing UI;
+    /// the TopBar Net pill now reads the lifetime fields.
     pub budget_today_usd: f64,
     pub revenue_today_usd: f64,
+    /// Lifetime totals (all time, every marketplace, every cost line).
+    /// budget_lifetime_usd sums budget_ledger; revenue_lifetime_usd
+    /// sums revenue_ledger.net_usd. Net = revenue - budget. Single
+    /// source of truth for the Revenue / Net pill.
+    pub budget_lifetime_usd: f64,
+    pub revenue_lifetime_usd: f64,
+    pub revenue_by_source: Vec<RevenueBySource>,
+    pub spend_by_model: Vec<SpendByModel>,
     pub per_agent: Vec<AgentTodayStats>,
 }
 
@@ -1915,9 +2320,32 @@ pub async fn cmd_today_stats(state: State<'_, Arc<AppState>>) -> Result<TodaySta
         })
         .collect();
 
+    let budget_lifetime_usd = crate::budget::lifetime_spend_usd(pool, pid)
+        .await
+        .map_err(|e| e.to_string())?;
+    let revenue_lifetime_usd = crate::revenue::lifetime_revenue_usd(pool, pid)
+        .await
+        .map_err(|e| e.to_string())?;
+    let revenue_by_source: Vec<RevenueBySource> = crate::revenue::lifetime_revenue_by_source(pool, pid)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(source, net_usd, sales_count)| RevenueBySource { source, net_usd, sales_count })
+        .collect();
+    let spend_by_model: Vec<SpendByModel> = crate::budget::lifetime_spend_by_model(pool, pid)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(model, usd, calls)| SpendByModel { model, usd, calls })
+        .collect();
+
     Ok(TodayStats {
         budget_today_usd,
         revenue_today_usd,
+        budget_lifetime_usd,
+        revenue_lifetime_usd,
+        revenue_by_source,
+        spend_by_model,
         per_agent,
     })
 }
@@ -3087,11 +3515,19 @@ pub async fn cmd_youtube_status() -> Result<YoutubeStatus, String> {
 
 #[derive(Serialize)]
 pub struct MmfStatus {
+    /// True when MMF OAuth has been connected (access token in keychain).
+    /// We no longer treat the personal API key as "connected" since MMF
+    /// rejects it for writes — only OAuth counts.
     pub creds_present: bool,
     pub enabled: bool,
     pub sell_paid: bool,
     pub daily_cap: i64,
     pub today_count: i64,
+    /// Echo of client_id so the UI can show "App: XXXX" without exposing
+    /// the secret. Empty when the operator hasn't registered an app yet.
+    pub client_id: Option<String>,
+    /// MMF user_id returned with the OAuth token, for UI display.
+    pub oauth_user_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3128,11 +3564,7 @@ pub async fn cmd_mmf_set_sell_paid(sell: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cmd_mmf_status(state: State<'_, Arc<AppState>>) -> Result<MmfStatus, String> {
-    let creds_present = secrets::get("mmf_api_key")
-        .ok()
-        .flatten()
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
+    let creds_present = crate::mmf_oauth::is_connected();
     let enabled = secrets::get("mmf_enabled")
         .ok()
         .flatten()
@@ -3157,13 +3589,132 @@ pub async fn cmd_mmf_status(state: State<'_, Arc<AppState>>) -> Result<MmfStatus
     .fetch_one(&state.pool)
     .await
     .unwrap_or(0);
+    let client_id = secrets::get("mmf_client_id").ok().flatten();
+    let oauth_user_id = secrets::get("mmf_oauth_user_id").ok().flatten();
     Ok(MmfStatus {
         creds_present,
         enabled,
         sell_paid,
         daily_cap,
         today_count,
+        client_id,
+        oauth_user_id,
     })
+}
+
+/// Begin the MMF OAuth dance. Persists the client creds, builds the
+/// authorize URL the frontend hands to the system browser, and kicks off
+/// the same single-shot callback listener Etsy uses. On success the user
+/// is connected; on failure `mmf_oauth_last_error` is set.
+#[tauri::command]
+pub async fn cmd_mmf_start_oauth(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    client_id: String,
+    client_secret: String,
+) -> Result<OAuthInit, String> {
+    let cid = client_id.trim();
+    let csec = client_secret.trim();
+    if cid.is_empty() || csec.is_empty() {
+        return Err("MMF client_id and client_secret are both required. \
+                    Register an app at myminifactory.com/settings/developer."
+            .into());
+    }
+    secrets::set("mmf_client_id", cid).map_err(|e| format!("save client_id: {e}"))?;
+    secrets::set("mmf_client_secret", csec).map_err(|e| format!("save client_secret: {e}"))?;
+
+    let oauth_state = crate::mmf_oauth::generate_state();
+    {
+        let mut guard = state.pending_oauth.lock().await;
+        // We reuse the same pending_oauth map as Etsy. The value here is a
+        // sentinel so the callback handler can tell which provider this
+        // state belongs to.
+        guard.insert(oauth_state.clone(), "mmf".to_string());
+    }
+    let authorize_url = crate::mmf_oauth::build_authorize_url(cid, &oauth_state);
+
+    // Cancel any in-flight OAuth task so we can rebind the callback port.
+    {
+        let mut guard = state.oauth_task.lock().await;
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let app_state = state.inner().clone();
+    let app_for_task = app.clone();
+    let cid_for_task = cid.to_string();
+    let csec_for_task = csec.to_string();
+    let handle = tokio::spawn(async move {
+        run_mmf_oauth_flow(app_for_task, app_state, cid_for_task, csec_for_task, oauth_state).await;
+    });
+    {
+        let mut guard = state.oauth_task.lock().await;
+        *guard = Some(handle);
+    }
+
+    Ok(OAuthInit { authorize_url })
+}
+
+async fn run_mmf_oauth_flow(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    client_id: String,
+    client_secret: String,
+    oauth_state: String,
+) {
+    let result: anyhow::Result<()> = async {
+        let cb = oauth_server::await_callback(Duration::from_secs(180)).await?;
+        if cb.state != oauth_state {
+            return Err(anyhow::anyhow!(
+                "state mismatch — got `{}`, expected `{}`",
+                cb.state,
+                oauth_state
+            ));
+        }
+        // Sentinel cleanup
+        {
+            let mut guard = state.pending_oauth.lock().await;
+            guard.remove(&cb.state);
+        }
+        let client = reqwest::Client::new();
+        let tokens = crate::mmf_oauth::exchange_code(&client, &client_id, &client_secret, &cb.code)
+            .await?;
+        crate::mmf_oauth::persist_tokens(&tokens)?;
+        // Auto-enable MMF on first successful connect — the operator
+        // ran the OAuth flow specifically because they want it on.
+        let _ = secrets::set("mmf_enabled", "true");
+        let _ = secrets::delete("mmf_oauth_last_error");
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            tracing::info!("mmf oauth connected");
+            let _ = app.emit("mmf_connected", true);
+        }
+        Err(e) => {
+            tracing::error!("mmf oauth flow failed: {e}");
+            let _ = secrets::set("mmf_oauth_last_error", &e.to_string());
+            let mut guard = state.pending_oauth.lock().await;
+            guard.remove(&oauth_state);
+            let _ = app.emit("mmf_oauth_error", e.to_string());
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_disconnect() -> Result<(), String> {
+    crate::mmf_oauth::disconnect().map_err(|e| e.to_string())?;
+    let _ = secrets::set("mmf_enabled", "false");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_last_oauth_error() -> Result<Option<String>, String> {
+    secrets::get("mmf_oauth_last_error").map_err(|e| e.to_string())
 }
 
 #[tauri::command]

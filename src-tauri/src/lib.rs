@@ -13,6 +13,7 @@ pub mod gumroad;
 pub mod gumroad_publish;
 pub mod heartbeat;
 pub mod llm;
+pub mod mmf_oauth;
 pub mod myminifactory;
 pub mod myminifactory_publish;
 pub mod oauth_server;
@@ -24,6 +25,7 @@ pub mod printify;
 pub mod prompts;
 pub mod queue;
 pub mod raster;
+pub mod revenue;
 pub mod secrets;
 pub mod sketchfab;
 pub mod sketchfab_publish;
@@ -156,6 +158,9 @@ pub fn run() {
             commands::cmd_etsy_get_listing_cap,
             commands::cmd_etsy_list_publishes,
             commands::cmd_etsy_activate_listing,
+            commands::cmd_etsy_resync_listings,
+            commands::cmd_resync_all_marketplaces,
+            commands::cmd_resync_marketplace,
             commands::cmd_etsy_kill_switch,
             commands::cmd_list_recent_cycles,
             commands::cmd_list_wealth,
@@ -223,6 +228,9 @@ pub fn run() {
             commands::cmd_mmf_status,
             commands::cmd_mmf_set_daily_cap,
             commands::cmd_mmf_list_publishes,
+            commands::cmd_mmf_start_oauth,
+            commands::cmd_mmf_disconnect,
+            commands::cmd_mmf_last_oauth_error,
             commands::cmd_youtube_verify,
             commands::cmd_youtube_status,
             commands::cmd_higgsfield_status,

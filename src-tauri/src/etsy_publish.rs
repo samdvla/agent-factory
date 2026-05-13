@@ -674,6 +674,24 @@ pub async fn handle_publisher_complete(
             {
                 tracing::error!("insert etsy_publishes failed: {e}");
             }
+            // Etsy charges $0.20 per listing creation. Stamp it on the
+            // budget_ledger so the topbar Net pill sees the real total
+            // cost of shipping each listing, not just the LLM+mesh side.
+            // The per-call rate lives in budget::per_call_usd under the
+            // ledger model "etsy-listing-fee".
+            if let Err(e) = crate::budget::record(
+                pool, project_id, "etsy-listing-fee", 0, 0,
+            ).await {
+                tracing::error!("budget::record etsy-listing-fee failed: {e}");
+            } else {
+                bus.send(SupervisorEvent::BudgetSpent {
+                    role: "publisher".into(),
+                    cost_usd: crate::budget::cost_usd("etsy-listing-fee", 0, 0),
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    model: "etsy-listing-fee".to_string(),
+                });
+            }
             // Fire Pinterest pin in parallel. Pinterest needs the Etsy
             // URL (that's the whole funnel), so this only runs after a
             // successful Etsy publish. Every failure mode inside is

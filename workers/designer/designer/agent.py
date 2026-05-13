@@ -888,16 +888,19 @@ def _run_image_to_3d(
     assets_dir: str,
     meshy_key: str,
     tripo_key: str,
-) -> tuple[str, str, str, str] | None:
-    """Run Nano Banana Pro reference render (via Higgsfield CLI) → chosen
-    image-to-3D provider. Returns (glb_path, stl_path, preview_png,
-    model_used) on success, or None to signal the caller to fall through
-    to text-to-3D. Raises _Image3dTimedOut when the provider was queued
-    and exhausted its poll budget — the caller should NOT cascade in that
-    case (a second 240s wait would likely repeat the same queue stall and
-    trip the supervisor's outer 900s timeout).
+) -> tuple[str, str, str, str, str] | None:
+    """Run a reference image render → chosen image-to-3D provider. Returns
+    (glb_path, stl_path, preview_png, mesh_model, image_gen_model) on
+    success, or None to signal the caller to fall through to text-to-3D.
+    Raises _Image3dTimedOut when the provider was queued and exhausted
+    its poll budget — the caller should NOT cascade in that case (a
+    second 240s wait would likely repeat the same queue stall and trip
+    the supervisor's outer 900s timeout).
 
-    `model_used` is a short tag for budget tracking + UI ticker text.
+    `mesh_model` is the 3D-provider identifier (e.g. tripo-image-to-3d)
+    and `image_gen_model` is the image-generator identifier (e.g.
+    gemini-3.1-flash-image-preview). Both feed budget_ledger as
+    separate per-call charges.
     """
     try:
         from . import nanobanana
@@ -916,7 +919,7 @@ def _run_image_to_3d(
         # api_key arg is a back-compat shim; the Higgsfield CLI handles
         # auth internally so the value is ignored. We pass None to keep
         # the signature explicit at the call site.
-        ref_path = nanobanana.generate_reference_image(
+        ref_path, image_gen_model = nanobanana.generate_reference_image(
             None, prompt, job_id=job_id, assets_dir=assets_dir
         )
     except Exception as e:
@@ -940,7 +943,7 @@ def _run_image_to_3d(
             glb, stl, png = t3d.generate_3d_from_image(
                 tripo_key, ref_path, job_id=job_id, assets_dir=assets_dir
             )
-            return glb, stl, png, "tripo-image-to-3d"
+            return glb, stl, png, "tripo-image-to-3d", image_gen_model
         else:
             if not meshy_key:
                 raise RuntimeError("MESHY_API_KEY not set for image-to-3d")
@@ -948,7 +951,7 @@ def _run_image_to_3d(
             glb, stl, png = m3d.generate_3d_from_image(
                 meshy_key, ref_path, job_id=job_id, assets_dir=assets_dir
             )
-            return glb, stl, png, "meshy-image-to-3d"
+            return glb, stl, png, "meshy-image-to-3d", image_gen_model
     except Exception as e:
         if _looks_like_timeout(e):
             print(
@@ -1140,9 +1143,10 @@ def _generate_bundle_items(
         ).strip()
 
         ref_path: str | None = None
+        image_gen_model: str | None = None
         if nb_available:
             try:
-                ref_path = _nb.generate_reference_image(
+                ref_path, image_gen_model = _nb.generate_reference_image(
                     None, per_item_prompt,
                     job_id=sub_job_id, assets_dir=assets_dir,
                 )
@@ -1154,6 +1158,7 @@ def _generate_bundle_items(
                     file=sys.stderr, flush=True,
                 )
                 ref_path = None
+                image_gen_model = None
 
         try:
             if provider == "tripo":
@@ -1200,6 +1205,10 @@ def _generate_bundle_items(
             "glb_path": glb,
             "preview_png": png,
             "model": model,
+            # The image-gen model is bundle-item-specific (one render per
+            # item) — keep it on the item so the caller can fan it out
+            # into provider_calls without re-counting refs that failed.
+            "image_gen_model": image_gen_model,
         })
 
     return successful
@@ -1231,6 +1240,14 @@ def handle(method: str, params: dict) -> dict:
     is_3d = product_type in ("stl_file", "3d_model")
 
     print(f"[designer] job_id={job_id} calling Anthropic model={MODEL} pt={product_type!r}", file=sys.stderr, flush=True)
+    # provider_calls accumulates every non-Anthropic call this designer
+    # job ran — Tripo / Meshy mesh tasks, Gemini/Higgsfield reference
+    # renders, etc. The supervisor records one budget_ledger row per
+    # entry using the per-call rate card in budget.rs. Token-based
+    # Anthropic cost is reported separately via the top-level `model` +
+    # `tokens_in/out` fields. Designer NEVER puts a 3D-provider name in
+    # `model` — that corrupts the token-pricing math.
+    provider_calls: list[dict] = []
     try:
         asset, tokens_in, tokens_out = call_anthropic(api_key, brief)
         asset_type = asset.get("asset_type", "printable")
@@ -1267,6 +1284,18 @@ def handle(method: str, params: dict) -> dict:
                 tripo_key=tripo_key,
                 meshy_key=meshy_key,
             )
+            # Roll every successful bundle item's provider charges into
+            # provider_calls so the supervisor records each Tripo/Meshy
+            # task + each reference render. Counts collapse by model id
+            # so a 3-item all-Tripo-image-to-3d bundle becomes one row
+            # with calls=3 rather than three identical rows.
+            for it in bundle_items:
+                ig_model = it.get("image_gen_model")
+                if ig_model:
+                    provider_calls.append({"model": ig_model, "calls": 1})
+                m = it.get("model")
+                if m:
+                    provider_calls.append({"model": m, "calls": 1})
             if len(bundle_items) >= 2:
                 primary = bundle_items[0]
                 asset["asset_path"] = primary["asset_path"]
@@ -1388,9 +1417,14 @@ def handle(method: str, params: dict) -> dict:
                 # Skip strategy-1/2.
                 pass
             elif i23 is not None:
-                glb_path, stl_path, preview_png, model_used = i23
+                glb_path, stl_path, preview_png, model_used, image_gen_model = i23
+                # Two provider charges: the reference image render +
+                # the image-to-3D task.
+                provider_calls.append({"model": image_gen_model, "calls": 1})
+                provider_calls.append({"model": model_used, "calls": 1})
                 print(
-                    f"[designer] job_id={job_id} image-to-3d done glb={glb_path}",
+                    f"[designer] job_id={job_id} image-to-3d done glb={glb_path} "
+                    f"(billed: {image_gen_model} + {model_used})",
                     file=sys.stderr, flush=True,
                 )
                 preview_png = _maybe_higgsfield_enhance(
@@ -1483,6 +1517,7 @@ def handle(method: str, params: dict) -> dict:
                                 tripo_key, prompt_3d, job_id=job_id, assets_dir=assets_dir
                             )
                             model_used = "tripo-text-to-model"
+                        provider_calls.append({"model": model_used, "calls": 1})
                         preview_png = _maybe_higgsfield_enhance(
                             preview_png, brief, job_id, assets_dir,
                             elapsed_sec=_time_handle.time() - _handle_t0,
@@ -1580,9 +1615,15 @@ def handle(method: str, params: dict) -> dict:
                 "ok": False,
                 "error": fail_msg,
                 "ticker_text": f"designer → CYCLE STOPPED: {fail_msg}",
-                "model": model_used,
+                # Same shape as the success path: model is always Claude;
+                # provider_calls carries every (possibly successful)
+                # mesh / image-gen task we burned credits on before the
+                # failure. Even on a failed cycle the operator paid for
+                # the upstream calls and the ledger must reflect that.
+                "model": MODEL,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
+                "provider_calls": provider_calls,
                 "messages": [
                     {
                         "from": "designer",
@@ -1640,13 +1681,23 @@ def handle(method: str, params: dict) -> dict:
                 "content": broadcast,
             },
         ]
+        # `model` is the LLM that consumed `tokens_in/out` — always Claude
+        # for designer jobs (the brief-generation call). The 3D / image
+        # provider names live in provider_calls so the supervisor bills
+        # them separately at flat per-call rates. Mixing them under
+        # `model` is what historically caused tripo/meshy/gemini spend
+        # to be silently undercounted.
+        llm_model = SVG_MODEL if (
+            isinstance(model_used, str) and model_used == SVG_MODEL
+        ) else MODEL
         result: dict = {
             "ok": True,
             "asset": asset,
             "ticker_text": f"designer → listing: {asset_type} · {dimensions} · {svg_glyph}",
-            "model": model_used,
+            "model": llm_model,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "provider_calls": provider_calls,
             "handoff": {
                 "to_role": "listing",
                 "payload": handoff_payload,

@@ -125,6 +125,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   budgetCapUsd: 10.0,
   budgetCapped: false,
   revenueTodayUsd: 0,
+  budgetLifetimeUsd: 0,
+  revenueLifetimeUsd: 0,
   revenueByRole: {},
   rewardsByRole: readRewardsDefault(),
   handoffs: [],
@@ -233,6 +235,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
   setBudgetCapped: (v) => set({ budgetCapped: v }),
   setRevenueToday: (usd) => set({ revenueTodayUsd: usd }),
+  setLifetimeTotals: (revenueUsd, budgetUsd) =>
+    set({ revenueLifetimeUsd: revenueUsd, budgetLifetimeUsd: budgetUsd }),
   hydratePerAgentTodayStats: (stats) => set((s) => {
     // Build a role → counters map from the DB snapshot. Anything not in the
     // snapshot stays at zero (no jobs today for that role yet).

@@ -126,13 +126,48 @@ pub async fn poll_receipts_once(
         // transaction's listing. This is what makes today's Revenue/Net
         // pill survive a restart — without it, restarting the app right
         // after a sale would zero the topbar even though the buyer paid.
+        //
+        // Also append to revenue_ledger so the lifetime Net rollup sums
+        // every marketplace through one query. The (project, source,
+        // marketplace_id) unique index keeps poller re-runs idempotent:
+        // the same Etsy receipt only counts once even if we hit the
+        // same window twice.
+        //
+        // Fee math: Etsy charges a transaction fee (~6.5% of gross) +
+        // payment-processing (~3% + $0.25). We approximate as 9.5% +
+        // $0.25 per transaction; exact fees from the Etsy v3 payments
+        // endpoint would be ideal but require a separate authed call
+        // per receipt — until then this gets net within ~$0.05 of
+        // actual on typical $5-$15 STL prices.
         for txn in &r.transactions {
-            let rev = txn.price.usd() * (txn.quantity.max(1) as f64);
-            if rev <= 0.0 { continue; }
-            let Some(&local_id) = local_id_map.get(&txn.listing_id) else { continue; };
-            if let Err(e) = crate::pnl::apply_actual_revenue(pool, project_id, local_id, rev).await {
+            let gross = txn.price.usd() * (txn.quantity.max(1) as f64);
+            if gross <= 0.0 { continue; }
+            let local_id = local_id_map.get(&txn.listing_id).copied();
+            let fees = (gross * 0.095) + 0.25;
+            let net = (gross - fees).max(0.0);
+            if let Some(lid) = local_id {
+                if let Err(e) = crate::pnl::apply_actual_revenue(pool, project_id, lid, net).await {
+                    tracing::warn!(
+                        "apply_actual_revenue failed for receipt={} listing={}: {:#}",
+                        r.receipt_id, txn.listing_id, e,
+                    );
+                }
+            }
+            // The transaction-level marketplace_id keeps the dedupe
+            // unique even when a single receipt has multiple line items.
+            let mid = format!("{}:{}", r.receipt_id, txn.listing_id);
+            if let Err(e) = crate::revenue::record(
+                pool,
+                project_id,
+                crate::revenue::RevenueSource::Etsy,
+                Some(&mid),
+                gross,
+                fees,
+                net,
+                local_id,
+            ).await {
                 tracing::warn!(
-                    "apply_actual_revenue failed for receipt={} listing={}: {:#}",
+                    "revenue::record etsy failed for receipt={} listing={}: {:#}",
                     r.receipt_id, txn.listing_id, e,
                 );
             }

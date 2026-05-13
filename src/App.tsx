@@ -61,6 +61,10 @@ export default function App() {
         const store = useFactoryStore.getState();
         store.setBudget(stats.budget_today_usd);
         store.setRevenueToday(stats.revenue_today_usd);
+        // Lifetime Net pill subscribes to these — they roll up every
+        // dollar burned (LLM, Tripo, Meshy, Gemini, Etsy fees) and
+        // every dollar earned across every marketplace (revenue_ledger).
+        store.setLifetimeTotals(stats.revenue_lifetime_usd, stats.budget_lifetime_usd);
         store.hydratePerAgentTodayStats(stats.per_agent);
       } catch {
         // Swallow — counters fall back to live-event accumulation.

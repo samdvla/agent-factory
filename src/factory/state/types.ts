@@ -164,6 +164,15 @@ export type FactoryStore = {
   /** True once the supervisor has emitted budget_capped for today. */
   budgetCapped: boolean;
   revenueTodayUsd: number;
+  /** Lifetime spend across every provider (Claude, Tripo, Meshy, Gemini,
+   *  Etsy listing fees, etc.). Single source of truth for the TopBar
+   *  Net pill — daily figures are still tracked for cap enforcement but
+   *  not surfaced to the user-facing Revenue/Net display. Hydrated from
+   *  cmd_today_stats.budget_lifetime_usd on a 5s poll. */
+  budgetLifetimeUsd: number;
+  /** Lifetime net revenue across every marketplace (sum of
+   *  revenue_ledger.net_usd). Surfaced as the TopBar Revenue value. */
+  revenueLifetimeUsd: number;
   revenueByRole: Record<string, number>;
   handoffs: Handoff[];
   lastActivityAt: number;
@@ -233,6 +242,9 @@ export type FactoryStore = {
   /** Replace today's revenue total (used on cold-start hydration from DB).
    *  Distinct from `addRevenue` which accumulates from live events. */
   setRevenueToday: (usd: number) => void;
+  /** Hydrate the lifetime Net pill from cmd_today_stats. Both fields
+   *  refresh together because they're surfaced as one Revenue / Net pair. */
+  setLifetimeTotals: (revenueUsd: number, budgetUsd: number) => void;
   /** Seed per-agent today counters from the DB on cold start. The counters
    *  are kept in memory and incremented by live events afterward — this
    *  function is the one-shot hydrator. Pass an empty array to reset. */

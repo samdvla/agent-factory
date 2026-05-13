@@ -125,11 +125,14 @@ def test_generate_happy_path_writes_png(tmp_path, monkeypatch):
         "urllib.request.urlopen",
         side_effect=_fake_urlopen(payload, captured),
     ):
-        path = generate_reference_image(
+        path, backend_model = generate_reference_image(
             None, "single ceramic mug, studio shot",
             job_id=42, assets_dir=str(tmp_path),
         )
     assert path == str(tmp_path / "42-ref.png")
+    # Backend model is reported back so the supervisor can stamp the
+    # right ledger model on the budget row.
+    assert backend_model == "gemini-3.1-flash-image-preview"
     assert os.path.exists(path)
     with open(path, "rb") as f:
         assert f.read() == _png_bytes()
@@ -243,9 +246,10 @@ def test_nanobanana_dispatches_to_gemini_when_key_set(tmp_path, monkeypatch):
         "urllib.request.urlopen",
         side_effect=_fake_urlopen(payload),
     ):
-        path = nanobanana.generate_reference_image(
+        path, backend_model = nanobanana.generate_reference_image(
             None, "test subject",
             job_id=99, assets_dir=str(tmp_path),
         )
     assert path == str(tmp_path / "99-ref.png")
+    assert backend_model == "gemini-3.1-flash-image-preview"
     assert os.path.exists(path)

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
-import MarketplaceDock from "./MarketplaceDock";
 
 export default function TopBar({
   onAlertClick,
@@ -15,8 +14,16 @@ export default function TopBar({
   const realEtsyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sandbox = useFactoryStore((s) => s.sandbox);
   const setSandbox = useFactoryStore((s) => s.setSandbox);
-  const budgetUsd = useFactoryStore((s) => s.budgetTodayUsd);
-  const revenueUsd = useFactoryStore((s) => s.revenueTodayUsd);
+  // Revenue + Net pill is LIFETIME, not daily. Every dollar burned
+  // (Claude + Tripo + Meshy + Gemini + Etsy listing fees) and every
+  // dollar earned across every marketplace (Etsy + future Cults3D /
+  // Sketchfab / Gumroad / MMF / Pinterest) is summed into these two
+  // numbers via the revenue_ledger + budget_ledger rollups in
+  // cmd_today_stats. Daily values are still tracked for cap enforcement
+  // but they're not what the user sees here.
+  const budgetUsd = useFactoryStore((s) => s.budgetLifetimeUsd);
+  const revenueUsd = useFactoryStore((s) => s.revenueLifetimeUsd);
+  const setLifetimeTotals = useFactoryStore((s) => s.setLifetimeTotals);
   const alerts = useFactoryStore((s) => s.alerts);
   const setAllStop = useFactoryStore((s) => s.setAllStop);
   const setSupervisorRunning = useFactoryStore((s) => s.setSupervisorRunning);
@@ -31,6 +38,28 @@ export default function TopBar({
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
   }, [setSupervisorRunning]);
+
+  // Refresh the lifetime Net pill on a slower cadence (5s). Cheap query
+  // — single SUM over two indexed tables — but no point hitting it
+  // every 2s like the supervisor status poll.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const stats = await api.todayStats();
+        if (cancelled) return;
+        setLifetimeTotals(stats.revenue_lifetime_usd, stats.budget_lifetime_usd);
+      } catch {
+        // Swallow — stale values are fine until the next tick.
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [setLifetimeTotals]);
 
   // Poll real_etsy_enabled every 5s so the mode badge stays in sync with
   // any changes made in Settings without requiring a full reload.
@@ -107,7 +136,6 @@ export default function TopBar({
           <span className="mode-toggle-dot" />
           <span className="mode-toggle-label">{modeText}</span>
         </button>
-        <MarketplaceDock />
       </div>
       </div>
 

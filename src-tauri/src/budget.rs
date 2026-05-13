@@ -1,10 +1,65 @@
 use sqlx::SqlitePool;
 
-/// Compute USD cost from token counts and model name.
-/// Uses the same pricing table as `record()`. Single source of truth.
+/// Compute USD cost from token counts and model name. Single source of truth
+/// for both the budget cap check and the ledger rows.
+///
+/// Two pricing modes:
+///   1. Per-call flat fee — for non-token providers (3D mesh generation,
+///      image generation, Etsy listing fees). Tokens are ignored.
+///   2. Per-million-token rate — for Anthropic Claude models and any
+///      provider with a token-based meter. Standard input + output split.
 pub fn cost_usd(model: &str, tokens_in: u64, tokens_out: u64) -> f64 {
+    if let Some(per_call) = per_call_usd(model) {
+        return per_call;
+    }
     let (pin, pout) = price_per_million(model);
     (tokens_in as f64 / 1_000_000.0) * pin + (tokens_out as f64 / 1_000_000.0) * pout
+}
+
+/// Per-call flat-fee rates for providers that bill per task rather than
+/// per token. Returns None when the model isn't a known flat-fee model
+/// (caller falls through to token-based pricing).
+///
+/// Rates are sourced from provider pricing pages as of 2026-05. They are
+/// approximate published rates; for exact spend we'd subscribe to each
+/// provider's balance-delta API after every task (tripo_last_balance /
+/// meshy_last_balance hooks already exist for that future enhancement).
+/// Until then these are within ~10% of actual on standard plans.
+fn per_call_usd(model: &str) -> Option<f64> {
+    match model {
+        // --- Tripo 3D (v2.5+, image-to-3d / text-to-model with PBR textures)
+        // Public rate: ~30-40 credits per call × $0.013-$0.020/credit on
+        // pay-as-you-go plans. Image-to-3D is slightly more expensive
+        // because it includes the ref-image upload + processing step.
+        "tripo-image-to-3d" => Some(0.40),
+        "tripo-text-to-model" => Some(0.35),
+
+        // --- Meshy
+        // Preview ~$0.05 + Refine ~$0.05 when refine=true (now the default
+        // in workers/designer/designer/meshy.py — see commit f73c10a).
+        // image-to-3D bundles both stages, similar total.
+        "meshy-text-to-3d" => Some(0.10),
+        "meshy-image-to-3d" => Some(0.10),
+
+        // --- Google AI Studio (direct Gemini image)
+        // Gemini 3.1 Flash Image (Nano Banana 2): $0.067 per 1024px image
+        // on the standard API. Pro variant is $0.134.
+        "gemini-3.1-flash-image-preview" => Some(0.067),
+        "gemini-3-pro-image-preview" => Some(0.134),
+
+        // --- Nano Banana via Higgsfield CLI
+        // Bundle plans vary; use a midpoint estimate for the ledger when
+        // the Higgsfield path is active instead of direct Gemini.
+        "nano_banana_2" | "nano_banana_pro" => Some(0.10),
+
+        // --- Etsy fees (paid out of pocket on listing creation; transaction
+        // and payment-processing fees are surfaced separately by the
+        // receipt poller when sales come in, applied as a multiplier on
+        // revenue rather than a flat line item).
+        "etsy-listing-fee" => Some(0.20),
+
+        _ => None,
+    }
 }
 
 fn price_per_million(model: &str) -> (f64, f64) {
@@ -19,6 +74,12 @@ fn price_per_million(model: &str) -> (f64, f64) {
     } else {
         (3.00, 15.00) // sane default
     }
+}
+
+/// True when `model` is billed per call (flat fee). Callers use this to
+/// decide whether to pass tokens=0 when recording.
+pub fn is_per_call_model(model: &str) -> bool {
+    per_call_usd(model).is_some()
 }
 
 pub async fn record(
@@ -50,6 +111,38 @@ pub async fn today_spend_usd(pool: &SqlitePool, project_id: i64) -> anyhow::Resu
     .fetch_one(pool)
     .await?;
     Ok(usd.unwrap_or(0.0))
+}
+
+/// Sum of every dollar this project has burned — Claude, Tripo, Meshy,
+/// Gemini, Etsy listing fees, the lot. Single number the TopBar pill
+/// subtracts from lifetime revenue to compute Net.
+pub async fn lifetime_spend_usd(pool: &SqlitePool, project_id: i64) -> anyhow::Result<f64> {
+    let usd: Option<f64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(usd_cost), 0.0) FROM budget_ledger WHERE project_id = ?",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(usd.unwrap_or(0.0))
+}
+
+/// Lifetime spend broken out by ledger model. Used by the analytics
+/// panel to show where money is going.
+pub async fn lifetime_spend_by_model(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> anyhow::Result<Vec<(String, f64, i64)>> {
+    let rows: Vec<(String, f64, i64)> = sqlx::query_as(
+        "SELECT model, COALESCE(SUM(usd_cost), 0.0) AS usd, COUNT(*) AS calls \
+         FROM budget_ledger \
+         WHERE project_id = ? \
+         GROUP BY model \
+         ORDER BY usd DESC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 pub async fn check_cap(pool: &SqlitePool, project_id: i64, daily_cap_usd: f64) -> anyhow::Result<bool> {
@@ -241,6 +334,81 @@ mod tests {
     fn cost_usd_matches_record_pricing_for_opus() {
         let usd = cost_usd("claude-opus-4-7", 0, 1_000_000);
         assert!((usd - 75.00).abs() < 1e-9, "expected 75.00, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_tripo_image_to_3d() {
+        // Per-call providers ignore tokens entirely — the flat rate is the
+        // ground truth. Before this fix, the supervisor was calling
+        // cost_usd("tripo-image-to-3d", 800, 300) and getting Claude
+        // default pricing (~$0.011/call), drastically under-counting the
+        // real ~$0.40 charge per Tripo task.
+        let usd = cost_usd("tripo-image-to-3d", 800, 300);
+        assert!((usd - 0.40).abs() < 1e-9, "expected 0.40, got {usd}");
+        let usd_zero_tokens = cost_usd("tripo-image-to-3d", 0, 0);
+        assert!(
+            (usd_zero_tokens - 0.40).abs() < 1e-9,
+            "per-call rate must not depend on tokens, got {usd_zero_tokens}",
+        );
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_gemini_flash() {
+        let usd = cost_usd("gemini-3.1-flash-image-preview", 0, 0);
+        assert!((usd - 0.067).abs() < 1e-9, "expected 0.067, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_gemini_pro() {
+        let usd = cost_usd("gemini-3-pro-image-preview", 0, 0);
+        assert!((usd - 0.134).abs() < 1e-9, "expected 0.134, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_etsy_listing_fee() {
+        let usd = cost_usd("etsy-listing-fee", 0, 0);
+        assert!((usd - 0.20).abs() < 1e-9, "expected 0.20, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_meshy_text_to_3d() {
+        let usd = cost_usd("meshy-text-to-3d", 0, 0);
+        assert!((usd - 0.10).abs() < 1e-9, "expected 0.10, got {usd}");
+    }
+
+    #[test]
+    fn is_per_call_model_classifies_correctly() {
+        assert!(is_per_call_model("tripo-image-to-3d"));
+        assert!(is_per_call_model("gemini-3.1-flash-image-preview"));
+        assert!(is_per_call_model("etsy-listing-fee"));
+        assert!(!is_per_call_model("claude-sonnet-4-6"));
+        assert!(!is_per_call_model("unknown-future-model"));
+    }
+
+    #[tokio::test]
+    async fn lifetime_spend_aggregates_every_provider() {
+        let pool = setup_pool().await;
+        // Mixed providers across multiple days.
+        record(&pool, 1, "claude-sonnet-4-6", 1_000, 0).await.unwrap(); // $0.003
+        record(&pool, 1, "tripo-image-to-3d", 0, 0).await.unwrap();   // $0.40
+        record(&pool, 1, "gemini-3.1-flash-image-preview", 0, 0).await.unwrap(); // $0.067
+        record(&pool, 1, "etsy-listing-fee", 0, 0).await.unwrap();   // $0.20
+
+        let total = lifetime_spend_usd(&pool, 1).await.unwrap();
+        let expected = 0.003 + 0.40 + 0.067 + 0.20;
+        assert!(
+            (total - expected).abs() < 1e-9,
+            "lifetime spend must sum every provider, got {total} expected {expected}",
+        );
+
+        let by_model = lifetime_spend_by_model(&pool, 1).await.unwrap();
+        let map: std::collections::HashMap<_, _> = by_model
+            .iter()
+            .map(|(m, usd, n)| (m.as_str(), (*usd, *n)))
+            .collect();
+        assert!((map["tripo-image-to-3d"].0 - 0.40).abs() < 1e-9);
+        assert!((map["etsy-listing-fee"].0 - 0.20).abs() < 1e-9);
+        assert_eq!(map["claude-sonnet-4-6"].1, 1);
     }
 
     /// Verify that enforce_caps short-circuits to Capped{SmokePause} when the

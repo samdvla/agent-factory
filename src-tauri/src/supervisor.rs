@@ -304,6 +304,87 @@ async fn run_worker_loop(
                                         });
                                     }
                                 }
+
+                                // Provider calls: per-task (Tripo / Meshy /
+                                // Gemini / Higgsfield) and per-listing fees
+                                // (Etsy). Workers surface these in
+                                // result.provider_calls as a list of
+                                // {model, calls} entries. Each entry is
+                                // recorded at the flat per-call rate from
+                                // budget::cost_usd — tokens=0 because these
+                                // providers don't bill per token. Without
+                                // this loop, every provider call beyond the
+                                // worker's main LLM call goes unbilled.
+                                if let Some(calls) = result.get("provider_calls").and_then(|v| v.as_array()) {
+                                    for entry in calls {
+                                        let pmodel = match entry.get("model").and_then(|v| v.as_str()) {
+                                            Some(m) if !m.is_empty() => m,
+                                            _ => continue,
+                                        };
+                                        let count = entry
+                                            .get("calls")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(1);
+                                        for _ in 0..count {
+                                            let cost = budget::cost_usd(pmodel, 0, 0);
+                                            if cost <= 0.0 {
+                                                tracing::warn!(
+                                                    "provider_calls model {pmodel:?} has no \
+                                                     per-call rate — add it to budget::per_call_usd"
+                                                );
+                                                continue;
+                                            }
+                                            if let Err(e) = budget::record(pool, project_id, pmodel, 0, 0).await {
+                                                tracing::error!("budget::record provider failed: {e}");
+                                            }
+                                            bus.send(SupervisorEvent::BudgetSpent {
+                                                role: role.into(),
+                                                cost_usd: cost,
+                                                tokens_in: 0,
+                                                tokens_out: 0,
+                                                model: pmodel.to_string(),
+                                            });
+                                            if let Some(cycle_id_str) = result.get("cycle_id").and_then(|v| v.as_str()) {
+                                                let pool_for_pnl = pool.clone();
+                                                let project_id_for_pnl = project_id;
+                                                let role_for_pnl = role.to_string();
+                                                let cycle_for_pnl = cycle_id_str.to_string();
+                                                let cost_for_pnl = cost;
+                                                let model_for_pnl = pmodel.to_string();
+                                                let niche_for_pnl: Option<String> = result
+                                                    .get("niche_seed")
+                                                    .or_else(|| result.get("brief").and_then(|b| b.get("niche")))
+                                                    .or_else(|| result.get("niche"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                tokio::spawn(async move {
+                                                    let _ = crate::pnl::ensure_cycle(
+                                                        &pool_for_pnl,
+                                                        project_id_for_pnl,
+                                                        &cycle_for_pnl,
+                                                        niche_for_pnl.as_deref(),
+                                                    )
+                                                    .await;
+                                                    if let Err(e) = crate::pnl::record_contribution(
+                                                        &pool_for_pnl,
+                                                        project_id_for_pnl,
+                                                        &cycle_for_pnl,
+                                                        &role_for_pnl,
+                                                        job_id,
+                                                        cost_for_pnl,
+                                                        0,
+                                                        0,
+                                                        Some(&model_for_pnl),
+                                                    )
+                                                    .await
+                                                    {
+                                                        tracing::warn!("pnl record_contribution (provider) failed: {e}");
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
                                 bus.send(SupervisorEvent::JobCompleted {
                                     role: role.into(),
                                     job_id,

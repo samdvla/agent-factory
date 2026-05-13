@@ -534,7 +534,9 @@ def test_designer_routes_to_image_to_3d_when_eligible(tmp_path, monkeypatch):
 
     def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
         calls["nano"] += 1
-        return ref_path
+        # Mirror the production tuple shape: (path, backend_model). Tests
+        # don't care which backend ran but the agent code unpacks both.
+        return ref_path, "gemini-3.1-flash-image-preview"
 
     def fake_tripo_img(api_key, image_path, *, job_id, assets_dir, **kw):
         calls["tripo_img"] += 1
@@ -569,7 +571,14 @@ def test_designer_routes_to_image_to_3d_when_eligible(tmp_path, monkeypatch):
     assert result["asset"]["asset_path"] == stl_path
     assert result["asset"]["glb_path"] == glb_path
     assert result["asset"]["preview_png"] == png_path
-    assert result["model"] == "tripo-image-to-3d"
+    # `model` is the Claude model that wrote the brief — token-priced.
+    # The 3D provider charge lives in provider_calls so the supervisor
+    # bills it at the flat per-call rate instead of mis-applying the
+    # Claude token rate to a non-token model.
+    assert result["model"] == MODEL
+    provider_models = [c["model"] for c in result["provider_calls"]]
+    assert "tripo-image-to-3d" in provider_models
+    assert "gemini-3.1-flash-image-preview" in provider_models
 
 
 def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatch):
@@ -593,7 +602,9 @@ def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatc
 
     def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
         calls["nano"] += 1
-        return ref_path
+        # Mirror the production tuple shape: (path, backend_model). Tests
+        # don't care which backend ran but the agent code unpacks both.
+        return ref_path, "gemini-3.1-flash-image-preview"
 
     def fake_meshy_img(api_key, image_path, *, job_id, assets_dir, **kw):
         calls["meshy_img"] += 1
@@ -619,7 +630,9 @@ def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatc
     assert calls["nano"] == 1
     assert calls["meshy_img"] == 1
     assert calls["tripo_any"] == 0
-    assert result["model"] == "meshy-image-to-3d"
+    assert result["model"] == MODEL
+    provider_models = [c["model"] for c in result["provider_calls"]]
+    assert "meshy-image-to-3d" in provider_models
 
 
 def test_designer_text_to_3d_honors_tripo_preference(tmp_path, monkeypatch):
@@ -675,7 +688,8 @@ def test_designer_text_to_3d_honors_tripo_preference(tmp_path, monkeypatch):
     assert calls["tripo_text"] == 1
     assert calls["meshy_text"] == 0
     assert calls["image_any"] == 0
-    assert result["model"] == "tripo-text-to-model"
+    assert result["model"] == MODEL
+    assert [c["model"] for c in result["provider_calls"]] == ["tripo-text-to-model"]
 
 
 def test_designer_text_to_3d_hard_fails_when_preferred_key_missing(tmp_path, monkeypatch):
@@ -757,7 +771,8 @@ def test_designer_falls_through_when_nanobanana_fails(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert calls["tripo_text"] == 1
     assert result["asset"]["asset_path"] == stl_path
-    assert result["model"] == "tripo-text-to-model"
+    assert result["model"] == MODEL
+    assert [c["model"] for c in result["provider_calls"]] == ["tripo-text-to-model"]
 
 
 def test_designer_skips_text_fallback_when_image3d_timed_out(tmp_path, monkeypatch):
@@ -781,7 +796,9 @@ def test_designer_skips_text_fallback_when_image3d_timed_out(tmp_path, monkeypat
 
     def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
         calls["nano"] += 1
-        return ref_path
+        # Mirror the production tuple shape: (path, backend_model). Tests
+        # don't care which backend ran but the agent code unpacks both.
+        return ref_path, "gemini-3.1-flash-image-preview"
 
     from designer import tripo as tripo_mod
 
@@ -930,7 +947,9 @@ def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkey
 
     def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
         calls["nano"] += 1
-        return ref_path
+        # Mirror the production tuple shape: (path, backend_model). Tests
+        # don't care which backend ran but the agent code unpacks both.
+        return ref_path, "gemini-3.1-flash-image-preview"
 
     from designer import tripo as tripo_mod
 
@@ -955,7 +974,12 @@ def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkey
     assert calls["tripo_text"] == 1
     assert result["ok"] is True
     assert result["asset"]["asset_path"] == stl_path
-    assert result["model"] == "tripo-text-to-model"
+    assert result["model"] == MODEL
+    # Image-to-3D failed and we cascaded to text-to-3D, so the ledger
+    # should reflect both an attempted ref render + the final text-to-3D
+    # mesh task. The supervisor uses these entries to bill each call.
+    provider_models = [c["model"] for c in result["provider_calls"]]
+    assert "tripo-text-to-model" in provider_models
 
 
 # ────────────────────────────────────────────────────────────────────────
