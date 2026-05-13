@@ -137,7 +137,6 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   wealthByRole: {},
   etsyPublishesRev: 0,
   etsyRecentReceipts: [],
-  etsyRecentMessages: [],
   etsyKilled: false,
 
   setAgentState: (role, state) => set((s) => ({
@@ -303,9 +302,6 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   bumpEtsyPublishesRev: () => set((s) => ({ etsyPublishesRev: s.etsyPublishesRev + 1 })),
   pushEtsyReceipt: (r) => set((s) => ({
     etsyRecentReceipts: [r, ...s.etsyRecentReceipts].slice(0, 5),
-  })),
-  pushEtsyMessage: (m) => set((s) => ({
-    etsyRecentMessages: [m, ...s.etsyRecentMessages].slice(0, 5),
   })),
   setEtsyKilled: (v) => set({ etsyKilled: v }),
 

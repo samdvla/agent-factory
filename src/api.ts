@@ -253,6 +253,12 @@ export const api = {
   pinterestDisconnect: (): Promise<void> => invoke("cmd_pinterest_disconnect"),
   pinterestListPins: (limit?: number): Promise<PinterestPinRow[]> =>
     invoke("cmd_pinterest_list_pins", { limit }),
+  telegramStatus: (): Promise<TelegramStatus> => invoke("cmd_telegram_status"),
+  telegramVerify: (botToken: string, chatId: number): Promise<TelegramVerifyOk> =>
+    invoke("cmd_telegram_verify", { botToken, chatId }),
+  telegramSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_telegram_set_enabled", { enabled }),
+  telegramDisconnect: (): Promise<void> => invoke("cmd_telegram_disconnect"),
   sketchfabVerify: (apiToken: string): Promise<SketchfabVerifyOk> =>
     invoke("cmd_sketchfab_verify", { apiToken }),
   sketchfabStatus: (): Promise<SketchfabStatus> => invoke("cmd_sketchfab_status"),
@@ -328,13 +334,6 @@ export const api = {
     }),
   agentMessagesSince: (sinceUnix: number): Promise<number> =>
     invoke("cmd_agent_messages_since", { sinceUnix }),
-  listListingStats: (limit?: number): Promise<ListingStatsSummary[]> =>
-    invoke("cmd_list_listing_stats", { limit }),
-  listingStatsHistory: (
-    etsyListingId: number,
-    limit?: number,
-  ): Promise<ListingStatsRow[]> =>
-    invoke("cmd_listing_stats_history", { etsyListingId, limit }),
   chatWithAgent: (
     agentId: string,
     history: ChatTurn[],
@@ -342,12 +341,33 @@ export const api = {
   ): Promise<ChatReply> =>
     invoke("cmd_chat_with_agent", { agentId, history, message }),
   agentSteerRoles: (): Promise<string[]> => invoke("cmd_agent_steer_roles"),
-  agentSteerAdd: (role: string, text: string): Promise<void> =>
-    invoke("cmd_agent_steer_add", { args: { role, text } }),
-  agentSteerList: (role: string): Promise<string[]> =>
+  agentSteerAdd: (
+    role: string,
+    text: string,
+    imagePaths: string[] = [],
+  ): Promise<void> =>
+    invoke("cmd_agent_steer_add", {
+      args: { role, text, image_paths: imagePaths },
+    }),
+  agentSteerList: (role: string): Promise<SteerEntry[]> =>
     invoke("cmd_agent_steer_list", { role }),
   agentSteerClear: (role: string): Promise<void> =>
     invoke("cmd_agent_steer_clear", { role }),
+  // Save image bytes to ~/.agent-factory/steer-assets/<role>/. Returns the
+  // absolute path the caller passes back to agentSteerAdd via imagePaths.
+  agentSteerSaveImage: (
+    role: string,
+    bytes: Uint8Array,
+    ext: string,
+  ): Promise<string> =>
+    invoke("cmd_agent_steer_save_image", {
+      args: { role, bytes: Array.from(bytes), ext },
+    }),
+};
+
+export type SteerEntry = {
+  text: string;
+  image_paths: string[];
 };
 
 export type ChatTurn = { from: "user" | "agent"; text: string };
@@ -356,25 +376,6 @@ export type ChatReply = {
   tokens_in: number;
   tokens_out: number;
   model: string;
-};
-
-export type ListingStatsSummary = {
-  etsy_listing_id: number;
-  local_listing_id: number | null;
-  title: string;
-  views: number;
-  favorites: number;
-  total_orders: number;
-  last_polled_ts: number;
-};
-export type ListingStatsRow = {
-  id: number;
-  etsy_listing_id: number;
-  local_listing_id: number | null;
-  views: number;
-  favorites: number;
-  total_orders: number;
-  ts: number;
 };
 
 export type AgentMessageImportance = "info" | "heads_up" | "critical";
@@ -449,6 +450,13 @@ export type PinterestStatus = {
   today_count: number;
 };
 export type PinterestVerifyOk = { board_name: string };
+export type TelegramStatus = {
+  creds_present: boolean;
+  bot_username: string | null;
+  chat_id: number | null;
+  enabled: boolean;
+};
+export type TelegramVerifyOk = { bot_username: string };
 export type PinterestPinRow = {
   id: number;
   local_listing_id: number | null;

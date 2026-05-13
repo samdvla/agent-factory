@@ -27,10 +27,21 @@ pub const LISTING_DEFAULT: &str = "You are the Listing Copywriter at an AI-run d
 
 pub const CS_DEFAULT: &str = "You are the Customer Service agent at an AI-run digital-products Etsy shop. All products are digital downloads \u{2014} no shipping, no physical inventory, no custom work. Respond to the buyer's message with a polite, policy-compliant reply. If the buyer requests a refund, asks for custom work, or raises a dispute, do NOT promise anything \u{2014} say you'll escalate to the shop owner. Keep replies under 60 words. Return JSON only:\n{\"reply\": \"<your reply>\", \"escalate\": <true|false>, \"category\": \"<file_format|refund_request|custom_request|policy_question|thank_you|other>\"}";
 
-pub const ROLES: [&str; 4] = ["research", "designer", "listing", "cs"];
+// Orchestrator is the Strategy Lead — the agent that actually picks the
+// niche_seed each cycle. Its full prompt is built dynamically in
+// workers/orchestrator/orchestrator/agent.py::build_orchestrator_prompt
+// (it varies by SHOP_FOCUS, character pool, recent-drafts context, etc.),
+// so we store only a stub here. The UI shows this default as informational
+// text; system_override editing on orchestrator is not currently supported
+// (only operator_steers), so the UI should hide the Edit Override action
+// for this role.
+pub const ORCHESTRATOR_DEFAULT: &str = "Strategy Lead — picks the next niche_seed each cycle and hands it to Research. Full prompt is generated dynamically from shop focus, character pool, and recent-drafts context. Use Steer to inject standing instructions (e.g. 'focus on superhero/supervillain archetypes', 'rotate into pet accessories') — those land as the final OPERATOR OVERRIDE block in the orchestrator's system prompt and supersede the built-in category list.";
+
+pub const ROLES: [&str; 5] = ["orchestrator", "research", "designer", "listing", "cs"];
 
 pub fn default_prompt(role: &str) -> Option<&'static str> {
     match role {
+        "orchestrator" => Some(ORCHESTRATOR_DEFAULT),
         "research" => Some(RESEARCH_DEFAULT),
         "designer" => Some(DESIGNER_DEFAULT),
         "listing" => Some(LISTING_DEFAULT),
@@ -64,6 +75,62 @@ pub struct PromptHistoryEntry {
 fn prompts_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     PathBuf::from(home).join(".agent-factory").join("prompts.json")
+}
+
+/// Root directory for steer reference images. Per-role subdirectories live
+/// underneath this. Tests monkey-patch HOME to redirect it.
+pub fn steer_assets_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".agent-factory").join("steer-assets")
+}
+
+/// Save the bytes of an attached steer image under the steer-assets dir for
+/// the given role. Returns the absolute path. The filename embeds a
+/// timestamp + a short random suffix so two attachments on the same second
+/// don't collide.
+///
+/// Validates `ext` to a small allow-list (png/jpg/jpeg/webp/gif) so a
+/// malicious caller can't drop arbitrary executables into the assets tree.
+/// Restricted to ROLES so a typo doesn't create unbounded subdirectories.
+pub fn save_steer_image(role: &str, bytes: &[u8], ext: &str) -> Result<PathBuf> {
+    if !ROLES.contains(&role) {
+        return Err(anyhow!("unknown role: {role}"));
+    }
+    let lower = ext.trim_start_matches('.').to_ascii_lowercase();
+    let allowed = matches!(lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
+    if !allowed {
+        return Err(anyhow!("unsupported image extension: {ext}"));
+    }
+    // Cap at 8 MB per image — Anthropic's multimodal limit is 5 MB
+    // base64-encoded which is roughly 3.75 MB raw, but allowing a little
+    // headroom for callers that haven't downsampled. Real callers should
+    // be sending thumbnails, not full-res renders.
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(anyhow!(
+            "steer image too large ({} bytes > 8 MB)",
+            bytes.len()
+        ));
+    }
+    let dir = steer_assets_dir().join(role);
+    std::fs::create_dir_all(&dir)?;
+    let ts = now_ts();
+    // Short hex tag from the bytes themselves so two unrelated uploads at
+    // the same ts get distinct filenames without a heavy hash dependency.
+    let tag: u32 = bytes
+        .iter()
+        .take(64)
+        .fold(0u32, |acc, &b| acc.wrapping_mul(131).wrapping_add(b as u32));
+    let filename = format!("{ts}-{tag:08x}.{lower}");
+    let path = dir.join(filename);
+    let tmp = path.with_extension(format!("{lower}.tmp"));
+    std::fs::write(&tmp, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
 }
 
 fn read_prompts_file() -> serde_json::Value {
@@ -204,34 +271,98 @@ pub const STEER_MAX_LEN: usize = 2000;
 /// is dropped (FIFO) — prevents unbounded prompt growth.
 pub const STEER_MAX_COUNT: usize = 10;
 
+/// One entry in `operator_steers` — text plus optional image references.
+///
+/// Two on-disk shapes coexist for backward compatibility: plain JSON strings
+/// (the original schema, still emitted by `add_operator_steer` when no images
+/// are attached) and `{"text": ..., "image_paths": [...]}` objects (new
+/// shape, emitted whenever the user attaches a reference image). Both
+/// normalize into this Rust struct via `parse_steer_entry`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SteerEntry {
+    pub text: String,
+    #[serde(default)]
+    pub image_paths: Vec<String>,
+}
+
+fn parse_steer_entry(v: &serde_json::Value) -> Option<SteerEntry> {
+    if let Some(s) = v.as_str() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return Some(SteerEntry {
+            text: trimmed.to_string(),
+            image_paths: Vec::new(),
+        });
+    }
+    if let Some(obj) = v.as_object() {
+        let text = obj.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+        if text.is_empty() {
+            return None;
+        }
+        let images: Vec<String> = obj
+            .get("image_paths")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        return Some(SteerEntry {
+            text: text.to_string(),
+            image_paths: images,
+        });
+    }
+    None
+}
+
 /// Read every operator steer recorded for `role` in insertion order. Returns
 /// an empty vec if the role has no steers or the field is malformed.
+///
+/// Each returned `SteerEntry` carries the text plus any attached image_paths
+/// (absolute filesystem paths under `~/.agent-factory/steer-assets/`).
+/// Plain-string entries on disk are normalized to entries with empty
+/// image_paths so callers don't have to handle two shapes.
 ///
 /// Called both from the UI (to populate the steer badge) and from
 /// `effective_system_prompt` (which composes steers into the worker's system
 /// prompt at job-time). Unknown roles return an empty vec rather than erroring
 /// — the chat panel hides the Steer button for non-LLM agents, but a caller
 /// asking about an unknown role just gets nothing back.
-pub fn list_operator_steers(role: &str) -> Vec<String> {
+pub fn list_operator_steers(role: &str) -> Vec<SteerEntry> {
     let data = read_prompts_file();
     data.get(role)
         .and_then(|v| v.get("operator_steers"))
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(parse_steer_entry).collect::<Vec<_>>())
         .unwrap_or_default()
 }
 
-/// Append `text` to the role's `operator_steers` list. Validates length and
-/// drops the oldest entry when the list exceeds STEER_MAX_COUNT. Also writes
-/// a `_history` audit entry so the operator can see what they steered when.
+/// Legacy view: text only, for callers that don't need image refs.
+/// Used by the prompt-history surface and by tests that predate the schema
+/// expansion.
+pub fn list_operator_steer_texts(role: &str) -> Vec<String> {
+    list_operator_steers(role)
+        .into_iter()
+        .map(|e| e.text)
+        .collect()
+}
+
+/// Append a steer entry to the role's `operator_steers` list. Validates
+/// length, drops the oldest entry when the list exceeds STEER_MAX_COUNT,
+/// and writes a `_history` audit entry.
 ///
-/// Restricted to ROLES (the 4 LLM-driven roles) — other roles don't have an
-/// `_load_system_override` call, so their steers would be silently ignored.
-pub fn add_operator_steer(role: &str, text: &str) -> Result<()> {
+/// When `image_paths` is empty, the entry is stored as a plain JSON string
+/// (backward-compat with the original schema). When images are attached,
+/// the entry is stored as `{"text": ..., "image_paths": [...]}` and the
+/// Python workers thread those image files into the next job's multimodal
+/// user message.
+///
+/// Restricted to ROLES — other roles don't have a `_load_system_override`
+/// call, so their steers would be silently ignored.
+pub fn add_operator_steer(role: &str, text: &str, image_paths: Vec<String>) -> Result<()> {
     if !ROLES.contains(&role) {
         return Err(anyhow!("unknown role: {role}"));
     }
@@ -245,6 +376,23 @@ pub fn add_operator_steer(role: &str, text: &str) -> Result<()> {
             trimmed.len(),
             STEER_MAX_LEN
         ));
+    }
+    // Validate each image path: must be an existing file under the
+    // steer-assets dir we own. This stops a malicious caller from getting
+    // the worker to read arbitrary files off disk and ship them to the
+    // model (would be a credential-exfil path otherwise).
+    let assets_root = steer_assets_dir();
+    let mut clean_images: Vec<String> = Vec::with_capacity(image_paths.len());
+    for raw in image_paths {
+        let canonical = std::fs::canonicalize(&raw)
+            .map_err(|e| anyhow!("steer image path {raw:?} not readable: {e}"))?;
+        if !canonical.starts_with(&assets_root) {
+            return Err(anyhow!(
+                "steer image must live under steer-assets/, got {}",
+                canonical.display()
+            ));
+        }
+        clean_images.push(canonical.to_string_lossy().to_string());
     }
 
     let mut data = read_prompts_file();
@@ -268,7 +416,17 @@ pub fn add_operator_steer(role: &str, text: &str) -> Result<()> {
             *steers = serde_json::json!([]);
         }
         let arr = steers.as_array_mut().unwrap();
-        arr.push(serde_json::Value::String(trimmed.to_string()));
+        // Plain-string shape when no images, object shape otherwise. Keeps
+        // older entries readable by code paths that haven't been upgraded.
+        let entry_val = if clean_images.is_empty() {
+            serde_json::Value::String(trimmed.to_string())
+        } else {
+            serde_json::json!({
+                "text": trimmed,
+                "image_paths": clean_images,
+            })
+        };
+        arr.push(entry_val);
         while arr.len() > STEER_MAX_COUNT {
             arr.remove(0);
         }
@@ -478,9 +636,9 @@ mod tests {
     #[test]
     fn test_add_operator_steer_appends_and_lists() {
         let _g = use_tmp_home();
-        add_operator_steer("designer", "be more aggressive with pricing").unwrap();
-        add_operator_steer("designer", "favor halloween themes this week").unwrap();
-        let steers = list_operator_steers("designer");
+        add_operator_steer("designer", "be more aggressive with pricing", vec![]).unwrap();
+        add_operator_steer("designer", "favor halloween themes this week", vec![]).unwrap();
+        let steers = list_operator_steer_texts("designer");
         assert_eq!(steers.len(), 2);
         assert_eq!(steers[0], "be more aggressive with pricing");
         assert_eq!(steers[1], "favor halloween themes this week");
@@ -489,28 +647,46 @@ mod tests {
     #[test]
     fn test_add_operator_steer_rejects_unknown_role() {
         let _g = use_tmp_home();
-        let r = add_operator_steer("orchestrator", "hello");
-        assert!(r.is_err(), "non-LLM roles must be rejected");
+        // "strategist" is a real role in the codebase but does NOT honor
+        // operator_steers (its Python worker doesn't call
+        // _load_operator_steers), so it must be rejected here to prevent
+        // silently-ignored steers. Same reasoning for "supervisor", "publisher",
+        // etc. — any role that wouldn't read the steer at runtime.
+        let r = add_operator_steer("strategist", "hello", vec![]);
+        assert!(r.is_err(), "roles that don't honor steers must be rejected");
+        let r2 = add_operator_steer("publisher", "hello", vec![]);
+        assert!(r2.is_err(), "non-LLM roles must be rejected");
+    }
+
+    #[test]
+    fn test_orchestrator_is_steerable() {
+        // Orchestrator picks the niche each cycle — operator_steers on this
+        // role land in the system prompt as the final OPERATOR OVERRIDE
+        // block (see workers/orchestrator/orchestrator/agent.py).
+        let _g = use_tmp_home();
+        add_operator_steer("orchestrator", "focus on pet accessories this week", vec![]).unwrap();
+        let steers = list_operator_steer_texts("orchestrator");
+        assert_eq!(steers, vec!["focus on pet accessories this week"]);
     }
 
     #[test]
     fn test_add_operator_steer_rejects_empty_and_oversized() {
         let _g = use_tmp_home();
-        assert!(add_operator_steer("research", "").is_err());
-        assert!(add_operator_steer("research", "   ").is_err());
+        assert!(add_operator_steer("research", "", vec![]).is_err());
+        assert!(add_operator_steer("research", "   ", vec![]).is_err());
         let too_long = "a".repeat(STEER_MAX_LEN + 1);
-        assert!(add_operator_steer("research", &too_long).is_err());
+        assert!(add_operator_steer("research", &too_long, vec![]).is_err());
         let just_right = "a".repeat(STEER_MAX_LEN);
-        assert!(add_operator_steer("research", &just_right).is_ok());
+        assert!(add_operator_steer("research", &just_right, vec![]).is_ok());
     }
 
     #[test]
     fn test_operator_steer_count_capped() {
         let _g = use_tmp_home();
         for i in 0..(STEER_MAX_COUNT + 5) {
-            add_operator_steer("listing", &format!("steer-{i}")).unwrap();
+            add_operator_steer("listing", &format!("steer-{i}"), vec![]).unwrap();
         }
-        let steers = list_operator_steers("listing");
+        let steers = list_operator_steer_texts("listing");
         assert_eq!(steers.len(), STEER_MAX_COUNT);
         // FIFO: oldest (steer-0..steer-4) should be dropped.
         assert_eq!(steers[0], "steer-5");
@@ -523,7 +699,7 @@ mod tests {
         // Strategist sets an override.
         set_override("cs", &"a".repeat(80)).unwrap();
         // Operator adds a steer.
-        add_operator_steer("cs", "be terse").unwrap();
+        add_operator_steer("cs", "be terse", vec![]).unwrap();
         assert_eq!(list_operator_steers("cs").len(), 1);
         clear_operator_steers("cs").unwrap();
         assert_eq!(list_operator_steers("cs").len(), 0);
@@ -537,13 +713,13 @@ mod tests {
         let _g = use_tmp_home();
         let prompt = "a".repeat(80);
         set_override("listing", &prompt).unwrap();
-        add_operator_steer("listing", "operator note").unwrap();
+        add_operator_steer("listing", "operator note", vec![]).unwrap();
         let rows = list_prompts();
         assert_eq!(
             rows.get("listing").unwrap().override_.as_deref(),
             Some(prompt.as_str()),
             "operator steer must not modify strategist's override",
         );
-        assert_eq!(list_operator_steers("listing"), vec!["operator note"]);
+        assert_eq!(list_operator_steer_texts("listing"), vec!["operator note"]);
     }
 }

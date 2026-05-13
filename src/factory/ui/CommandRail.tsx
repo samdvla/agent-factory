@@ -6,7 +6,6 @@ import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
 import ActivityModal from "./ActivityModal";
 import ConversationsModal from "./ConversationsModal";
-import ListingStatsPanel from "./ListingStatsPanel";
 import { useFactoryStore } from "../state/factoryStore";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -784,18 +783,6 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
           </svg>
         </button>
       </div>
-
-      {/* Impressions row — listing-stats feedback loop */}
-      <PanelRow
-        id="rail-impressions"
-        label="Impressions"
-        count={0}
-        accentColor="#f5a623"
-        emptyMessage="No drafts polled yet — publish a listing to start."
-        alwaysRenderChildren
-      >
-        <ListingStatsPanel alwaysOpen />
-      </PanelRow>
 
       {/* Cycles row */}
       <PanelRow

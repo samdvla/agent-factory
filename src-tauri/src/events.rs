@@ -59,20 +59,8 @@ pub enum SupervisorEvent {
         transactions_count: usize,
         revenue_usd: f64,
     },
-    EtsyMessageIngested {
-        conversation_id: i64,
-        /// First 80 chars of the buyer's message.
-        snippet: String,
-    },
     EtsyReplyPosted {
         conversation_id: i64,
-    },
-    EtsyListingStats {
-        etsy_listing_id: i64,
-        views: i64,
-        favorites: i64,
-        delta_views: i64,
-        delta_favorites: i64,
     },
     Cults3dPublished {
         local_listing_id: i64,

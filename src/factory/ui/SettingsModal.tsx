@@ -781,7 +781,7 @@ function CharacterPoolSection() {
     }
   };
 
-  const options: Array<{ value: string; label: string; sub: string }> = [
+  const options: Array<{ value: string; label: string; sub: string; risk?: boolean }> = [
     {
       value: "safe",
       label: "Safe (recommended)",
@@ -804,13 +804,15 @@ function CharacterPoolSection() {
     },
     {
       value: "all",
-      label: "All four ⚠️",
+      label: "All four",
       sub: "Includes popular-IP fan art (Naruto/Marvel/Star Wars). Will auto-publish those to Etsy until the IP gate ships. DMCA risk.",
+      risk: true,
     },
     {
       value: "popular_ip",
-      label: "Popular IP only ⚠️",
+      label: "Popular IP only",
       sub: "Naruto, Marvel, Star Wars, etc. Same DMCA risk as 'All four' until the IP gate ships. Pick deliberately.",
+      risk: true,
     },
   ];
 
@@ -832,7 +834,30 @@ function CharacterPoolSection() {
             onClick={() => handleSet(o.value)}
             disabled={saving}
           >
-            <span className="shop-focus-btn-label">{o.label}</span>
+            <span
+              className="shop-focus-btn-label"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              {o.label}
+              {o.risk && (
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-label="DMCA risk"
+                  focusable="false"
+                >
+                  <path d="M8 2 L14.5 13.5 H1.5 Z" />
+                  <path d="M8 6.5 V9.5" />
+                  <circle cx="8" cy="11.7" r="0.5" fill="currentColor" />
+                </svg>
+              )}
+            </span>
             <span className="shop-focus-btn-sub">{o.sub}</span>
           </button>
         ))}
@@ -1439,6 +1464,203 @@ function PinterestSection() {
             <span className="settings-helper">
               Clears the access token + board id from the keychain. Use
               this when rotating tokens or migrating boards.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="settings-cred-save"
+            onClick={handleDisconnect}
+          >
+            Disconnect
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  TelegramSection: bot token + chat id for the rater bot.             */
+/* ------------------------------------------------------------------ */
+
+function TelegramSection() {
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [chatDraft, setChatDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<
+    "idle" | "verifying" | "ok" | "error"
+  >("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    credsPresent: boolean;
+    botUsername: string | null;
+    chatId: number | null;
+    enabled: boolean;
+  }>({
+    credsPresent: false,
+    botUsername: null,
+    chatId: null,
+    enabled: false,
+  });
+
+  const reload = async () => {
+    try {
+      const s = await api.telegramStatus();
+      setStatus({
+        credsPresent: s.creds_present,
+        botUsername: s.bot_username,
+        chatId: s.chat_id,
+        enabled: s.enabled,
+      });
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleVerify = async () => {
+    const t = tokenDraft.trim();
+    const c = parseInt(chatDraft.trim(), 10);
+    if (!t || !Number.isFinite(c) || c === 0) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      await api.telegramVerify(t, c);
+      setVerifyState("ok");
+      setTokenDraft("");
+      setChatDraft("");
+      reload();
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.telegramSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+
+  const handleDisconnect = async () => {
+    await api.telegramDisconnect();
+    reload();
+  };
+
+  const canEnable = status.credsPresent;
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Telegram rater bot</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Posts every new Etsy draft to your private Telegram chat with a
+        photo, the STL/GLB attached, a 1-5 star keyboard, and a 3D viewer
+        link. Star ratings + reply-notes train the orchestrator's
+        niche-picking on the very next cycle. Run the worker locally with{" "}
+        <code>uv run --project workers/rater_bot python -m rater_bot</code>.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Status</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? `Connected${status.botUsername ? ` as @${status.botUsername}` : ""}${
+                  status.chatId ? ` · chat ${status.chatId}` : ""
+                }`
+              : "Not connected — paste a BotFather token + your chat id"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Bot token</span>
+          <span className="settings-helper">
+            Create a bot via @BotFather in Telegram (<code>/newbot</code>);
+            it returns a token like <code>1234:AA...</code>.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "BotFather token"}
+          value={tokenDraft}
+          onChange={(e) => setTokenDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Chat id</span>
+          <span className="settings-helper">
+            Send any message to your bot in Telegram, then visit{" "}
+            <code>api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> in a
+            browser and copy the <code>chat.id</code> integer.
+          </span>
+        </div>
+        <input
+          type="text"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "numeric chat id"}
+          value={chatDraft}
+          onChange={(e) => setChatDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={
+            verifyState === "verifying" ||
+            !tokenDraft.trim() ||
+            !chatDraft.trim()
+          }
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — telegram.json written.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enable rating loop</span>
+          <span className="settings-helper">
+            {canEnable
+              ? "On = the rater bot will post each new draft to your chat once it's running."
+              : "Off — verify a bot token + chat id first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!canEnable}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      {status.credsPresent && (
+        <div className="settings-field-row">
+          <div className="settings-field-label-col">
+            <span className="settings-field-label">Disconnect</span>
+            <span className="settings-helper">
+              Deletes telegram.json so a leaked token can't be reused. Re-run
+              BotFather <code>/revoke</code> if you suspect the token is out.
             </span>
           </div>
           <button
@@ -3348,6 +3570,7 @@ export default function SettingsModal({
           <MmfSection />
           <GumroadSection />
           <PinterestSection />
+          <TelegramSection />
           </>}
 
           </div>

@@ -382,22 +382,6 @@ export function applySupervisorEvent(
       });
       break;
     }
-    case "etsy_message_ingested": {
-      const convId = (evt as any).conversation_id as number | undefined;
-      const snippet = (evt as any).snippet as string | undefined;
-      const display = (snippet ?? "").slice(0, 80);
-      store.pushEtsyMessage({
-        conversation_id: convId ?? 0,
-        snippet: display,
-        ts: Date.now(),
-      });
-      store.pushTicker({
-        ts: Date.now(),
-        source: "etsy",
-        text: `etsy DM · ${display}${(snippet?.length ?? 0) > 80 ? "…" : ""}`,
-      });
-      break;
-    }
     case "etsy_reply_posted": {
       const convId = (evt as any).conversation_id as number | undefined;
       store.pushTicker({

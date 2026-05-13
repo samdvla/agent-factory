@@ -38,12 +38,10 @@ export default function EtsyPanel({ alwaysOpen: _alwaysOpen = false }: { alwaysO
   const [publishes, setPublishes] = useState<EtsyPublishRow[]>([]);
   const [activating, setActivating] = useState<number | null>(null);
   const [showReceipts, setShowReceipts] = useState(false);
-  const [showMessages, setShowMessages] = useState(false);
   const [reviewing, setReviewing] = useState<EtsyPublishRow | null>(null);
   const [tab, setTab] = useState<ListTab>("drafts");
   const etsyPublishesRev = useFactoryStore((s) => s.etsyPublishesRev);
   const recentReceipts = useFactoryStore((s) => s.etsyRecentReceipts);
-  const recentMessages = useFactoryStore((s) => s.etsyRecentMessages);
   const etsyKilled = useFactoryStore((s) => s.etsyKilled);
 
   const refresh = useCallback(async () => {
@@ -291,41 +289,6 @@ export default function EtsyPanel({ alwaysOpen: _alwaysOpen = false }: { alwaysO
                 </span>
                 <span className="etsy-rail-mini-rev">
                   ${r.revenue_usd.toFixed(2)}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {/* DMs accordion */}
-      <button
-        type="button"
-        className={`etsy-rail-accordion${showMessages ? " is-open" : ""}`}
-        onClick={() => setShowMessages((v) => !v)}
-      >
-        <span className="etsy-rail-accordion-label">Recent buyer DMs</span>
-        <span className={`etsy-rail-accordion-count${recentMessages.length > 0 ? " is-live" : ""}`}>
-          {recentMessages.length}
-        </span>
-        <svg
-          className="etsy-rail-accordion-caret"
-          width="9" height="9" viewBox="0 0 24 24"
-          fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true"
-        >
-          <polyline points="9 6 15 12 9 18" />
-        </svg>
-      </button>
-      {showMessages && (
-        <div className="etsy-rail-mini-list">
-          {recentMessages.length === 0 ? (
-            <div className="etsy-rail-empty">no DMs yet</div>
-          ) : (
-            recentMessages.map((m, i) => (
-              <div key={`${m.conversation_id}-${i}`} className="etsy-rail-mini-row">
-                <span className="etsy-rail-mini-id">#{m.conversation_id}</span>
-                <span className="etsy-rail-mini-snippet" title={m.snippet}>
-                  {m.snippet}
                 </span>
               </div>
             ))

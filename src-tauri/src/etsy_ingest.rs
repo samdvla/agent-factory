@@ -1,10 +1,9 @@
-//! Real Etsy v3 receipts + conversations ingest.
+//! Real Etsy v3 receipts ingest.
 //!
-//! Phase I4 closes the bridge loop:
-//! - Poll new paid receipts → append outcomes.jsonl rows the SI / orchestrator
-//!   loops already consume.
-//! - Poll new buyer messages → enqueue CS jobs whose replies the supervisor
-//!   posts back to Etsy.
+//! Poll new paid receipts → append outcomes.jsonl rows the SI / orchestrator
+//! loops already consume. Listing-stats and conversations/messages ingest
+//! used to live here too — they were removed (2026-05-13) because Etsy v3
+//! never shipped those endpoints, so every call returned a permanent 404.
 //!
 //! All network helpers in this module are pure: they accept a `reqwest::Client`
 //! plus an explicit `api_base` URL so tests can point them at mockito servers.
@@ -16,7 +15,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-/// Default limit when listing receipts / conversations / messages.
+/// Default limit when listing receipts.
 pub const DEFAULT_LIMIT: i64 = 25;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -65,58 +64,6 @@ pub struct ReceiptsPage {
     pub results: Vec<Receipt>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct Conversation {
-    pub conversation_id: i64,
-    #[serde(default)]
-    pub last_message_at: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ConversationsPage {
-    #[serde(default)]
-    pub count: i64,
-    #[serde(default)]
-    pub results: Vec<Conversation>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Message {
-    pub message_id: i64,
-    #[serde(default)]
-    pub sender_id: Option<i64>,
-    #[serde(default)]
-    pub is_seller_message: bool,
-    #[serde(default)]
-    pub text: String,
-    #[serde(default)]
-    pub creation_timestamp: i64,
-    #[serde(default)]
-    pub conversation_id: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MessagesPage {
-    #[serde(default)]
-    pub count: i64,
-    #[serde(default)]
-    pub results: Vec<Message>,
-}
-
-/// Snapshot of a listing's impression stats from Etsy's
-/// `/shops/{shop_id}/listings/{listing_id}/stats` endpoint. Etsy v3 names
-/// the fields `views`, `favorites`, `listings_total_orders`; we normalize
-/// to `total_orders` for our own bookkeeping.
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct ListingStats {
-    #[serde(default)]
-    pub views: i64,
-    #[serde(default)]
-    pub favorites: i64,
-    #[serde(default, rename = "listings_total_orders")]
-    pub total_orders: i64,
-}
-
 /// Fetch the most recent paid + non-canceled receipts from a shop, returning
 /// only those whose `receipt_id` is strictly greater than `last_seen_id`.
 pub async fn fetch_new_receipts(
@@ -150,141 +97,6 @@ pub async fn fetch_new_receipts(
         .into_iter()
         .filter(|r| r.receipt_id > last_seen_id)
         .collect())
-}
-
-/// Fetch impression stats for a single listing. Returns views, favorites,
-/// and total orders. The endpoint is rate-limited per app — callers should
-/// poll on a long interval and stagger requests across listings.
-pub async fn fetch_listing_stats(
-    client: &reqwest::Client,
-    api_base: &str,
-    access_token: &str,
-    shop_id: i64,
-    etsy_listing_id: i64,
-) -> Result<ListingStats> {
-    let url = format!(
-        "{}/shops/{}/listings/{}/stats",
-        api_base, shop_id, etsy_listing_id
-    );
-    let resp = client
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("x-api-key", crate::etsy::api_key_header()?)
-        .send()
-        .await
-        .context("fetch listing stats GET failed")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("fetch listing stats HTTP {}: {}", status, body);
-    }
-    let body = resp.text().await.context("read listing stats body")?;
-    let stats: ListingStats = serde_json::from_str(&body)
-        .with_context(|| format!("parse listing stats JSON: {body}"))?;
-    Ok(stats)
-}
-
-/// Fetch recent conversations for the shop. The caller iterates these and
-/// requests messages per conversation.
-pub async fn fetch_conversations(
-    client: &reqwest::Client,
-    api_base: &str,
-    access_token: &str,
-    shop_id: i64,
-) -> Result<Vec<Conversation>> {
-    let url = format!(
-        "{}/shops/{}/conversations?limit={}",
-        api_base, shop_id, DEFAULT_LIMIT
-    );
-    let resp = client
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("x-api-key", crate::etsy::api_key_header()?)
-        .send()
-        .await
-        .context("fetch conversations GET failed")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("fetch conversations HTTP {}: {}", status, body);
-    }
-    let body = resp.text().await.context("read conversations body")?;
-    let page: ConversationsPage =
-        serde_json::from_str(&body).with_context(|| format!("parse conversations JSON: {body}"))?;
-    Ok(page.results)
-}
-
-/// Fetch the most recent messages in a single conversation.
-pub async fn fetch_messages(
-    client: &reqwest::Client,
-    api_base: &str,
-    access_token: &str,
-    shop_id: i64,
-    conversation_id: i64,
-) -> Result<Vec<Message>> {
-    let url = format!(
-        "{}/shops/{}/conversations/{}/messages?limit=10",
-        api_base, shop_id, conversation_id
-    );
-    let resp = client
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("x-api-key", crate::etsy::api_key_header()?)
-        .send()
-        .await
-        .context("fetch messages GET failed")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("fetch messages HTTP {}: {}", status, body);
-    }
-    let body = resp.text().await.context("read messages body")?;
-    let page: MessagesPage =
-        serde_json::from_str(&body).with_context(|| format!("parse messages JSON: {body}"))?;
-    Ok(page.results)
-}
-
-/// One-shot: iterate top conversations, fetch their messages, and return all
-/// buyer-authored messages with `message_id > last_seen_id`, each annotated
-/// with its `conversation_id`. Conversation iteration is best-effort: a
-/// failure on one conversation is logged but does not abort the rest.
-pub async fn fetch_new_messages(
-    client: &reqwest::Client,
-    api_base: &str,
-    access_token: &str,
-    shop_id: i64,
-    last_seen_id: i64,
-) -> Result<Vec<Message>> {
-    let convs = fetch_conversations(client, api_base, access_token, shop_id).await?;
-    let mut out: Vec<Message> = Vec::new();
-    for c in convs {
-        match fetch_messages(client, api_base, access_token, shop_id, c.conversation_id)
-            .await
-        {
-            Ok(msgs) => {
-                for mut m in msgs {
-                    if m.is_seller_message {
-                        continue;
-                    }
-                    if m.message_id <= last_seen_id {
-                        continue;
-                    }
-                    if m.conversation_id.is_none() {
-                        m.conversation_id = Some(c.conversation_id);
-                    }
-                    out.push(m);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "fetch_messages failed for conversation {}: {:#}",
-                    c.conversation_id,
-                    e
-                );
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// POST a reply into an Etsy conversation. Body is
@@ -358,44 +170,6 @@ fn data_dir() -> std::path::PathBuf {
 
 fn outcomes_path() -> std::path::PathBuf {
     data_dir().join("outcomes.jsonl")
-}
-
-/// Append an impression-only row to outcomes.jsonl. We emit one of these
-/// whenever a listing's view or favorite count changes — that gives the
-/// strategist + orchestrator a signal to learn from even before any sale
-/// lands. `source` is "etsy_impressions" so downstream consumers can tell
-/// these apart from receipt rows (which have sales > 0).
-pub fn append_impression_outcome(
-    etsy_listing_id: i64,
-    niche: &str,
-    views: i64,
-    favorites: i64,
-    delta_views: i64,
-    delta_favorites: i64,
-) -> Result<()> {
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    let path = outcomes_path();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("open {}", path.display()))?;
-    use std::io::Write;
-    let row = serde_json::json!({
-        "ts": chrono::Utc::now().timestamp(),
-        "listing_id": etsy_listing_id,
-        "niche": niche,
-        "sales": 0,
-        "revenue_usd": 0.0,
-        "views": views,
-        "favorites": favorites,
-        "delta_views": delta_views,
-        "delta_favorites": delta_favorites,
-        "source": "etsy_impressions",
-    });
-    writeln!(f, "{row}").context("write outcomes.jsonl impression row")?;
-    Ok(())
 }
 
 /// Append a cross-marketplace publish row to outcomes.jsonl. Used by the
@@ -534,38 +308,6 @@ mod tests {
         assert!((t.price.usd() - 3.50).abs() < 1e-9);
     }
 
-    #[test]
-    fn test_messages_page_parses() {
-        let json = r#"
-        {
-          "count": 2,
-          "results": [
-            {"message_id": 1, "is_seller_message": true,  "text": "hi from us",   "creation_timestamp": 1, "sender_id": 7},
-            {"message_id": 2, "is_seller_message": false, "text": "hi from buyer","creation_timestamp": 2, "sender_id": 8}
-          ]
-        }"#;
-        let page: MessagesPage = serde_json::from_str(json).unwrap();
-        assert_eq!(page.results.len(), 2);
-        assert!(page.results[0].is_seller_message);
-        assert!(!page.results[1].is_seller_message);
-        assert_eq!(page.results[1].text, "hi from buyer");
-    }
-
-    #[test]
-    fn test_conversations_page_parses() {
-        let json = r#"
-        {"count": 2, "results":[
-          {"conversation_id": 100, "last_message_at": 1730000010},
-          {"conversation_id": 101}
-        ]}"#;
-        let page: ConversationsPage = serde_json::from_str(json).unwrap();
-        assert_eq!(page.results.len(), 2);
-        assert_eq!(page.results[0].conversation_id, 100);
-        assert_eq!(page.results[0].last_message_at, Some(1730000010));
-        assert_eq!(page.results[1].conversation_id, 101);
-        assert!(page.results[1].last_message_at.is_none());
-    }
-
     #[tokio::test]
     async fn test_fetch_new_receipts_filters_by_last_seen() {
         crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
@@ -661,47 +403,6 @@ mod tests {
             .await
             .unwrap();
         mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn test_fetch_new_messages_skips_seller_and_old() {
-        let mut server = mockito::Server::new_async().await;
-        let _convs = server
-            .mock("GET", "/shops/1/conversations")
-            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "25".into()))
-            .with_status(200)
-            .with_body(
-                r#"{"count": 1, "results": [{"conversation_id": 500, "last_message_at": 9}]}"#,
-            )
-            .create_async()
-            .await;
-        let _msgs = server
-            .mock("GET", "/shops/1/conversations/500/messages")
-            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "10".into()))
-            .with_status(200)
-            .with_body(
-                r#"{
-                  "count": 3,
-                  "results": [
-                    {"message_id": 1, "is_seller_message": true,  "text": "older us",    "creation_timestamp": 1},
-                    {"message_id": 2, "is_seller_message": false, "text": "old buyer",   "creation_timestamp": 2},
-                    {"message_id": 5, "is_seller_message": false, "text": "fresh buyer", "creation_timestamp": 9}
-                  ]
-                }"#,
-            )
-            .create_async()
-            .await;
-        let client = reqwest::Client::new();
-        let new_msgs =
-            fetch_new_messages(&client, &server.url(), "tok", 1, /*last_seen=*/ 2)
-                .await
-                .unwrap();
-        // Only message_id 5 survives (>2, is_seller=false).
-        assert_eq!(new_msgs.len(), 1);
-        assert_eq!(new_msgs[0].message_id, 5);
-        assert_eq!(new_msgs[0].text, "fresh buyer");
-        // conversation_id should be filled in by the iterator if not present in payload.
-        assert_eq!(new_msgs[0].conversation_id, Some(500));
     }
 
     #[test]

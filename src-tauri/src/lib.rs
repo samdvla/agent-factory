@@ -97,6 +97,15 @@ pub fn run() {
                         tracing::warn!("mock_etsy.json migration failed: {e}");
                     }
                 }
+
+                // Write the SQLite db path to ~/.agent-factory/db_path.txt so
+                // Python workers (rater_bot) can find the same database
+                // without hardcoding Tauri's platform-specific app_data_dir.
+                std::fs::create_dir_all(&data_dir).ok();
+                let path_file = std::path::PathBuf::from(&data_dir).join("db_path.txt");
+                if let Some(s) = db_path.to_str() {
+                    let _ = std::fs::write(&path_file, s);
+                }
             }
 
             // Migrate old single-field bridge config to the split pair.
@@ -158,6 +167,7 @@ pub fn run() {
             commands::cmd_agent_steer_add,
             commands::cmd_agent_steer_list,
             commands::cmd_agent_steer_clear,
+            commands::cmd_agent_steer_save_image,
             commands::cmd_read_asset_svg,
             commands::cmd_etsy_listing_review_info,
             commands::cmd_etsy_discard_draft,
@@ -181,8 +191,6 @@ pub fn run() {
             commands::cmd_post_agent_message,
             commands::cmd_list_agent_messages,
             commands::cmd_agent_messages_since,
-            commands::cmd_list_listing_stats,
-            commands::cmd_listing_stats_history,
             commands::cmd_tripo_verify,
             commands::cmd_tripo_status,
             commands::cmd_meshy_verify,
@@ -230,6 +238,10 @@ pub fn run() {
             commands::cmd_set_image_to_3d_provider,
             commands::cmd_google_verify,
             commands::cmd_google_status,
+            commands::cmd_telegram_status,
+            commands::cmd_telegram_verify,
+            commands::cmd_telegram_set_enabled,
+            commands::cmd_telegram_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

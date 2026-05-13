@@ -160,15 +160,17 @@ fn spawn_autonomous_loops(pool: SqlitePool, project_id: i64, bus: EventBus) {
         }
     });
 
-    // Design Strategist loop — every 15 min, run the strategist to refresh
-    // the designer's system prompt based on recent outcomes + current
-    // design trends. Gated on `strategist_loop_enabled` secret (default
-    // true once the user has at least MIN_OUTCOMES designs to learn from).
+    // Strategist loop — every 15 min, ALTERNATE between tuning the designer
+    // (system_override) and tuning the orchestrator (strategist_notes).
+    // Even ticks → designer; odd ticks → orchestrator. Each role sees a
+    // refresh every 30 min, total spend unchanged from the single-target
+    // schedule. Gated on `strategist_loop_enabled` secret (default true).
     let pool_for_strategist = pool.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(180)).await;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
         interval.tick().await; // skip the immediate first tick
+        let mut tick: u64 = 0;
         loop {
             interval.tick().await;
             let enabled = secrets::get("strategist_loop_enabled")
@@ -179,10 +181,15 @@ fn spawn_autonomous_loops(pool: SqlitePool, project_id: i64, bus: EventBus) {
             if !enabled {
                 continue;
             }
-            let payload = serde_json::json!({"trigger": "strategist_loop"});
+            let target = if tick % 2 == 0 { "designer" } else { "orchestrator" };
+            let payload = serde_json::json!({
+                "trigger": "strategist_loop",
+                "target": target,
+            });
             if let Err(e) = queue::enqueue(&pool_for_strategist, project_id, "strategist", payload).await {
                 tracing::warn!("strategist loop enqueue failed: {e}");
             }
+            tick = tick.wrapping_add(1);
         }
     });
 }
@@ -1079,21 +1086,51 @@ pub async fn cmd_agent_steer_roles() -> Result<Vec<String>, String> {
 pub struct AgentSteerAddArgs {
     pub role: String,
     pub text: String,
+    /// Absolute paths to reference images previously saved via
+    /// `cmd_agent_steer_save_image`. Empty / omitted for text-only steers.
+    #[serde(default)]
+    pub image_paths: Vec<String>,
 }
 
 #[tauri::command]
 pub async fn cmd_agent_steer_add(args: AgentSteerAddArgs) -> Result<(), String> {
-    prompts::add_operator_steer(&args.role, &args.text).map_err(|e| e.to_string())
+    prompts::add_operator_steer(&args.role, &args.text, args.image_paths)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn cmd_agent_steer_list(role: String) -> Result<Vec<String>, String> {
+pub async fn cmd_agent_steer_list(role: String) -> Result<Vec<prompts::SteerEntry>, String> {
     Ok(prompts::list_operator_steers(&role))
 }
 
 #[tauri::command]
 pub async fn cmd_agent_steer_clear(role: String) -> Result<(), String> {
     prompts::clear_operator_steers(&role).map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+pub struct AgentSteerSaveImageArgs {
+    pub role: String,
+    /// Raw image bytes; the frontend reads the file (or clipboard image)
+    /// and passes them as a byte array. We never accept a path here — the
+    /// sandbox should be the only writer to steer-assets/.
+    pub bytes: Vec<u8>,
+    /// File extension without the dot: "png" / "jpg" / "webp" / "gif".
+    pub ext: String,
+}
+
+/// Save reference image bytes under `~/.agent-factory/steer-assets/<role>/`
+/// and return the absolute path. The ChatPanel passes this path back to
+/// `cmd_agent_steer_add` so the new steer carries a stable on-disk reference.
+/// Validation (size, extension allowlist, per-role ROLES check) lives in
+/// `prompts::save_steer_image`.
+#[tauri::command]
+pub async fn cmd_agent_steer_save_image(
+    args: AgentSteerSaveImageArgs,
+) -> Result<String, String> {
+    let path = prompts::save_steer_image(&args.role, &args.bytes, &args.ext)
+        .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 // ---------- SVG asset reader ----------
@@ -2749,110 +2786,6 @@ pub async fn cmd_pinterest_list_pins(
         .collect())
 }
 
-// ─── Listing-stats feedback loop ─────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct ListingStatsRow {
-    pub id: i64,
-    pub etsy_listing_id: i64,
-    pub local_listing_id: Option<i64>,
-    pub views: i64,
-    pub favorites: i64,
-    pub total_orders: i64,
-    pub ts: i64,
-}
-
-#[derive(Serialize)]
-pub struct ListingStatsSummary {
-    pub etsy_listing_id: i64,
-    pub local_listing_id: Option<i64>,
-    pub title: String,
-    pub views: i64,
-    pub favorites: i64,
-    pub total_orders: i64,
-    /// Most recent ts in the time series for this listing (epoch seconds).
-    pub last_polled_ts: i64,
-}
-
-/// List the latest stats per listing — one row per listing, joined with
-/// `etsy_publishes.title` so the UI can show a single human-readable feed
-/// of which drafts are getting traction.
-#[tauri::command]
-pub async fn cmd_list_listing_stats(
-    state: State<'_, Arc<AppState>>,
-    limit: Option<i64>,
-) -> Result<Vec<ListingStatsSummary>, String> {
-    let limit = limit.unwrap_or(50).clamp(1, 500);
-    let rows = sqlx::query_as::<_, (i64, Option<i64>, String, i64, i64, i64, i64)>(
-        "WITH latest AS ( \
-            SELECT etsy_listing_id, MAX(ts) AS max_ts \
-            FROM listing_stats WHERE project_id = ? \
-            GROUP BY etsy_listing_id \
-         ) \
-         SELECT s.etsy_listing_id, s.local_listing_id, COALESCE(p.title, '') AS title, \
-                s.views, s.favorites, s.total_orders, s.ts \
-         FROM listing_stats s \
-         JOIN latest l ON l.etsy_listing_id = s.etsy_listing_id AND l.max_ts = s.ts \
-         LEFT JOIN etsy_publishes p ON p.etsy_listing_id = s.etsy_listing_id \
-         WHERE s.project_id = ? \
-         ORDER BY s.views DESC, s.favorites DESC \
-         LIMIT ?",
-    )
-    .bind(state.project_id)
-    .bind(state.project_id)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(rows
-        .into_iter()
-        .map(|r| ListingStatsSummary {
-            etsy_listing_id: r.0,
-            local_listing_id: r.1,
-            title: r.2,
-            views: r.3,
-            favorites: r.4,
-            total_orders: r.5,
-            last_polled_ts: r.6,
-        })
-        .collect())
-}
-
-/// Time series of stats for a single listing (newest last) so the UI can
-/// chart impression growth.
-#[tauri::command]
-pub async fn cmd_listing_stats_history(
-    state: State<'_, Arc<AppState>>,
-    etsy_listing_id: i64,
-    limit: Option<i64>,
-) -> Result<Vec<ListingStatsRow>, String> {
-    let limit = limit.unwrap_or(96).clamp(1, 1000);
-    let rows = sqlx::query_as::<_, (i64, i64, Option<i64>, i64, i64, i64, i64)>(
-        "SELECT id, etsy_listing_id, local_listing_id, views, favorites, total_orders, ts \
-         FROM listing_stats WHERE project_id = ? AND etsy_listing_id = ? \
-         ORDER BY id DESC LIMIT ?",
-    )
-    .bind(state.project_id)
-    .bind(etsy_listing_id)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(rows
-        .into_iter()
-        .rev()
-        .map(|r| ListingStatsRow {
-            id: r.0,
-            etsy_listing_id: r.1,
-            local_listing_id: r.2,
-            views: r.3,
-            favorites: r.4,
-            total_orders: r.5,
-            ts: r.6,
-        })
-        .collect())
-}
-
 /// Count of agent messages newer than `since_unix` — used by the CommandRail
 /// to badge unread conversation activity.
 #[tauri::command]
@@ -3625,4 +3558,143 @@ pub async fn cmd_chat_with_agent(
         tokens_out,
         model: model.to_string(),
     })
+}
+
+// ---------- Telegram rater bot config ----------
+//
+// telegram.json lives in ~/.agent-factory/ (same dir as outcomes.jsonl /
+// ratings.jsonl) so the Python rater bot can read it without any IPC.
+// Shape: { "bot_token": "...", "chat_id": <int>, "enabled": <bool> }.
+//
+// We persist it as a plain file (not the secrets table) so the worker —
+// which has no SQLite-secrets access path — can pick it up directly.
+
+fn telegram_config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::env::var("AGENT_FACTORY_DATA")
+        .unwrap_or_else(|_| format!("{home}/.agent-factory"));
+    PathBuf::from(data_dir).join("telegram.json")
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct TelegramConfig {
+    #[serde(default)]
+    bot_token: String,
+    #[serde(default)]
+    chat_id: Option<i64>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    bot_username: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn read_telegram_config() -> TelegramConfig {
+    let path = telegram_config_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<TelegramConfig>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_telegram_config(cfg: &TelegramConfig) -> Result<(), String> {
+    let path = telegram_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct TelegramStatus {
+    pub creds_present: bool,
+    pub bot_username: Option<String>,
+    pub chat_id: Option<i64>,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct TelegramVerifyOk {
+    pub bot_username: String,
+}
+
+#[tauri::command]
+pub async fn cmd_telegram_status() -> Result<TelegramStatus, String> {
+    let cfg = read_telegram_config();
+    let creds_present = !cfg.bot_token.is_empty() && cfg.chat_id.is_some();
+    Ok(TelegramStatus {
+        creds_present,
+        bot_username: cfg.bot_username,
+        chat_id: cfg.chat_id,
+        enabled: cfg.enabled,
+    })
+}
+
+/// Validate (bot_token, chat_id) by hitting Telegram's getMe endpoint with
+/// the token, then persist the pair to telegram.json. The chat_id is not
+/// re-validated against Telegram — it's a numeric id the user pasted from
+/// getUpdates, and the rater bot will surface any send failures.
+#[tauri::command]
+pub async fn cmd_telegram_verify(
+    bot_token: String,
+    chat_id: i64,
+) -> Result<TelegramVerifyOk, String> {
+    let token = bot_token.trim();
+    if token.is_empty() {
+        return Err("bot_token is required".into());
+    }
+    if chat_id == 0 {
+        return Err("chat_id must be a non-zero integer".into());
+    }
+    let url = format!("https://api.telegram.org/bot{token}/getMe");
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("telegram getMe network error: {e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("telegram getMe HTTP {status}: {body}"));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("parse getMe: {e}"))?;
+    if !v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
+        return Err(format!("telegram getMe rejected: {body}"));
+    }
+    let bot_username = v
+        .pointer("/result/username")
+        .and_then(|x| x.as_str())
+        .ok_or("telegram getMe response missing result.username")?
+        .to_string();
+
+    let cfg = TelegramConfig {
+        bot_token: token.to_string(),
+        chat_id: Some(chat_id),
+        enabled: true,
+        bot_username: Some(bot_username.clone()),
+    };
+    write_telegram_config(&cfg)?;
+    Ok(TelegramVerifyOk { bot_username })
+}
+
+#[tauri::command]
+pub async fn cmd_telegram_set_enabled(enabled: bool) -> Result<(), String> {
+    let mut cfg = read_telegram_config();
+    cfg.enabled = enabled;
+    write_telegram_config(&cfg)
+}
+
+#[tauri::command]
+pub async fn cmd_telegram_disconnect() -> Result<(), String> {
+    let path = telegram_config_path();
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
