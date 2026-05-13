@@ -695,29 +695,51 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
     (jobId: number, title: string) => setModal3d({ jobId, title }),
     [],
   );
+  // Pagination — DB-side. Page size of 50 balances scroll-comfortably-on-screen
+  // against round-trip cost. Total is what the DB knows, not what's in `rows`,
+  // so we can render "page 3 of 30" even when only this page is loaded.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const refreshTimer = useRef<number | null>(null);
+
+  // Reset to page 1 when filters change so the user never lands on an empty
+  // page (the rating filter is client-side, but the role filter is server-side
+  // via `cmd_list_recent_jobs`).
+  useEffect(() => {
+    setPage(1);
+  }, [roleFilter]);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await api.listRecentJobs({ limit: 100 });
+      const offset = (page - 1) * PAGE_SIZE;
+      const [data, total] = await Promise.all([
+        api.listRecentJobs({ limit: PAGE_SIZE, offset, role: roleFilter }),
+        api.countRecentJobs({ role: roleFilter }),
+      ]);
       setRows(data);
+      setTotalCount(total);
       setError(null);
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, roleFilter]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
   // Re-fetch on JobCompleted/JobFailed so new outputs surface immediately.
-  // Debounce to avoid hammering the DB during smoke bursts.
+  // Debounced. On page > 1, we deliberately skip auto-refresh: the user is
+  // browsing history and re-fetching with a fixed offset would cause rows
+  // to drift down by one as new jobs land at the top. They can hit "← First"
+  // to see live updates again.
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     const schedule = () => {
+      if (page !== 1) return;
       if (refreshTimer.current !== null) return;
       refreshTimer.current = window.setTimeout(() => {
         refreshTimer.current = null;
@@ -741,7 +763,9 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
         refreshTimer.current = null;
       }
     };
-  }, [refresh]);
+  }, [refresh, page]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const rate = useCallback(
     async (jobId: number, rating: "up" | "down" | null, note?: string | null) => {
@@ -863,7 +887,9 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
       ) : filtered.length === 0 ? (
         <div className="af-empty">
           {rows.length === 0
-            ? "No completed jobs yet — start the supervisor or run a smoke-test cycle."
+            ? totalCount === 0
+              ? "No completed jobs yet — start the supervisor or run a smoke-test cycle."
+              : "This page has no jobs — try First or Prev."
             : "No jobs match the current filters."}
         </div>
       ) : (
@@ -876,6 +902,52 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
               onOpenEtsy={openEtsy}
             />
           ))}
+        </div>
+      )}
+
+      {/* Pagination footer — visible whenever there's more than one page. */}
+      {totalPages > 1 && (
+        <div className="af-pager">
+          <button
+            type="button"
+            className="af-pager-btn"
+            onClick={() => setPage(1)}
+            disabled={page === 1}
+            title="First page (latest jobs)"
+          >
+            ⇤ First
+          </button>
+          <button
+            type="button"
+            className="af-pager-btn"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            title="Previous page (newer jobs)"
+          >
+            ← Prev
+          </button>
+          <span className="af-pager-status">
+            Page <strong>{page}</strong> of {totalPages}
+            <span className="af-pager-meta"> · {totalCount.toLocaleString()} total</span>
+          </span>
+          <button
+            type="button"
+            className="af-pager-btn"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            title="Next page (older jobs)"
+          >
+            Next →
+          </button>
+          <button
+            type="button"
+            className="af-pager-btn"
+            onClick={() => setPage(totalPages)}
+            disabled={page >= totalPages}
+            title="Last page (oldest jobs)"
+          >
+            Last ⇥
+          </button>
         </div>
       )}
       {lightbox && (

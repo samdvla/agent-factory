@@ -132,7 +132,7 @@ export default function QueuePanel({ agentId }: Props) {
             <div className="queue-active-meta">
               <span className="queue-meta-pill">{agent.model}</span>
               <span className="queue-meta-sep">·</span>
-              <span>{agent.tokensToday.toLocaleString()} tok today</span>
+              <span>{(agent.tokensToday ?? 0).toLocaleString()} tok today</span>
             </div>
           </div>
         ) : (
@@ -171,7 +171,7 @@ export default function QueuePanel({ agentId }: Props) {
           <span className="queue-stat-lbl">failed</span>
         </div>
         <div className="queue-stat">
-          <span className="queue-stat-num">{agent.tokensToday.toLocaleString()}</span>
+          <span className="queue-stat-num">{(agent.tokensToday ?? 0).toLocaleString()}</span>
           <span className="queue-stat-lbl">tokens</span>
         </div>
       </div>

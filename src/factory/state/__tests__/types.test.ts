@@ -4,12 +4,13 @@ import type {
 } from "../types";
 
 describe("new types", () => {
-  it("RoomTag includes the 11 spec tags", () => {
+  it("RoomTag includes the 12 spec tags", () => {
     const tags: RoomTag[] = [
       "bridge", "analyst", "creative", "copy", "comms",
       "finance", "rd", "ops", "legal", "archive", "dev",
+      "marketing",
     ];
-    expect(tags).toHaveLength(11);
+    expect(tags).toHaveLength(12);
   });
 
   it("WallFeature includes the 10 spec features", () => {

@@ -553,6 +553,19 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         "HIGGSFIELD_ENABLED".into(),
         if higgsfield_enabled { "true".into() } else { "false".into() },
     );
+    // UI sandbox mode — workers read this to decide whether simulated
+    // signals (CFO buyer panel) are allowed. In Live mode this is "false"
+    // and any worker that would otherwise invent revenue/sales numbers
+    // emits a real zero instead, so the topbar Revenue/Net only counts
+    // actual Etsy receipts. Re-snapshotted at supervisor start; toggling
+    // the UI mode without restarting the supervisor keeps the previous
+    // value (same coarse contract as the other env flags above).
+    let ui_sandbox_value = secrets::get("ui_sandbox_mode").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let ui_sandbox_env: (String, String) = (
+        "UI_SANDBOX_MODE".into(),
+        if ui_sandbox_value { "true".into() } else { "false".into() },
+    );
     // Resolve the absolute path to the `workers/` dir. The Tauri dev binary
     // runs with CWD=src-tauri (cargo's package root), so relative
     // "workers/foo" would resolve to src-tauri/workers/foo and fail with
@@ -570,12 +583,14 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         let shop_focus_env = shop_focus_env.clone();
         let character_pool_env = character_pool_env.clone();
         let image_to_3d_env = image_to_3d_env.clone();
+        let ui_sandbox_env = ui_sandbox_env.clone();
         move |role: &str, worker_dir: &str| {
             let mut env = vec![
                 api_key_env.clone(),
                 shop_focus_env.clone(),
                 character_pool_env.clone(),
                 image_to_3d_env.clone(),
+                ui_sandbox_env.clone(),
                 ("PYTHONPATH".into(), workers_root.join(worker_dir).to_string_lossy().into_owned()),
             ];
             if let Some(ref u) = effective_base_url {
@@ -1653,10 +1668,12 @@ pub struct JobRow {
 pub async fn cmd_list_recent_jobs(
     state: State<'_, Arc<AppState>>,
     limit: Option<i64>,
+    offset: Option<i64>,
     role: Option<String>,
     since_unix: Option<i64>,
 ) -> Result<Vec<JobRow>, String> {
     let limit = limit.unwrap_or(50).clamp(1, 500);
+    let offset = offset.unwrap_or(0).max(0);
     // Build the query with optional WHERE filters. We always restrict to
     // terminal states so the feed only shows things the operator can
     // meaningfully rate.
@@ -1674,7 +1691,7 @@ pub async fn cmd_list_recent_jobs(
     if since_unix.is_some() {
         sql.push_str(" AND CAST(strftime('%s', COALESCE(j.finished_at, j.scheduled_at)) AS INTEGER) >= ?");
     }
-    sql.push_str(" ORDER BY j.id DESC LIMIT ?");
+    sql.push_str(" ORDER BY j.id DESC LIMIT ? OFFSET ?");
 
     let mut q = sqlx::query_as::<
         _,
@@ -1701,6 +1718,7 @@ pub async fn cmd_list_recent_jobs(
         q = q.bind(s);
     }
     q = q.bind(limit);
+    q = q.bind(offset);
 
     let rows = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
     Ok(rows
@@ -1720,6 +1738,133 @@ pub async fn cmd_list_recent_jobs(
             rated_at: r.11,
         })
         .collect())
+}
+
+/// Total terminal-state job count for the current project, optionally
+/// filtered by role. Powers the Activity Feed's pagination — UI divides
+/// this by page size to compute total pages.
+#[tauri::command]
+pub async fn cmd_count_recent_jobs(
+    state: State<'_, Arc<AppState>>,
+    role: Option<String>,
+    since_unix: Option<i64>,
+) -> Result<i64, String> {
+    let mut sql = String::from(
+        "SELECT COUNT(*) FROM jobs \
+         WHERE project_id = ? AND status IN ('done','errored')",
+    );
+    if role.is_some() {
+        sql.push_str(" AND agent_role = ?");
+    }
+    if since_unix.is_some() {
+        sql.push_str(" AND CAST(strftime('%s', COALESCE(finished_at, scheduled_at)) AS INTEGER) >= ?");
+    }
+    let mut q = sqlx::query_scalar::<_, i64>(&sql).bind(state.project_id);
+    if let Some(r) = role.as_ref() {
+        q = q.bind(r);
+    }
+    if let Some(s) = since_unix {
+        q = q.bind(s);
+    }
+    q.fetch_one(&state.pool).await.map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct AgentTodayStats {
+    pub role: String,
+    pub tokens_today: i64,
+    pub completed_today: i64,
+    pub failed_today: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct TodayStats {
+    pub budget_today_usd: f64,
+    pub revenue_today_usd: f64,
+    pub per_agent: Vec<AgentTodayStats>,
+}
+
+/// Today's totals for the in-memory counters the UI displays (budget pill,
+/// revenue pill, per-agent tokens/completed/failed). Called on app mount so
+/// a restart in the middle of the day doesn't wipe morning numbers to zero.
+///
+/// "Today" = local day boundary via SQLite `date('now')` — matches how the
+/// budget_ledger writes its `day` column.
+///
+/// All three queries are single-table aggregates with date-indexed WHERE
+/// clauses, so the whole hydration completes in a few ms even at 10k+
+/// historical rows.
+#[tauri::command]
+pub async fn cmd_today_stats(state: State<'_, Arc<AppState>>) -> Result<TodayStats, String> {
+    let pool = &state.pool;
+    let pid = state.project_id;
+
+    // Budget: sum today's budget_ledger rows. Authoritative source — the
+    // budget cap logic also reads from here, so they stay in sync.
+    let budget_today_usd: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(usd_cost), 0.0) FROM budget_ledger \
+         WHERE project_id = ? AND day = date('now')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Revenue: sum REAL actual revenue from closed cycles only. We used to
+    // fall back to `estimated_revenue_usd` when actual was null, but the
+    // CFO worker's buyer-panel simulation populates `estimated_revenue_usd`
+    // with invented sales numbers — that meant the topbar pill showed a
+    // big profit before a single buyer paid. Today = cycles started today.
+    // `actual_revenue_usd` is written by the Etsy receipts poller when a
+    // buyer actually pays (see `pnl::apply_actual_revenue`).
+    let revenue_today_usd: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(COALESCE(actual_revenue_usd, 0.0)), 0.0) \
+         FROM pipeline_cycles \
+         WHERE project_id = ? AND date(datetime(started_at, 'unixepoch')) = date('now')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Per-agent: today's tokens + done/errored counts in a single grouped
+    // query. json_extract is fine because the date filter narrows the scan
+    // to today's rows (typically <500), and COALESCE handles workers like
+    // publisher whose result_json doesn't include token fields.
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT agent_role, \
+            COALESCE(SUM(\
+                COALESCE(CAST(json_extract(result_json, '$.tokens_in')  AS INTEGER), 0) + \
+                COALESCE(CAST(json_extract(result_json, '$.tokens_out') AS INTEGER), 0) \
+            ), 0) AS tokens_today, \
+            SUM(CASE WHEN status='done'    THEN 1 ELSE 0 END) AS completed_today, \
+            SUM(CASE WHEN status='errored' THEN 1 ELSE 0 END) AS failed_today \
+         FROM jobs \
+         WHERE project_id = ? \
+           AND status IN ('done','errored') \
+           AND date(COALESCE(finished_at, scheduled_at)) = date('now') \
+         GROUP BY agent_role",
+    )
+    .bind(pid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let per_agent: Vec<AgentTodayStats> = rows
+        .into_iter()
+        .map(|(role, tokens, done, errored)| AgentTodayStats {
+            role,
+            tokens_today: tokens,
+            completed_today: done,
+            failed_today: errored,
+        })
+        .collect();
+
+    Ok(TodayStats {
+        budget_today_usd,
+        revenue_today_usd,
+        per_agent,
+    })
 }
 
 #[derive(Deserialize)]

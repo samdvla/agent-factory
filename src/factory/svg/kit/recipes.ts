@@ -19,6 +19,7 @@ export const RECIPES: Record<RoomTag, RecipeDefaults> = {
   ops:      { wallFeature: "datafeed",  stationLayout: "row",       defaultCapacity: 3, features: ["terminal-rack"] },
   archive:  { wallFeature: "archive",   stationLayout: "perimeter", defaultCapacity: 1, features: ["archive-wall", "binder-stack", "carousel"] },
   dev:      { wallFeature: "logwall",   stationLayout: "row",       defaultCapacity: 2, features: ["terminal-rack", "server-rack", "cable-tray"] },
+  marketing:{ wallFeature: "moodboard", stationLayout: "row",       defaultCapacity: 2, features: ["color-rack", "carousel"] },
 };
 
 export function kitFromTag(tag: RoomTag, accent: string, capacityOverride?: number): RoomKit {
@@ -45,4 +46,5 @@ export const TAG_ACCENTS: Record<RoomTag, string> = {
   legal:    "#cdd5df",
   archive:  "#a78566",
   dev:      "#5fd4f0",
+  marketing: "#ff6f61",
 };

@@ -45,6 +45,96 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Cold-start hydration: seed budget/revenue/per-agent counters AND
+  // lifetime-derived wealth/rewards from the DB so a mid-day restart doesn't
+  // reset everything to zero. Without this the in-memory zustand store
+  // only accumulates from live events, losing morning activity (budget,
+  // revenue, per-agent counters) and lifetime context (avatar stars,
+  // dissolve-ticker amounts).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Today's totals — single round-trip for budget/revenue/per-agent.
+      try {
+        const stats = await api.todayStats();
+        if (cancelled) return;
+        const store = useFactoryStore.getState();
+        store.setBudget(stats.budget_today_usd);
+        store.setRevenueToday(stats.revenue_today_usd);
+        store.hydratePerAgentTodayStats(stats.per_agent);
+      } catch {
+        // Swallow — counters fall back to live-event accumulation.
+      }
+      // Lifetime wealth + avatar stars. listWealth already exists for the
+      // WealthLeaderboard, but the leaderboard only loads when its panel is
+      // open. Without this hydration the avatar stars are blank until the
+      // first sale lands in this session.
+      try {
+        const rows = await api.listWealth();
+        if (cancelled) return;
+        const store = useFactoryStore.getState();
+        const wealthMap: Record<string, typeof rows[number]> = {};
+        let totalLifetimeRevenue = 0;
+        for (const r of rows) {
+          wealthMap[r.role] = r;
+          totalLifetimeRevenue += r.lifetime_revenue_usd ?? 0;
+        }
+        store.setWealthByRole(wealthMap);
+        // revenueByRole is currently incremented under the "publisher" key
+        // (eventReducer attributes whole receipts there). Seed it with the
+        // sum so the dissolve ticker reflects real lifetime earnings.
+        store.setRevenueByRole({ publisher: totalLifetimeRevenue });
+        // Backfill avatar stars ONLY if localStorage is empty (i.e. this is
+        // the first restart since the persistence fix landed). After that,
+        // localStorage is the source of truth and live awardProgress events
+        // keep it in sync.
+        const currentRewards = useFactoryStore.getState().rewardsByRole;
+        if (Object.keys(currentRewards).length === 0 && totalLifetimeRevenue > 0) {
+          // Each receipt awards rev/4 of progress to each pipeline role
+          // (publisher / designer / listing / research). Feed the average
+          // lifetime share through the same star formula to derive a
+          // floor — under-counts operator-rating progress, over-counts
+          // nothing.
+          const sharePerRole = totalLifetimeRevenue / 4;
+          const TIER_STAR_USD = [1, 5, 25, 100, 500];
+          const derive = (totalProgress: number) => {
+            let progress = totalProgress;
+            let stars = 0;
+            let tier = 0;
+            while (progress > 0 && tier <= 4) {
+              if (stars >= 10) {
+                if (tier >= 4) {
+                  progress = 0;
+                  break;
+                }
+                tier += 1;
+                stars = 0;
+                continue;
+              }
+              if (progress >= TIER_STAR_USD[tier]) {
+                progress -= TIER_STAR_USD[tier];
+                stars += 1;
+              } else {
+                break;
+              }
+            }
+            return { stars, tier, progressUsd: progress };
+          };
+          const backfilled: Record<string, { stars: number; tier: number; progressUsd: number }> = {};
+          for (const role of ["publisher", "designer", "listing", "research"]) {
+            backfilled[role] = derive(sharePerRole);
+          }
+          store.setRewardsByRole(backfilled);
+        }
+      } catch {
+        // Swallow — wealth panel and avatars fall back to empty state.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Derive the initial iso room theme from whatever app theme is active. The
   // SettingsModal updates both in lockstep when the user picks a new theme;
   // this catches the cold-start case where only the app theme is in DOM.

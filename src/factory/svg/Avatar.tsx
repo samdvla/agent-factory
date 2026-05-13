@@ -195,11 +195,21 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
   const torsoTop = baseY - torsoH;
   const torsoLeft = -torsoW / 2;
   const torsoRight = torsoW / 2;
-  const dx = 3.0;
-  const dy = -1.8;
+  // Narrower iso depth so arms can sit cleanly outside the torso silhouette.
+  const dx = 1.6;
+  const dy = -1.0;
   const accentLight = lighterHex(accent, 0.22);
   const accentDark = darkerHex(accent, 0.22);
-  const armR = 2.2;
+
+  // Arm geometry: a tall capsule (upper arm) in the torso accent, with a
+  // skin-colored hand below. Positioned just outside the front face so they
+  // read clearly as "arms hanging at the sides" at the avatar's small size.
+  const armW = 2.0;          // upper arm width
+  const armH = 6.5;          // upper arm height
+  const armPivotY = torsoTop + 3.2;
+  const armPivotL = torsoLeft - armW / 2;
+  const armPivotR = torsoRight + armW / 2;
+  const handR = 1.55;
   return (
     <g>
       {shoe(-2.2, "l")}
@@ -230,16 +240,32 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
         fill={accentLight}
         fillOpacity={0.9}
       />
-      {/* Arms — small accent circles either side of the torso, with a
-          skin-colored hand just below. Wrapped in per-side groups so they
-          can swing independently while walking (and typing while working). */}
+      {/* Arms — tall capsule sat just outside each torso edge plus a skin
+          hand at the bottom. Vertical translate animations (driven by the
+          .avatar-arm-l/.avatar-arm-r classes) bob the whole limb for walk
+          and typing — simple translateY composes cleanly with SVG scale
+          across zoom levels. */}
       <g className="avatar-arm avatar-arm-l">
-        <circle cx={torsoLeft - 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
-        <circle cx={torsoLeft - 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
+        <rect
+          x={armPivotL - armW / 2}
+          y={armPivotY}
+          width={armW}
+          height={armH}
+          rx={armW / 2}
+          fill={accentDark}
+        />
+        <circle cx={armPivotL} cy={armPivotY + armH + handR * 0.4} r={handR} fill={skin} />
       </g>
       <g className="avatar-arm avatar-arm-r">
-        <circle cx={torsoRight + 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
-        <circle cx={torsoRight + 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
+        <rect
+          x={armPivotR - armW / 2}
+          y={armPivotY}
+          width={armW}
+          height={armH}
+          rx={armW / 2}
+          fill={accent}
+        />
+        <circle cx={armPivotR} cy={armPivotY + armH + handR * 0.4} r={handR} fill={skin} />
       </g>
     </g>
   );
@@ -386,7 +412,10 @@ export default function Avatar({
         <span
           className={`avatar-glyph glyph-${state}`}
           style={{
-            top: -12 * sizeScale,
+            // Sit clearly above the head — the avatar's head occupies the
+            // top ~8 viewBox units, so -24*sizeScale leaves visible space
+            // between the badge and the figure's face at every zoom level.
+            top: -24 * sizeScale,
             // Scale via font + padding rather than transform: scale() so the
             // glyph (a unicode character) re-rasterizes crisp at every zoom
             // instead of being bitmap-stretched.

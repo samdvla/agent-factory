@@ -117,6 +117,19 @@ export interface BudgetStatus {
   burn_per_hour_usd: number;
 }
 
+export interface AgentTodayStats {
+  role: string;
+  tokens_today: number;
+  completed_today: number;
+  failed_today: number;
+}
+
+export interface TodayStats {
+  budget_today_usd: number;
+  revenue_today_usd: number;
+  per_agent: AgentTodayStats[];
+}
+
 export const api = {
   status: () => invoke<StatusReport>("cmd_status"),
   start: () => invoke<void>("cmd_start_supervisor"),
@@ -180,14 +193,25 @@ export const api = {
   resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
   listRecentJobs: (opts?: {
     limit?: number;
+    offset?: number;
     role?: string | null;
     sinceUnix?: number | null;
   }): Promise<JobRow[]> =>
     invoke("cmd_list_recent_jobs", {
       limit: opts?.limit ?? 50,
+      offset: opts?.offset ?? 0,
       role: opts?.role ?? null,
       sinceUnix: opts?.sinceUnix ?? null,
     }),
+  countRecentJobs: (opts?: {
+    role?: string | null;
+    sinceUnix?: number | null;
+  }): Promise<number> =>
+    invoke("cmd_count_recent_jobs", {
+      role: opts?.role ?? null,
+      sinceUnix: opts?.sinceUnix ?? null,
+    }),
+  todayStats: (): Promise<TodayStats> => invoke("cmd_today_stats"),
   rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>
     invoke<void>("cmd_rate_job", {
       args: { job_id: jobId, rating, note: note ?? null },

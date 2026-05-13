@@ -40,7 +40,7 @@ const LOOPS: Record<string, RoleLoop> = {
       { task: "review CS dispute escalations", ticker: "1 dispute escalated -> review by Lina + me" },
       { task: "monthly KPI review",            ticker: "weekly KPI: revenue $182.40 · refund 1.2%" },
     ],
-    patrol: ["research", "designer", "listing", "publisher", "cs", "cfo", "si"],
+    patrol: ["research", "designer", "listing", "publisher", "cs", "marketing", "cfo", "si"],
     handoffTo: "designer",
     handoffLabel: () => "design ticket",
   },
@@ -121,6 +121,19 @@ const LOOPS: Record<string, RoleLoop> = {
     handoffTo: "research",
     handoffLabel: () => "next-niche hint",
     broadcasts: ["listing", "designer"],
+  },
+  marketing: {
+    workMin: 5500, workMax: 8500,
+    betweenMin: 200, betweenMax: 600,
+    phases: [
+      { task: "pin top mockup · Pinterest board",     ticker: "pinned 'farmhouse SVG' · board: trending-prints" },
+      { task: "schedule TikTok · timelapse render",   ticker: "tt: 7s timelapse · sound 'lofi-loop'" },
+      { task: "draft Reddit promo · r/3Dprinting",    ticker: "post draft · 412 chars · self-promo flag set" },
+      { task: "rotate pin batch · seasonal swap",     ticker: "rotated 6 pins · autumn -> winter" },
+    ],
+    handoffTo: "cs",
+    handoffLabel: () => "buyer-traffic batch",
+    broadcasts: ["cfo", "si"],
   },
 };
 

@@ -12,7 +12,8 @@ export type AvatarArchetype =
 
 export type RoomTag =
   | "bridge" | "analyst" | "creative" | "copy" | "comms"
-  | "finance" | "rd" | "ops" | "legal" | "archive" | "dev";
+  | "finance" | "rd" | "ops" | "legal" | "archive" | "dev"
+  | "marketing";
 
 export type WallFeature =
   | "kanban" | "trends" | "moodboard" | "ledger" | "logwall"
@@ -63,7 +64,11 @@ export type AgentEntry = {
   name: string;
   state: AgentVisualState;
   task: string;
-  model: "Haiku" | "Sonnet" | "Opus";
+  /** Short label of the model the worker last reported (e.g. "Opus 4.7",
+   *  "Sonnet 4.6", "Haiku 4.5"). Initially seeded from fixtures and updated
+   *  on every `budget_spent` event so the drawer/queue reflects the real
+   *  model in use right now, not a stale design-time guess. */
+  model: string;
   /** Sum of input + output tokens charged to this agent since app start. */
   tokensToday: number;
   /** Count of job_completed events for this agent since app start. */
@@ -121,7 +126,10 @@ export type HireEvent = {
     title: string;
     primaryTag: RoomTag;
     archetype: AvatarArchetype;
-    model: "Haiku" | "Sonnet" | "Opus";
+    /** Short label of the worker's model (e.g. "Opus 4.7", "Sonnet 4.6"),
+     *  matching AgentEntry.model so a hire event can pass the value through
+     *  unchanged. */
+    model: string;
     accent?: string;
     portrait?: string;
   };
@@ -146,6 +154,11 @@ export type FactoryStore = {
   drawerOpen: boolean;
   sandbox: boolean;
   allStop: boolean;
+  /** True while the supervisor is currently running (driven by api.status
+   *  polling from TopBar). The factory floor uses this to decide whether
+   *  to drive agents through their walk → dwell cycle; when false they
+   *  stand still at their home stations. */
+  supervisorRunning: boolean;
   budgetTodayUsd: number;
   budgetCapUsd: number;
   /** True once the supervisor has emitted budget_capped for today. */
@@ -221,12 +234,26 @@ export type FactoryStore = {
   isoTheme: IsoThemeName;
   setIsoTheme: (v: IsoThemeName) => void;
   setAllStop: (v: boolean) => void;
+  setSupervisorRunning: (v: boolean) => void;
   setBudget: (usd: number) => void;
   setBudgetCapped: (v: boolean) => void;
+  /** Replace today's revenue total (used on cold-start hydration from DB).
+   *  Distinct from `addRevenue` which accumulates from live events. */
+  setRevenueToday: (usd: number) => void;
+  /** Seed per-agent today counters from the DB on cold start. The counters
+   *  are kept in memory and incremented by live events afterward — this
+   *  function is the one-shot hydrator. Pass an empty array to reset. */
+  hydratePerAgentTodayStats: (
+    stats: { role: string; tokens_today: number; completed_today: number; failed_today: number }[],
+  ) => void;
   pushHandoff: (h: Handoff) => void;
   expireHandoffs: (now: number) => void;
   bumpActivity: () => void;
   setAgentTravel: (roleId: string, target: FactoryStore["agentTravel"][string] | null) => void;
+  /** Update an agent's displayed model label from a live `budget_spent`
+   *  event. Pass the raw model id (e.g. "claude-opus-4-7") — the store
+   *  normalizes to a short display label. */
+  setAgentModel: (roleId: string, modelId: string) => void;
   addRevenue: (roleId: string, usd: number) => void;
   /** Add USD-denominated reward progress for a role. Stars are granted
    *  when accumulated progress crosses the current tier's per-star
@@ -242,4 +269,12 @@ export type FactoryStore = {
 
   setRecentCycles: (cycles: CycleSummary[]) => void;
   setWealthByRole: (m: Record<string, AgentWealth>) => void;
+  /** Cold-start hydrator for avatar stars/tiers. Also persists the map to
+   *  localStorage so subsequent restarts read it back without a backend
+   *  round-trip. */
+  setRewardsByRole: (m: Record<string, { stars: number; tier: number; progressUsd: number }>) => void;
+  /** Cold-start hydrator for the in-memory per-role revenue map (used by
+   *  the dissolve ticker). Lifetime values come from the DB via the
+   *  `agent_wealth` table. */
+  setRevenueByRole: (m: Record<string, number>) => void;
 };

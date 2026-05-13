@@ -316,10 +316,19 @@ def handle(method: str, params: dict) -> dict:
     if not isinstance(brief, dict):
         brief = {}
 
-    # Try Sonnet-rated buyer panel; fall back to gaussian on any failure or missing key.
+    # Sandbox-gated. Outside sandbox the buyer panel is a SIMULATION that
+    # invents week-1 sales — historically that simulated revenue propagated
+    # all the way to the topbar Revenue/Net pill, making the floor look
+    # profitable when nothing had actually sold. In Live mode we want every
+    # dollar shown to trace back to a real Etsy receipt, so we bypass the
+    # panel entirely and emit a zero-sales close. Real sales arrive later
+    # via the etsy_receipt poller, which updates `actual_revenue_usd` on
+    # the same cycle row.
+    sandbox_mode = (os.environ.get("UI_SANDBOX_MODE", "") or "").lower() == "true"
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     panel_result = None
-    if api_key:
+    if sandbox_mode and api_key:
         panel_result = _call_buyer_panel(
             api_key, brief, asset_brief, title, description, tags, price, asset_path
         )
@@ -332,9 +341,15 @@ def handle(method: str, params: dict) -> dict:
     if panel_result is not None:
         sales, rationale, tokens_in, tokens_out = panel_result
         used_sonnet = True
-    else:
-        # Fallback: simulate week-1 sales as before (0-3 typical).
+    elif sandbox_mode:
+        # Sandbox fallback when the panel API call failed or no key is set.
+        # Same shape as the panel result so the rest of the pipeline works.
         sales = max(0, int(random.gauss(1.2, 1.0)))
+    else:
+        # Live mode: no simulated sales. CFO becomes a pass-through that
+        # closes the cycle with $0 estimated revenue; the etsy poller will
+        # later overlay `actual_revenue_usd` once buyers actually pay.
+        sales = 0
 
     gross = round(sales * price, 2)
     fees = round(gross * 0.065 + sales * 0.20, 2)  # 6.5% + $0.20/listing
@@ -346,17 +361,23 @@ def handle(method: str, params: dict) -> dict:
         flush=True,
     )
 
-    # Record outcome for the SI loop. Failures must not crash cfo.
-    outcome = {
-        "ts": int(time.time()),
-        "listing_id": listing_id,
-        "niche": niche,
-        "sales": sales,
-        "revenue_usd": gross,
-    }
-    if used_sonnet and rationale:
-        outcome["rationale"] = rationale
-    _append_outcome(outcome)
+    # Record outcome for the SI loop, but only when we have a real signal
+    # to feed it. In Live mode (sandbox=false) we don't generate fake
+    # sales numbers and writing zeros here would teach SI that every
+    # listing flops, polluting the learning loop. The etsy_receipt
+    # ingestor writes real-sale outcomes to the same JSONL when buyers
+    # actually pay.
+    if sandbox_mode:
+        outcome = {
+            "ts": int(time.time()),
+            "listing_id": listing_id,
+            "niche": niche,
+            "sales": sales,
+            "revenue_usd": gross,
+        }
+        if used_sonnet and rationale:
+            outcome["rationale"] = rationale
+        _append_outcome(outcome)
 
     if used_sonnet:
         ticker_text = (

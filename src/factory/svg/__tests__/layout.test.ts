@@ -177,6 +177,7 @@ describe("computeFacilityLayout", () => {
 const TAGS: RoomTag[] = [
   "bridge", "analyst", "creative", "copy", "comms",
   "finance", "rd", "ops", "legal", "archive", "dev",
+  "marketing",
 ];
 
 function dummyRoom(id: string, col: number, row: number, tag: RoomTag = "analyst"): Room {

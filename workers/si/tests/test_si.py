@@ -491,3 +491,81 @@ def test_history_snapshot_records_prior_overrides(tmp_path, monkeypatch):
     assert len(history) == 1
     assert history[0]["role_tweaked"] == "designer"
     assert history[0]["prior_overrides"] == {"designer": {"system_override": "OLD"}}
+
+
+def test_tweak_preserves_operator_steers_and_strategist_metadata(tmp_path, monkeypatch):
+    """Regression: SI used to overwrite the role dict wholesale, wiping the
+    operator's standing instructions and the strategist's last-rationale
+    metadata on every tweak. Merge semantics must keep both alive."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    _seed_outcomes(str(tmp_path / ".agent-factory" / "outcomes.jsonl"), 8)
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "designer": {
+            "system_override": "OLD",
+            "operator_steers": ["make superhero figurines"],
+            "last_strategist_rationale": "earlier rationale",
+            "last_strategist_ts": 1700000000,
+        },
+    }))
+
+    new_system = (
+        "You are the Designer at an AI-run shop. Favor strong silhouettes. "
+        "Return JSON only, no prose, no markdown."
+    )
+    payload = _make_response_bytes(json.dumps({
+        "role": "designer",
+        "new_system": new_system,
+        "reasoning": "silhouettes convert better",
+    }))
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        result = si_agent.process_job(15, {})
+
+    assert result["ok"] is True
+    assert result["role_tweaked"] == "designer"
+    written = json.loads(prompts_path.read_text())["designer"]
+    assert written["system_override"] == new_system
+    assert written["operator_steers"] == ["make superhero figurines"]
+    assert written["last_strategist_rationale"] == "earlier rationale"
+    assert written["last_strategist_ts"] == 1700000000
+
+
+def test_rollback_preserves_operator_steers(tmp_path, monkeypatch):
+    """Regression: rollback used to wholesale replace (or delete) the role
+    dict, blowing away operator_steers. The revert must restore the prior
+    system_override (or drop it) without touching unrelated sibling fields."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    outcomes_path = tmp_path / ".agent-factory" / "outcomes.jsonl"
+    prompts_path = tmp_path / ".agent-factory" / "prompts.json"
+    tweak_ts = 1000
+    _seed_outcomes_pre_post(str(outcomes_path), [10, 10, 10, 10, 10], [3, 3, 3, 3, 3], tweak_ts)
+    os.makedirs(prompts_path.parent, exist_ok=True)
+    prompts_path.write_text(json.dumps({
+        "_history": [
+            {
+                "ts": tweak_ts,
+                "role_tweaked": "designer",
+                "prior_overrides": {"designer": {}},
+                "rationale": "earlier tweak",
+            }
+        ],
+        "designer": {
+            "system_override": "BAD_PROMPT_THAT_HURT",
+            "operator_steers": ["focus on dice towers"],
+        },
+    }))
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("anthropic should NOT be called when rolling back")
+
+    with patch("urllib.request.urlopen", side_effect=_boom):
+        result = si_agent.process_job(16, {})
+
+    assert result["role_tweaked"] == "rollback"
+    written = json.loads(prompts_path.read_text())["designer"]
+    # system_override should be gone (prior was {}), operator_steers must survive.
+    assert "system_override" not in written
+    assert written["operator_steers"] == ["focus on dice towers"]

@@ -18,6 +18,8 @@ export const ROLES: Record<string, Role> = {
     hex:"#6bd968", archetype:"office", portrait:"A", room:"listing", permanent:true },
   cs: { id:"cs", name:"Lina Okafor", title:"Customer Service",
     hex:"#6aa9ff", archetype:"friendly", portrait:"L", room:"cs", permanent:true },
+  marketing: { id:"marketing", name:"Vera Quill", title:"Marketing Lead",
+    hex:"#ff6f61", archetype:"friendly", portrait:"V", room:"marketing", permanent:true },
   cfo: { id:"cfo", name:"Roman Voss", title:"CFO",
     hex:"#c4d943", archetype:"formal", portrait:"R", room:"finance", permanent:true },
   si: { id:"si", name:"Sable Wynn", title:"Self-Improvement Lab",
@@ -39,17 +41,37 @@ export const ROOMS: Record<string, Room> = {
     kit: k("finance", "#c4d943", 1), occupants:["cfo"], createdAt:0 },
   silab: { id:"silab", name:"Self-Improvement Lab", col:1, row:2,
     kit: k("rd", "#b393f5", 1), occupants:["si"], createdAt:0 },
+  marketing: { id:"marketing", name:"Marketing Studio", col:2, row:2,
+    kit: k("marketing", "#ff6f61", 2), occupants:["marketing"], createdAt:0 },
+  // Ops Bay is a founding room WITHOUT a permanent occupant — the Printify
+  // Operator moves in when POD is enabled and moves out when it's toggled
+  // off, but the room itself stays put so it doesn't disappear/reappear.
+  ops: { id:"ops", name:"Ops Bay", col:0, row:2,
+    kit: k("ops", "#5ed0a8", 3), occupants:[], createdAt:0 },
 };
 
+/** Founding room ids — fixtures-defined rooms that must never be auto-
+ *  dissolved when their last occupant leaves. Used by the dissolve path
+ *  in hireResolver so Ops Bay (and any future "empty-on-purpose" founding
+ *  rooms) survive across the lifecycle of dynamically-hired specialists. */
+export const FOUNDING_ROOM_IDS: ReadonlySet<string> = new Set(Object.keys(ROOMS));
+
+// The `model` fields here are only the cold-start fallback. As soon as a
+// worker emits its first `budget_spent` event the store overwrites the
+// label with whatever model the worker actually billed against, so these
+// stay accurate without anyone manually syncing them after a tier-up.
+// Source of truth lives in each worker's `MODEL = "..."` constant.
 export const INITIAL_AGENTS: Record<string, AgentEntry> = {
-  orchestrator: { role:"orchestrator", name:"Orchestrator", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  research: { role:"research", name:"Iris Vega", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  designer: { role:"designer", name:"Mara Chen", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  listing: { role:"listing", name:"Theo Park", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  publisher: { role:"publisher", name:"Avery Holt", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  cs: { role:"cs", name:"Lina Okafor", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  cfo: { role:"cfo", name:"Roman Voss", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
-  si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  orchestrator: { role:"orchestrator", name:"Orchestrator", state:"idle", task:"", model:"Opus 4.7", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  research: { role:"research", name:"Iris Vega", state:"idle", task:"", model:"Sonnet 4.6", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  designer: { role:"designer", name:"Mara Chen", state:"idle", task:"", model:"Sonnet 4.6", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  listing: { role:"listing", name:"Theo Park", state:"idle", task:"", model:"Sonnet 4.6", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  publisher: { role:"publisher", name:"Avery Holt", state:"idle", task:"", model:"—", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  cs: { role:"cs", name:"Lina Okafor", state:"idle", task:"", model:"Sonnet 4.6", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  marketing: { role:"marketing", name:"Vera Quill", state:"idle", task:"", model:"Haiku 4.5", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  cfo: { role:"cfo", name:"Roman Voss", state:"idle", task:"", model:"Opus 4.7", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Opus 4.7", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  strategist: { role:"strategist", name:"Calliope Wren", state:"idle", task:"", model:"Opus 4.7", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
 };
 
 export const SUPERVISOR_ROLE_MAP: Record<string, string> = {
@@ -60,6 +82,10 @@ export const SUPERVISOR_ROLE_MAP: Record<string, string> = {
   listing: "listing",
   publisher: "publisher",
   cfo: "cfo",
+  cs: "cs",
+  si: "si",
+  strategist: "strategist",
+  marketing: "marketing",
 };
 
 export const FOUNDING_HIRE_EVENTS: HireEvent[] = Object.values(ROLES).map((role) => ({

@@ -170,6 +170,7 @@ function Furniture({
     case "legal":    return <LegalKit palette={palette} accent={accent} />;
     case "archive":  return <ArchiveKit palette={palette} accent={accent} />;
     case "dev":      return <DevKit palette={palette} accent={accent} />;
+    case "marketing":return <MarketingKit palette={palette} accent={accent} />;
     default:         return <AnalystKit palette={palette} accent={accent} />;
   }
 }
@@ -723,6 +724,131 @@ function DevKit({ palette, accent }: KitProps) {
       <Monitor x={ROOM_W / 2 + 0.55} z={1.25} screen={accent} h={0.9} />
       <Chair x={ROOM_W / 2} z={2.3} color={palette.uniformDark} />
       <Plant x={0.8} z={ROOM_H - 0.6} />
+    </group>
+  );
+}
+
+function MarketingKit({ palette, accent }: KitProps) {
+  // Content-creator studio: corkboard with staggered pin tiles on the back
+  // wall, a ring light on a tripod, two creator desks with monitors. Mirrors
+  // the iso MarketingStudio so toggling 2D/3D stays coherent.
+  const corkBoard = useMemo(() => new THREE.Color("#cf9866"), []);
+  const corkFrame = useMemo(() => new THREE.Color("#6b3f1f"), []);
+  const cardCream = useMemo(() => new THREE.Color("#fff1e6"), []);
+  // Staggered pin tile layout — w, h, x-offset, y-offset (relative to board)
+  // mirrors the iso version so silhouettes match across the two views.
+  const tiles: Array<[number, number, number, number]> = [
+    [0.38, 0.62, 0.10, 0.18],
+    [0.38, 0.34, 0.52, 0.18],
+    [0.38, 0.18, 0.52, 0.62],
+    [0.38, 0.24, 0.94, 0.18],
+    [0.38, 0.28, 0.94, 0.50],
+    [0.38, 0.62, 1.36, 0.18],
+  ];
+  const boardW = 1.95;
+  const boardH = 0.95;
+  // Anchored to the back wall (z=0 plane), centered along x
+  const boardCx = ROOM_W / 2;
+  const boardCy = 1.20; // height up the wall
+  const boardZ = 0.04;  // small offset from the wall to sit slightly proud
+  return (
+    <group>
+      {/* Cork board frame */}
+      <RoundedBox
+        args={[boardW + 0.08, boardH + 0.08, 0.04]}
+        radius={0.02}
+        smoothness={4}
+        position={[boardCx, boardCy, boardZ]}
+        castShadow={false}
+      >
+        <meshStandardMaterial color={corkFrame} roughness={0.92} />
+      </RoundedBox>
+      {/* Cork face */}
+      <RoundedBox
+        args={[boardW, boardH, 0.03]}
+        radius={0.015}
+        smoothness={4}
+        position={[boardCx, boardCy, boardZ + 0.024]}
+      >
+        <meshStandardMaterial color={corkBoard} roughness={0.95} />
+      </RoundedBox>
+      {/* Pin tiles */}
+      {tiles.map(([w, h, ox, oy], i) => {
+        const fill = i % 3 === 0 ? accent : i % 3 === 1 ? cardCream : accent;
+        const tx = boardCx - boardW / 2 + ox + w / 2;
+        const ty = boardCy - boardH / 2 + oy + h / 2;
+        return (
+          <group key={`pin-${i}`}>
+            <mesh position={[tx, ty, boardZ + 0.045]}>
+              <planeGeometry args={[w, h]} />
+              <meshStandardMaterial color={fill} roughness={0.55} />
+            </mesh>
+            {/* Pushpin head — small accent sphere at the top of each card */}
+            <mesh position={[tx, ty + h / 2 - 0.03, boardZ + 0.06]}>
+              <sphereGeometry args={[0.022, 12, 10]} />
+              <meshStandardMaterial color={accent} roughness={0.3} metalness={0.2} />
+            </mesh>
+          </group>
+        );
+      })}
+      {/* Trending mini-screen on the side wall */}
+      <mesh position={[0.06, 1.2, ROOM_H / 2]}>
+        <planeGeometry args={[1.4, 0.7]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.95} toneMapped={false} />
+      </mesh>
+      {/* Content-creator desks (two stations) */}
+      <Desk x={ROOM_W / 2 - 0.95} z={1.6} color={palette.uniform} accent={accent} />
+      <Desk x={ROOM_W / 2 + 0.95} z={1.6} color={palette.uniform} accent={accent} />
+      <Monitor x={ROOM_W / 2 - 0.95} z={1.25} screen={accent} w={0.95} />
+      <Monitor x={ROOM_W / 2 + 0.95} z={1.25} screen={accent} w={0.95} />
+      <Chair x={ROOM_W / 2 - 0.95} z={2.3} color={palette.uniformDark} />
+      <Chair x={ROOM_W / 2 + 0.95} z={2.3} color={palette.uniformDark} />
+      {/* Phone mocks lying flat on each desk */}
+      {[-0.55, 0.55].map((dx, i) => (
+        <group key={`phone-${i}`} position={[ROOM_W / 2 + dx, 0.66, 1.95]}>
+          <RoundedBox args={[0.12, 0.01, 0.22]} radius={0.012} smoothness={3}>
+            <meshStandardMaterial color="#10131a" roughness={0.45} metalness={0.4} />
+          </RoundedBox>
+          <mesh position={[0, 0.008, 0]}>
+            <planeGeometry args={[0.1, 0.2]} />
+            <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.7} toneMapped={false} />
+          </mesh>
+        </group>
+      ))}
+      {/* Ring light on a tripod — pole + ring + soft point light */}
+      <group position={[0.65, 0, ROOM_H - 0.85]}>
+        {/* Tripod feet — three thin angled struts */}
+        {[0, (2 * Math.PI) / 3, (4 * Math.PI) / 3].map((a, i) => (
+          <mesh
+            key={`leg-${i}`}
+            position={[Math.cos(a) * 0.12, 0.18, Math.sin(a) * 0.12]}
+            rotation={[0, -a, Math.PI / 14]}
+            castShadow
+          >
+            <cylinderGeometry args={[0.015, 0.02, 0.42, 8]} />
+            <meshStandardMaterial color="#1a1c22" roughness={0.55} metalness={0.4} />
+          </mesh>
+        ))}
+        {/* Center pole */}
+        <mesh position={[0, 0.95, 0]} castShadow>
+          <cylinderGeometry args={[0.022, 0.022, 1.6, 12]} />
+          <meshStandardMaterial color="#1a1c22" roughness={0.5} metalness={0.45} />
+        </mesh>
+        {/* Ring — torus oriented to face the desk */}
+        <mesh position={[0, 1.7, 0.05]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+          <torusGeometry args={[0.28, 0.025, 14, 36]} />
+          <meshStandardMaterial color="#1a1c22" roughness={0.5} metalness={0.35} />
+        </mesh>
+        {/* Inner emissive ring face */}
+        <mesh position={[0, 1.7, 0.07]} rotation={[Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.22, 0.27, 36]} />
+          <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={1.4} toneMapped={false} side={THREE.DoubleSide} />
+        </mesh>
+        <pointLight position={[0, 1.7, 0.2]} color={accent} intensity={0.55} distance={3.0} decay={2} />
+      </group>
+      {/* Lookbook rack on the back-left corner */}
+      <Shelf x={0.55} z={0.85} w={1.0} h={1.0} color={palette.uniformDark} rotY={Math.PI / 2} />
+      <Plant x={ROOM_W - 0.6} z={ROOM_H - 0.6} />
     </group>
   );
 }

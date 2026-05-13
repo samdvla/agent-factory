@@ -186,7 +186,7 @@ export default function SideDrawer() {
         </span>
         <span className="model-badge">{agent.model}</span>
         <span className="drawer-stat">
-          <strong>{agent.tokensToday.toLocaleString()}</strong> tok
+          <strong>{(agent.tokensToday ?? 0).toLocaleString()}</strong> tok
         </span>
       </div>
 

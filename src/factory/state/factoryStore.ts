@@ -1,13 +1,53 @@
 import { create } from "zustand";
-import { FactoryStore, IsoThemeName } from "./types";
+import { AgentEntry, FactoryStore, IsoThemeName } from "./types";
 import {
   INITIAL_AGENTS, ROLES as FOUNDING_ROLES, ROOMS as FOUNDING_ROOMS,
 } from "./fixtures";
+
+/**
+ * Build a full AgentEntry on the fly when the supervisor emits an event for
+ * a role we don't have a fixtures entry for (e.g. a worker added in Python
+ * but not yet in INITIAL_AGENTS). Prevents spread-from-undefined producing
+ * a half-shape entry that then crashes SideDrawer's `.toLocaleString()`.
+ */
+function ensureAgent(
+  agents: Record<string, AgentEntry>,
+  role: string,
+): AgentEntry {
+  const existing = agents[role];
+  if (existing) return existing;
+  return {
+    role,
+    name: role.charAt(0).toUpperCase() + role.slice(1),
+    state: "idle",
+    task: "",
+    model: "Haiku",
+    tokensToday: 0,
+    completedToday: 0,
+    failedToday: 0,
+    currentJobId: null,
+  };
+}
 import {
   fireHireEvent as fireHireEventImpl,
   dissolveAgent as dissolveAgentImpl,
   idleDissolveTick as idleDissolveTickImpl,
 } from "./hireResolver";
+
+/** Map a raw Anthropic model id ("claude-opus-4-7", "claude-sonnet-4-6-20251001")
+ *  to the short display label the drawer/queue render. Returns null when the
+ *  id doesn't resemble a recognized family — caller leaves the badge alone. */
+function shortModelLabel(modelId: string | null | undefined): string | null {
+  if (!modelId || typeof modelId !== "string") return null;
+  const s = modelId.toLowerCase();
+  // Pull out a version token after the family name (e.g. "4-7" → "4.7").
+  const versionMatch = s.match(/(?:opus|sonnet|haiku)-(\d+[-.]\d+)/);
+  const version = versionMatch ? versionMatch[1].replace("-", ".") : "";
+  if (s.includes("opus")) return version ? `Opus ${version}` : "Opus";
+  if (s.includes("sonnet")) return version ? `Sonnet ${version}` : "Sonnet";
+  if (s.includes("haiku")) return version ? `Haiku ${version}` : "Haiku";
+  return null;
+}
 
 export type { FactoryStore };
 
@@ -30,6 +70,44 @@ function readIsoThemeDefault(): IsoThemeName {
   return "warm";
 }
 
+// Avatar star/tier progress persists to localStorage so restarting the app
+// doesn't wipe every agent back to zero stars. The map is small (≤10 roles
+// × 3 fields) so writing on every awardProgress is cheap. Backfill from
+// lifetime revenue (via agent_wealth) happens on cold start in App.tsx
+// when localStorage is empty.
+const REWARDS_STORAGE_KEY = "agentFactory.rewardsByRole";
+type RewardEntry = { stars: number; tier: number; progressUsd: number };
+function readRewardsDefault(): Record<string, RewardEntry> {
+  try {
+    const v = localStorage.getItem(REWARDS_STORAGE_KEY);
+    if (!v) return {};
+    const parsed = JSON.parse(v);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      // Light validation: drop anything that isn't shape-compatible so a
+      // corrupted entry can't crash the SVG floor.
+      const clean: Record<string, RewardEntry> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (
+          v &&
+          typeof v === "object" &&
+          typeof (v as RewardEntry).stars === "number" &&
+          typeof (v as RewardEntry).tier === "number" &&
+          typeof (v as RewardEntry).progressUsd === "number"
+        ) {
+          clean[k] = v as RewardEntry;
+        }
+      }
+      return clean;
+    }
+  } catch {}
+  return {};
+}
+function persistRewards(m: Record<string, RewardEntry>): void {
+  try {
+    localStorage.setItem(REWARDS_STORAGE_KEY, JSON.stringify(m));
+  } catch {}
+}
+
 export const useFactoryStore = create<FactoryStore>((set, get) => ({
   roles: { ...FOUNDING_ROLES },
   rooms: { ...FOUNDING_ROOMS },
@@ -42,12 +120,13 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   sandbox: readSandboxDefault(),
   isoTheme: readIsoThemeDefault(),
   allStop: false,
+  supervisorRunning: false,
   budgetTodayUsd: 0,
   budgetCapUsd: 10.0,
   budgetCapped: false,
   revenueTodayUsd: 0,
   revenueByRole: {},
-  rewardsByRole: {},
+  rewardsByRole: readRewardsDefault(),
   handoffs: [],
   lastActivityAt: 0,
   realActivityAt: {},
@@ -62,17 +141,17 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   etsyKilled: false,
 
   setAgentState: (role, state) => set((s) => ({
-    agents: { ...s.agents, [role]: { ...s.agents[role], state } },
+    agents: { ...s.agents, [role]: { ...ensureAgent(s.agents, role), state } },
     lastActivityAt: Date.now(),
     agentLastIdleAt: state === "idle"
       ? { ...s.agentLastIdleAt, [role]: Date.now() }
       : { ...s.agentLastIdleAt, [role]: 0 },
   })),
   setAgentJob: (role, jobId) => set((s) => ({
-    agents: { ...s.agents, [role]: { ...s.agents[role], currentJobId: jobId } },
+    agents: { ...s.agents, [role]: { ...ensureAgent(s.agents, role), currentJobId: jobId } },
   })),
   setAgentTask: (role, task) => set((s) => ({
-    agents: { ...s.agents, [role]: { ...s.agents[role], task } },
+    agents: { ...s.agents, [role]: { ...ensureAgent(s.agents, role), task } },
   })),
   addAgentTokens: (role, tokens) => set((s) => {
     const cur = s.agents[role];
@@ -106,7 +185,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   }),
   walkAgent: (role, target) => set((s) => ({
     agents: { ...s.agents, [role]: {
-      ...s.agents[role],
+      ...ensureAgent(s.agents, role),
       walkTarget: target ?? undefined,
       state: target ? "walking" : "idle",
     }},
@@ -145,6 +224,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     set({ sandbox: v });
   },
   setAllStop: (v) => set({ allStop: v }),
+  setSupervisorRunning: (v) => set({ supervisorRunning: v }),
   setIsoTheme: (v) => {
     try {
       localStorage.setItem(ISO_THEME_STORAGE_KEY, v);
@@ -153,6 +233,49 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   setBudget: (usd) => set({ budgetTodayUsd: usd }),
   setBudgetCapped: (v) => set({ budgetCapped: v }),
+  setRevenueToday: (usd) => set({ revenueTodayUsd: usd }),
+  hydratePerAgentTodayStats: (stats) => set((s) => {
+    // Build a role → counters map from the DB snapshot. Anything not in the
+    // snapshot stays at zero (no jobs today for that role yet).
+    const byRole = new Map<string, { tokens: number; completed: number; failed: number }>();
+    for (const row of stats) {
+      byRole.set(row.role, {
+        tokens: row.tokens_today,
+        completed: row.completed_today,
+        failed: row.failed_today,
+      });
+    }
+    const nextAgents: typeof s.agents = { ...s.agents };
+    // Hydrate every known agent — even those with zero rows — so a restart
+    // with no jobs today still produces a deterministic state.
+    for (const role of Object.keys(s.agents)) {
+      const cur = s.agents[role];
+      const seeded = byRole.get(role) ?? { tokens: 0, completed: 0, failed: 0 };
+      nextAgents[role] = {
+        ...cur,
+        tokensToday: seeded.tokens,
+        completedToday: seeded.completed,
+        failedToday: seeded.failed,
+      };
+    }
+    // Also fold in any roles present in the DB but missing from the in-memory
+    // agents map (e.g. a worker added in Python but not in INITIAL_AGENTS).
+    for (const [role, seeded] of byRole.entries()) {
+      if (nextAgents[role]) continue;
+      nextAgents[role] = {
+        role,
+        name: role.charAt(0).toUpperCase() + role.slice(1),
+        state: "idle",
+        task: "",
+        model: "Haiku",
+        tokensToday: seeded.tokens,
+        completedToday: seeded.completed,
+        failedToday: seeded.failed,
+        currentJobId: null,
+      };
+    }
+    return { agents: nextAgents };
+  }),
   pushHandoff: (h) => set((s) => ({ handoffs: [...s.handoffs, h], lastActivityAt: Date.now() })),
   expireHandoffs: (now) => set((s) => {
     const live = s.handoffs.filter((h) => now - h.startedAt < h.durationMs + 200);
@@ -163,6 +286,16 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     const next = { ...s.agentTravel };
     if (target) next[roleId] = target; else delete next[roleId];
     return { agentTravel: next, lastActivityAt: Date.now() };
+  }),
+  setAgentModel: (roleId, modelId) => set((s) => {
+    const label = shortModelLabel(modelId);
+    if (!label) return {};
+    const existing = s.agents[roleId];
+    const next: AgentEntry = existing
+      ? { ...existing, model: label }
+      : { ...ensureAgent(s.agents, roleId), model: label };
+    if (existing && existing.model === label) return {};
+    return { agents: { ...s.agents, [roleId]: next } };
   }),
   markRealActivity: (roleId) => set((s) => ({
     realActivityAt: { ...s.realActivityAt, [roleId]: Date.now() },
@@ -222,12 +355,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         break;
       }
     }
-    return {
-      rewardsByRole: {
-        ...s.rewardsByRole,
-        [roleId]: { stars, tier, progressUsd: progress },
-      },
+    const nextRewards = {
+      ...s.rewardsByRole,
+      [roleId]: { stars, tier, progressUsd: progress },
     };
+    // Persist immediately — the in-memory map is the source of truth, and
+    // localStorage is the cold-start cache that survives app restart.
+    persistRewards(nextRewards);
+    return { rewardsByRole: nextRewards };
   }),
 
   fireHireEvent: (e) => fireHireEventImpl(set, get, e),
@@ -236,4 +371,16 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 
   setRecentCycles: (cycles) => set({ recentCycles: cycles }),
   setWealthByRole: (m) => set({ wealthByRole: m }),
+  setRewardsByRole: (m) => {
+    persistRewards(m);
+    set({ rewardsByRole: m });
+  },
+  setRevenueByRole: (m) => set({ revenueByRole: m }),
 }));
+
+// In dev (vite serves outside Tauri), the supervisor API rejects so the
+// floor never picks up "running". Exposing the store on window lets devtools
+// and end-to-end checks flip flags without round-tripping the backend.
+if (import.meta.env.DEV) {
+  (window as unknown as { __factoryStore?: typeof useFactoryStore }).__factoryStore = useFactoryStore;
+}

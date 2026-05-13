@@ -1449,6 +1449,37 @@ button.etsy-pill {
   font-family: var(--font-mono);
   padding: 0 4px;
 }
+/* Steer is a secondary action — promote it to a small chip ABOVE the
+   input bar so the input row only carries [text] [Send] and never has to
+   horizontal-scroll in narrow drawers. */
+.chat-steer-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 20px 0;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+}
+.chat-steer {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: 1px solid rgba(120, 200, 140, 0.45);
+  background: rgba(120, 200, 140, 0.10);
+  color: var(--ink-0);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.2px;
+}
+.chat-steer:hover:not(:disabled) {
+  background: rgba(120, 200, 140, 0.20);
+  border-color: rgba(120, 200, 140, 0.7);
+}
+.chat-steer:disabled { opacity: 0.45; cursor: not-allowed; }
+/* When the steer chip is rendered, drop the input-row's top border so
+   the two share one visual border. */
+.chat-steer-bar + .chat-input-row { border-top: 0; padding-top: 8px; }
+
 .chat-input-row {
   display: flex; gap: 8px;
   padding: 12px 20px 16px;
@@ -2167,13 +2198,19 @@ button.etsy-pill {
   will-change: transform;
 }
 .avatar-walking .avatar-leg-l,
-.avatar-walking .avatar-shoe-l { animation: avatar-step-l 0.46s ease-in-out infinite; }
+.avatar-walking .avatar-shoe-l { animation: avatar-step-l 0.5s ease-in-out infinite; }
 .avatar-walking .avatar-leg-r,
-.avatar-walking .avatar-shoe-r { animation: avatar-step-r 0.46s ease-in-out infinite; }
-.avatar-walking .avatar-arm-l  { animation: avatar-swing-l 0.46s ease-in-out infinite; }
-.avatar-walking .avatar-arm-r  { animation: avatar-swing-r 0.46s ease-in-out infinite; }
+.avatar-walking .avatar-shoe-r { animation: avatar-step-r 0.5s ease-in-out infinite; }
+.avatar-walking .avatar-arm-l  { animation: avatar-swing-l 0.5s ease-in-out infinite; }
+.avatar-walking .avatar-arm-r  { animation: avatar-swing-r 0.5s ease-in-out infinite; }
 .avatar-working .avatar-arm-l  { animation: avatar-type-l  0.36s ease-in-out infinite alternate; }
 .avatar-working .avatar-arm-r  { animation: avatar-type-r  0.36s ease-in-out infinite alternate; }
+.avatar-idle .avatar-arm-l, .avatar-awaiting .avatar-arm-l {
+  animation: avatar-breath-l 3.6s ease-in-out infinite;
+}
+.avatar-idle .avatar-arm-r, .avatar-awaiting .avatar-arm-r {
+  animation: avatar-breath-r 3.6s ease-in-out infinite;
+}
 
 @keyframes avatar-breathe {
   0%, 100% { transform: translateY(0) scale(1); }
@@ -2185,31 +2222,42 @@ button.etsy-pill {
 }
 @keyframes avatar-walk {
   0%, 100% { transform: translateY(0) rotate(-1.2deg); }
-  50%      { transform: translateY(-2.5px) rotate(1.2deg); }
+  50%      { transform: translateY(-3px) rotate(1.2deg); }
 }
+/* Walk: legs alternate lift forward; arms bob in opposite phase. Translation
+   units are SVG viewBox user units (32×44 viewBox), composed onto the SVG
+   transform attribute so they scale cleanly with the avatar's sizeScale. */
 @keyframes avatar-step-l {
   0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-2.2px); }
+  50%      { transform: translateY(-3.5px); }
 }
 @keyframes avatar-step-r {
-  0%, 100% { transform: translateY(-2.2px); }
+  0%, 100% { transform: translateY(-3.5px); }
   50%      { transform: translateY(0); }
 }
 @keyframes avatar-swing-l {
-  0%, 100% { transform: translate(0, 0); }
-  50%      { transform: translate(0.6px, -1px); }
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(2.4px); }
 }
 @keyframes avatar-swing-r {
-  0%, 100% { transform: translate(0, -1px); }
-  50%      { transform: translate(-0.6px, 0); }
+  0%, 100% { transform: translateY(2.4px); }
+  50%      { transform: translateY(0); }
 }
 @keyframes avatar-type-l {
   0%   { transform: translateY(0); }
-  100% { transform: translateY(-0.7px); }
+  100% { transform: translateY(-1.6px); }
 }
 @keyframes avatar-type-r {
-  0%   { transform: translateY(-0.7px); }
+  0%   { transform: translateY(-1.6px); }
   100% { transform: translateY(0); }
+}
+@keyframes avatar-breath-l {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-0.5px); }
+}
+@keyframes avatar-breath-r {
+  0%, 100% { transform: translateY(-0.5px); }
+  50%      { transform: translateY(0); }
 }
 @keyframes avatar-shake {
   0%, 100% { transform: translateX(0); }
@@ -6202,6 +6250,40 @@ button.etsy-pill {
   margin-left: auto;
 }
 .af-refresh:hover { background: var(--bg-2); color: var(--ink-0); }
+.af-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  font: 12px/1.4 var(--font-mono);
+  color: var(--ink-1);
+}
+.af-pager-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-1);
+  font: inherit;
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.af-pager-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--ink-0);
+}
+.af-pager-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.af-pager-status {
+  margin: 0 auto;
+  color: var(--ink-1);
+}
+.af-pager-status strong { color: var(--ink-0); }
+.af-pager-meta { opacity: 0.7; }
 .af-error-banner {
   padding: 8px 10px;
   background: var(--status-bad-soft);
@@ -7223,6 +7305,88 @@ button.etsy-pill {
   color: var(--ink-2);
   letter-spacing: 0.03em;
   text-align: center;
+}
+
+/* =====================================================================
+   Mode cluster + Marketplace Dock — top-left chrome unit. The mode
+   toggle (LIVE / DRY-RUN / SANDBOX) and the marketplace dock sit
+   side-by-side as two glass capsules so the top bar reads as one
+   horizontal status line: "your mode + what's connected". Same
+   dot-then-label rhythm as the toggle so dots line up across the row.
+   Auto-hides when nothing is connected.
+   ===================================================================== */
+
+.mode-cluster {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-dock {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: var(--ink-0);
+  font-family: var(--font-sans);
+  background: var(--glass-fill-soft);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 1px 0 0 var(--glass-highlight-top) inset;
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  backdrop-filter: var(--glass-blur-sm);
+  user-select: none;
+  animation: market-dock-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+@keyframes market-dock-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.market-dock-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: default;
+  transition: opacity 0.15s ease;
+}
+.market-dock-item:hover {
+  opacity: 0.72;
+}
+
+.market-dock-initials {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-1);
+}
+
+.market-dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  box-shadow:
+    0 0 0 2px rgba(155, 224, 179, 0.14),
+    0 0 5px rgba(155, 224, 179, 0.55);
+  animation: market-dock-dot-pulse 2.6s ease-in-out infinite;
+}
+@keyframes market-dock-dot-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(155, 224, 179, 0.14),
+      0 0 5px rgba(155, 224, 179, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(155, 224, 179, 0.05),
+      0 0 8px rgba(155, 224, 179, 0.85);
+  }
 }
 
 /* =====================================================================

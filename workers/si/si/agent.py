@@ -7,7 +7,11 @@ import urllib.error
 from collections import defaultdict
 
 MODEL = "claude-opus-4-7"
-MAX_TOKENS = 1500
+# 1500 truncated full-prompt replacements mid-string, causing silent JSON parse
+# failures (every job returned "si · skipped" with 0 tokens). Bumped to 4000 to
+# match strategist after the 3D-pivot expanded designer's system_override past
+# the old cap.
+MAX_TOKENS = 4000
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
@@ -95,7 +99,11 @@ MIN_OUTCOMES = 5
 TAIL_LIMIT = 30
 VALID_ROLES = ("research", "designer", "listing", "cs")
 SYSTEM_MIN_LEN = 80
-SYSTEM_MAX_LEN = 2000
+# Bumped from 2000 → 10000 to match strategist's envelope. Designer's
+# system_override after the 3D pivot routinely runs 5-9k chars, so SI's old
+# 2000 cap rejected every realistic edit as "out of bounds" even when the
+# response wasn't truncated.
+SYSTEM_MAX_LEN = 10000
 
 # Rollback safety: how many outcomes either side of a tweak ts to evaluate it,
 # and the regression threshold (post must be >= pre * threshold to avoid revert).
@@ -302,15 +310,26 @@ def _apply_rollback(prompts: dict, entry: dict) -> dict:
     if not isinstance(prior, dict):
         prior = {}
     for role, prior_val in prior.items():
+        role_dict = prompts.get(role) if isinstance(prompts.get(role), dict) else {}
         if (
             isinstance(prior_val, dict)
             and isinstance(prior_val.get("system_override"), str)
             and prior_val.get("system_override", "").strip()
         ):
-            prompts[role] = {"system_override": prior_val["system_override"]}
+            # Restore the prior override, but MERGE — operator_steers and
+            # strategist metadata aren't part of the rollback snapshot and
+            # must survive the revert.
+            role_dict["system_override"] = prior_val["system_override"]
+            prompts[role] = role_dict
         else:
-            # Prior had no override → drop the current one.
-            if role in prompts:
+            # Prior had no override → drop just the override key. Operator
+            # steers and other sibling fields stay put. If nothing is left in
+            # the role dict, prune the role key too (matches the pre-fix
+            # shape for the simple "no operator state" case).
+            role_dict.pop("system_override", None)
+            if role_dict:
+                prompts[role] = role_dict
+            elif role in prompts:
                 del prompts[role]
     return prompts
 
@@ -776,8 +795,14 @@ def process_job(job_id: int, payload: dict) -> dict:
         role_feedback = feedback_by_role.get(role) or []
         if role_feedback:
             rationale = (rationale + " [relayed from operator feedback]").strip()
-        # Persist override.
-        current[role] = {"system_override": new_system}
+        # Persist override. MERGE into the existing role dict so operator
+        # steers, strategist metadata, and any other sibling fields survive.
+        # The pre-fix `current[role] = {"system_override": new_system}` blew
+        # those away on every tweak — including operator_steers, which the
+        # whole steer feature relies on persisting across SI cycles.
+        role_dict = current.get(role) if isinstance(current.get(role), dict) else {}
+        role_dict["system_override"] = new_system
+        current[role] = role_dict
         _snapshot_history(current, role_tweaked=role, prior_overrides=prior_for_role, rationale=rationale)
         write_prompts(_prompts_path(), current)
         print(

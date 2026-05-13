@@ -7,10 +7,11 @@ import type { RoomTag, RoomKit } from "../../../state/types";
 const ALL_TAGS: RoomTag[] = [
   "bridge", "analyst", "creative", "copy", "comms",
   "finance", "rd", "ops", "legal", "archive", "dev",
+  "marketing",
 ];
 
 describe("RECIPES", () => {
-  it("covers all 11 tags", () => {
+  it("covers all 12 tags", () => {
     for (const t of ALL_TAGS) expect(RECIPES[t]).toBeDefined();
   });
   it("kitFromTag fills required fields", () => {

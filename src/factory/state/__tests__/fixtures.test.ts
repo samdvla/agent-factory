@@ -24,8 +24,8 @@ describe("founding fixtures", () => {
     }
   });
 
-  it("FOUNDING_HIRE_EVENTS has 8 entries with reason=founding", () => {
-    expect(FOUNDING_HIRE_EVENTS).toHaveLength(8);
+  it("FOUNDING_HIRE_EVENTS has 9 entries with reason=founding", () => {
+    expect(FOUNDING_HIRE_EVENTS).toHaveLength(9);
     for (const e of FOUNDING_HIRE_EVENTS) {
       expect(e.justification.reason).toBe("founding");
     }

@@ -3,6 +3,7 @@ import {
 } from "./types";
 import { kitFromTag, TAG_ACCENTS } from "../svg/kit/recipes";
 import { placeNewRoom } from "../svg/layout";
+import { FOUNDING_ROOM_IDS } from "./fixtures";
 
 /**
  * Founding-8 role ids: the user-mandated core staff. These roles never
@@ -14,7 +15,7 @@ import { placeNewRoom } from "../svg/layout";
  */
 export const FOUNDING_ROLES: ReadonlySet<string> = new Set([
   "orchestrator", "research", "designer", "listing",
-  "publisher", "cfo", "cs", "si",
+  "publisher", "cfo", "cs", "si", "marketing",
 ]);
 
 /** Wealth-grace window for new specialists: they're protected from idle
@@ -39,6 +40,7 @@ const ROOM_NAME_BY_TAG: Record<RoomTag, string> = {
   legal:    "Legal Office",
   archive:  "Archive Room",
   dev:      "Dev Bay",
+  marketing: "Marketing Studio",
 };
 
 function newRoleId(name: string): string {
@@ -198,7 +200,12 @@ export function dissolveAgent(
 
     const room = cur.rooms[role.room];
     const occupants = (room?.occupants ?? []).filter((r) => r !== roleId);
-    const willDissolveRoom = !!room && occupants.length === 0;
+    // Founding rooms (defined in fixtures.ROOMS) survive even when their
+    // last occupant leaves — otherwise toggling POD off would delete the
+    // Ops Bay founding room and force placeNewRoom to re-pick a cell next
+    // time POD comes back on.
+    const isFoundingRoom = FOUNDING_ROOM_IDS.has(role.room);
+    const willDissolveRoom = !!room && occupants.length === 0 && !isFoundingRoom;
 
     const nextRooms = room
       ? { ...cur.rooms, [role.room]: { ...room, occupants, dissolving: willDissolveRoom } }

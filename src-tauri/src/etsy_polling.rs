@@ -146,6 +146,10 @@ pub async fn poll_receipts_once(
     )
     .await?;
 
+    // Build an etsy_listing_id → local_listing_id map for the cycle-revenue
+    // attribution below. Same source table the niche map uses; one query.
+    let local_id_map = load_listing_local_id_map(pool, project_id).await;
+
     let mut max_id = last_seen;
     for r in &receipts {
         let revenue = match etsy_ingest::append_outcome_for_receipt(r, &listing_id_to_niche) {
@@ -155,6 +159,23 @@ pub async fn poll_receipts_once(
                 continue;
             }
         };
+
+        // Persist actual revenue against the pipeline cycle that owns each
+        // transaction's listing. This is what makes today's Revenue/Net
+        // pill survive a restart — without it, restarting the app right
+        // after a sale would zero the topbar even though the buyer paid.
+        for txn in &r.transactions {
+            let rev = txn.price.usd() * (txn.quantity.max(1) as f64);
+            if rev <= 0.0 { continue; }
+            let Some(&local_id) = local_id_map.get(&txn.listing_id) else { continue; };
+            if let Err(e) = crate::pnl::apply_actual_revenue(pool, project_id, local_id, rev).await {
+                tracing::warn!(
+                    "apply_actual_revenue failed for receipt={} listing={}: {:#}",
+                    r.receipt_id, txn.listing_id, e,
+                );
+            }
+        }
+
         bus.send(SupervisorEvent::EtsyReceiptIngested {
             receipt_id: r.receipt_id,
             transactions_count: r.transactions.len(),
@@ -341,6 +362,31 @@ pub async fn poll_listing_stats_once(
         }
     }
     Ok(())
+}
+
+/// Build a map of `etsy_listing_id -> local_listing_id`. Used by the
+/// receipts poller to attribute real revenue back to the pipeline cycle
+/// that produced the listing. Returns an empty map on any DB error;
+/// receipts for unmapped listings still bump the in-memory revenue
+/// counter via the event bus, they just don't update the cycle row.
+async fn load_listing_local_id_map(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> HashMap<i64, i64> {
+    let rows: Vec<(i64, i64)> = match sqlx::query_as(
+        "SELECT etsy_listing_id, local_listing_id FROM etsy_publishes WHERE project_id = ?",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("load etsy_publishes for local_id map failed: {:#}", e);
+            return HashMap::new();
+        }
+    };
+    rows.into_iter().collect()
 }
 
 /// Build a map of `etsy_listing_id -> niche` from rows we've previously

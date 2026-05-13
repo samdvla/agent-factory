@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
-import { iso } from "./geometry";
+import { iso, ROOM_W, ROOM_H, roomOrigin } from "./geometry";
 import { homeStationFor, stationCount, stationWorld } from "./stations";
 import Avatar from "./Avatar";
 import SpawnFx from "./kit/SpawnFx";
 import DissolveFx from "./kit/DissolveFx";
 import { DetailLevel } from "./viewport";
 
-const STATION_DWELL_MIN_MS = 2400;
-const STATION_DWELL_JITTER_MS = 2200;
+const STATION_DWELL_MIN_MS = 2600;
+const STATION_DWELL_JITTER_MS = 2400;
+const STATION_DWELL_IDLE_MS = 4200;       // idle agents linger longer
+const WALK_SEGMENT_MS = 900;              // ms per waypoint segment
 
 // Avatar SVG box: 32×44 with feet at element-local (16, 38). We anchor the
 // element so its feet sit on the projected station point and scale around
@@ -40,6 +42,7 @@ export default function AvatarLayer({
   const roles = useFactoryStore((s) => s.roles);
   const wealthByRole = useFactoryStore((s) => s.wealthByRole);
   const rewardsByRole = useFactoryStore((s) => s.rewardsByRole);
+  const supervisorRunning = useFactoryStore((s) => s.supervisorRunning);
   const layerRef = useRef<HTMLDivElement>(null);
   const [, force] = useState<object>({});
 
@@ -54,6 +57,11 @@ export default function AvatarLayer({
   );
 
   const lastMoveAt = useRef<Record<string, number>>({});
+  // Track which agentTravel entries WE installed (intra-room walks). Key is
+  // role id, value is the `startedAt` we passed in — if the live travel's
+  // startedAt no longer matches, ownership was taken over (e.g. by the
+  // orchestrator's cross-room visit hook) and we hand it off.
+  const intraTravelRef = useRef<Map<string, number>>(new Map());
   const [movingRoles, setMovingRoles] = useState<Set<string>>(new Set());
 
   // Track previous view (zoom + pan). On the render where it changed, we
@@ -76,68 +84,132 @@ export default function AvatarLayer({
     return () => window.removeEventListener("resize", reposition);
   }, []);
 
-  // Master station-rotation tick
+  // Master station-rotation tick. Only fires while the supervisor is
+  // running — when stopped, every agent stands at its home station and
+  // animates with the gentle idle-breath cycle (matches user request:
+  // "when they are idle make them just stand in place but when i tap on
+  // start they should start moving around walking like the ones in the
+  // zip"). Paused / crashed / killed agents stay put even while running.
   useEffect(() => {
+    if (!supervisorRunning) return;
     const id = setInterval(() => {
       const now = Date.now();
-      const liveAgents = useFactoryStore.getState().agents;
+      const store = useFactoryStore.getState();
+      const liveAgents = store.agents;
+      const liveTravel = store.agentTravel;
+      const setAgentTravel = store.setAgentTravel;
       let changed = false;
       const next = { ...stationByRole };
       const nowMoving = new Set(movingRoles);
 
-      for (const role of Object.values(useFactoryStore.getState().roles)) {
+      for (const role of Object.values(store.roles)) {
         const agent = liveAgents[role.id];
         if (!agent) continue;
-        const last = lastMoveAt.current[role.id] ?? 0;
-        const dwell =
-          STATION_DWELL_MIN_MS + Math.random() * STATION_DWELL_JITTER_MS;
 
-        if (agent.state === "working" || agent.state === "awaiting") {
-          if (now - last < dwell) continue;
-          const count = stationCount(role.room);
-          if (count <= 1) continue;
-          let pick = next[role.id] ?? 0;
-          for (let tries = 0; tries < 5 && pick === (next[role.id] ?? 0); tries++) {
-            pick = Math.floor(Math.random() * count);
-          }
-          if (pick !== next[role.id]) {
-            next[role.id] = pick;
-            lastMoveAt.current[role.id] = now;
-            nowMoving.add(role.id);
-            setTimeout(() => {
-              setMovingRoles((s) => {
-                if (!s.has(role.id)) return s;
-                const cp = new Set(s);
-                cp.delete(role.id);
-                return cp;
-              });
-            }, 1700);
-            changed = true;
-          }
-        } else if (agent.state === "idle" || agent.state === "paused") {
-          const home = homeStationFor(role.id, role.room);
-          if ((next[role.id] ?? home) !== home && now - last > 3500) {
-            next[role.id] = home;
-            lastMoveAt.current[role.id] = now;
-            nowMoving.add(role.id);
-            setTimeout(() => {
-              setMovingRoles((s) => {
-                if (!s.has(role.id)) return s;
-                const cp = new Set(s);
-                cp.delete(role.id);
-                return cp;
-              });
-            }, 1700);
-            changed = true;
+        // Cross-room travel (handoff) owns motion while in flight — skip.
+        const travel = liveTravel[role.id];
+        if (travel?.waypoints && travel.waypoints.length > 1 &&
+            travel.startedAt !== undefined && travel.durationPerSegmentMs) {
+          const segments = travel.waypoints.length - 1;
+          const total = segments * travel.durationPerSegmentMs;
+          if (now - travel.startedAt < total) continue;
+          // Travel landed. Only auto-clear walks WE installed — match the
+          // exact `startedAt` to confirm ownership. Orchestrator visit
+          // hooks own their own travel and clear it themselves.
+          if (intraTravelRef.current.get(role.id) === travel.startedAt) {
+            setAgentTravel(role.id, null);
+            intraTravelRef.current.delete(role.id);
+          } else {
+            intraTravelRef.current.delete(role.id);
+            continue;
           }
         }
+
+        const last = lastMoveAt.current[role.id] ?? 0;
+        const isActive = agent.state === "working" || agent.state === "awaiting"
+          || agent.state === "idle";
+        if (!isActive) continue;
+
+        const baseDwell = agent.state === "idle"
+          ? STATION_DWELL_IDLE_MS
+          : STATION_DWELL_MIN_MS;
+        const dwell = baseDwell + Math.random() * STATION_DWELL_JITTER_MS;
+        if (now - last < dwell) continue;
+
+        const count = stationCount(role.room);
+        if (count <= 1) continue;
+        let pick = next[role.id] ?? homeStationFor(role.id, role.room);
+        const current = next[role.id] ?? homeStationFor(role.id, role.room);
+        for (let tries = 0; tries < 6 && pick === current; tries++) {
+          pick = Math.floor(Math.random() * count);
+        }
+        if (pick === current) continue;
+
+        // Fire a waypoint travel through a "corner" so the avatar walks
+        // visibly along a path rather than sliding diagonally across the
+        // room. The corner is biased toward the room front so the path
+        // reads as "leave desk → cross open floor → arrive at new spot".
+        const from = stationWorld(role.room, current);
+        const to = stationWorld(role.room, pick);
+        if (from && to) {
+          const { wx, wy } = roomOrigin(
+            store.rooms[role.room].col,
+            store.rooms[role.room].row,
+          );
+          const corner = {
+            x: wx + ROOM_W * 0.5 + (Math.random() - 0.5) * 1.0,
+            y: wy + ROOM_H * 0.78 + (Math.random() - 0.5) * 0.6,
+          };
+          setAgentTravel(role.id, {
+            roomId: role.room,
+            stationIdx: pick,
+            waypoints: [
+              { x: from.x, y: from.y },
+              corner,
+              { x: to.x, y: to.y },
+            ],
+            startedAt: now,
+            durationPerSegmentMs: WALK_SEGMENT_MS,
+          });
+          intraTravelRef.current.set(role.id, now);
+        }
+
+        next[role.id] = pick;
+        lastMoveAt.current[role.id] = now;
+        nowMoving.add(role.id);
+        const walkMs = WALK_SEGMENT_MS * 2 + 80;
+        setTimeout(() => {
+          setMovingRoles((s) => {
+            if (!s.has(role.id)) return s;
+            const cp = new Set(s);
+            cp.delete(role.id);
+            return cp;
+          });
+        }, walkMs);
+        changed = true;
       }
 
       if (changed) setStationByRole(next);
       if (nowMoving.size !== movingRoles.size) setMovingRoles(nowMoving);
     }, 700);
     return () => clearInterval(id);
-  }, [stationByRole, movingRoles]);
+  }, [stationByRole, movingRoles, supervisorRunning]);
+
+  // When the supervisor stops, retire any of OUR intra-room travels so
+  // every avatar settles back to its station rather than freezing mid-step.
+  useEffect(() => {
+    if (supervisorRunning) return;
+    const setAgentTravel = useFactoryStore.getState().setAgentTravel;
+    const liveTravel = useFactoryStore.getState().agentTravel;
+    for (const roleId of Array.from(intraTravelRef.current.keys())) {
+      const t = liveTravel[roleId];
+      if (t && intraTravelRef.current.get(roleId) === t.startedAt) {
+        setAgentTravel(roleId, null);
+      }
+      intraTravelRef.current.delete(roleId);
+    }
+    setMovingRoles(new Set());
+  }, [supervisorRunning]);
 
   // While any agent has a waypoint travel in flight, drive a rAF loop that
   // re-projects them every frame. The loop stops when all travel is done and

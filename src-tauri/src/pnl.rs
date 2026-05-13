@@ -272,11 +272,14 @@ pub async fn list_recent_cycles(
     project_id: i64,
     limit: i64,
 ) -> Result<Vec<CycleSummary>> {
+    // Show REAL revenue (set by the Etsy receipt poller) — fall back to
+    // estimated only in sandbox mode, where the CFO buyer-panel simulation
+    // is the intended source of cycle revenue.
     let rows = sqlx::query(
         "SELECT cycle_id, niche, local_listing_id, \
-            COALESCE(estimated_revenue_usd, 0.0) AS revenue_usd, \
+            COALESCE(actual_revenue_usd, 0.0) AS revenue_usd, \
             total_cost_usd, \
-            COALESCE(net_usd, 0.0) AS net_usd \
+            (COALESCE(actual_revenue_usd, 0.0) - COALESCE(total_cost_usd, 0.0)) AS net_usd \
          FROM pipeline_cycles \
          WHERE project_id = ? AND closed = 1 \
          ORDER BY started_at DESC \
@@ -308,6 +311,110 @@ pub async fn list_recent_cycles(
         });
     }
     Ok(out)
+}
+
+/// Record a real Etsy receipt against the pipeline cycle that produced the
+/// listing it paid for. Bumps `pipeline_cycles.actual_revenue_usd` so the
+/// topbar Revenue/Net pill and the cycle list reflect actual sales, and
+/// distributes the same revenue proportionally into `agent_wealth` so
+/// avatar stars / lifetime totals only grow from real money.
+///
+/// Idempotency: this is an additive update, so multiple receipts for the
+/// same listing layer cleanly. The caller (etsy_polling) already
+/// deduplicates by `etsy_last_receipt_id` so each receipt arrives once.
+///
+/// Returns `Ok(0)` when no cycle owns the listing (e.g. a Cults3D-only
+/// listing, or a receipt for a listing that predates pipeline tracking) —
+/// the caller should still update its in-memory revenue counter so the UI
+/// reflects the sale even when it can't be attributed to a cycle.
+pub async fn apply_actual_revenue(
+    pool: &SqlitePool,
+    project_id: i64,
+    local_listing_id: i64,
+    revenue_usd: f64,
+) -> Result<i64> {
+    if revenue_usd <= 0.0 {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    // Find the most recent cycle that owns this listing. A listing can in
+    // theory have multiple cycles (re-publishes), but we attribute the
+    // payment to the most recent one — that's the cycle whose contributors
+    // most recently touched the live listing.
+    let cycle_row: Option<(String, f64)> = sqlx::query_as(
+        "SELECT cycle_id, COALESCE(total_cost_usd, 0.0) AS total_cost_usd \
+         FROM pipeline_cycles \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(local_listing_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((cycle_id, total_cost)) = cycle_row else {
+        tx.commit().await?;
+        return Ok(0);
+    };
+
+    sqlx::query(
+        "UPDATE pipeline_cycles \
+         SET actual_revenue_usd = COALESCE(actual_revenue_usd, 0.0) + ?, \
+             net_usd = (COALESCE(actual_revenue_usd, 0.0) + ?) - COALESCE(total_cost_usd, 0.0) \
+         WHERE cycle_id = ?",
+    )
+    .bind(revenue_usd)
+    .bind(revenue_usd)
+    .bind(&cycle_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Distribute the receipt across the cycle's contributors so each role's
+    // lifetime_revenue grows from real sales. Splits proportional to cost
+    // share, matching close_cycle's distribution rule.
+    let rows = sqlx::query(
+        "SELECT role, SUM(cost_usd) AS total FROM agent_contributions \
+         WHERE cycle_id = ? GROUP BY role",
+    )
+    .bind(&cycle_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let per_role: Vec<(String, f64)> = rows
+        .into_iter()
+        .map(|r| (r.get::<String, _>("role"), r.get::<f64, _>("total")))
+        .collect();
+    let contributor_count = per_role.len() as i64;
+
+    if contributor_count > 0 {
+        for (role, role_cost) in &per_role {
+            let role_revenue_share = if total_cost > 0.0 {
+                revenue_usd * (role_cost / total_cost)
+            } else {
+                revenue_usd / contributor_count as f64
+            };
+            sqlx::query(
+                "INSERT INTO agent_wealth \
+                    (project_id, role, lifetime_revenue_usd, lifetime_cost_usd, lifetime_net_usd, cycles_count, last_credit_at) \
+                 VALUES (?, ?, ?, 0.0, ?, 0, strftime('%s', 'now')) \
+                 ON CONFLICT(project_id, role) DO UPDATE SET \
+                    lifetime_revenue_usd = lifetime_revenue_usd + excluded.lifetime_revenue_usd, \
+                    lifetime_net_usd = lifetime_net_usd + excluded.lifetime_net_usd, \
+                    last_credit_at = excluded.last_credit_at",
+            )
+            .bind(project_id)
+            .bind(role)
+            .bind(role_revenue_share)
+            .bind(role_revenue_share)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(contributor_count)
 }
 
 pub async fn list_wealth(pool: &SqlitePool, project_id: i64) -> Result<Vec<AgentWealth>> {
@@ -485,6 +592,98 @@ mod tests {
         .unwrap();
         // Single credit only: should equal s1.net_usd exactly.
         assert!((net - s1.net_usd).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn apply_actual_revenue_persists_revenue_and_recomputes_net() {
+        let pool = setup_pool().await;
+        // Cycle "c-pay" produced local_listing_id 4242 with $0.30 of cost.
+        ensure_cycle(&pool, 1, "c-pay", Some("etsy")).await.unwrap();
+        record_contribution(&pool, 1, "c-pay", "research", 1, 0.10, 0, 0, None)
+            .await.unwrap();
+        record_contribution(&pool, 1, "c-pay", "designer", 2, 0.20, 0, 0, None)
+            .await.unwrap();
+        close_cycle(&pool, 1, "c-pay", 0.0, Some(4242)).await.unwrap();
+
+        // Before the receipt, both actual_revenue and net are 0 / -0.30.
+        let (rev0, net0): (Option<f64>, Option<f64>) = sqlx::query_as(
+            "SELECT actual_revenue_usd, net_usd FROM pipeline_cycles WHERE cycle_id = 'c-pay'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(rev0, None);
+        assert!((net0.unwrap() - (-0.30)).abs() < 1e-6);
+
+        let contributors = apply_actual_revenue(&pool, 1, 4242, 6.00).await.unwrap();
+        assert_eq!(contributors, 2);
+
+        let (rev1, net1): (Option<f64>, Option<f64>) = sqlx::query_as(
+            "SELECT actual_revenue_usd, net_usd FROM pipeline_cycles WHERE cycle_id = 'c-pay'",
+        ).fetch_one(&pool).await.unwrap();
+        assert!((rev1.unwrap() - 6.00).abs() < 1e-6);
+        assert!((net1.unwrap() - (6.00 - 0.30)).abs() < 1e-6);
+
+        // Designer (2/3 of cost) gets $4.00 share, research (1/3) gets $2.00.
+        let designer_rev: f64 = sqlx::query_scalar(
+            "SELECT lifetime_revenue_usd FROM agent_wealth \
+             WHERE project_id = 1 AND role = 'designer'",
+        ).fetch_one(&pool).await.unwrap();
+        let research_rev: f64 = sqlx::query_scalar(
+            "SELECT lifetime_revenue_usd FROM agent_wealth \
+             WHERE project_id = 1 AND role = 'research'",
+        ).fetch_one(&pool).await.unwrap();
+        assert!((designer_rev - 4.00).abs() < 1e-6);
+        assert!((research_rev - 2.00).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn apply_actual_revenue_is_additive_across_receipts() {
+        let pool = setup_pool().await;
+        ensure_cycle(&pool, 1, "c-mult", Some("etsy")).await.unwrap();
+        record_contribution(&pool, 1, "c-mult", "research", 1, 0.05, 0, 0, None)
+            .await.unwrap();
+        close_cycle(&pool, 1, "c-mult", 0.0, Some(9999)).await.unwrap();
+
+        apply_actual_revenue(&pool, 1, 9999, 3.00).await.unwrap();
+        apply_actual_revenue(&pool, 1, 9999, 2.50).await.unwrap();
+
+        let rev: f64 = sqlx::query_scalar(
+            "SELECT actual_revenue_usd FROM pipeline_cycles WHERE cycle_id = 'c-mult'",
+        ).fetch_one(&pool).await.unwrap();
+        assert!((rev - 5.50).abs() < 1e-6);
+
+        let researcher_rev: f64 = sqlx::query_scalar(
+            "SELECT lifetime_revenue_usd FROM agent_wealth \
+             WHERE project_id = 1 AND role = 'research'",
+        ).fetch_one(&pool).await.unwrap();
+        assert!((researcher_rev - 5.50).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn apply_actual_revenue_no_op_when_listing_has_no_cycle() {
+        let pool = setup_pool().await;
+        // No cycle ever created for listing 1234.
+        let contributors = apply_actual_revenue(&pool, 1, 1234, 9.99).await.unwrap();
+        assert_eq!(contributors, 0);
+    }
+
+    #[tokio::test]
+    async fn list_recent_cycles_returns_only_actual_revenue() {
+        // The CFO simulation writes estimated_revenue_usd; that must NOT
+        // leak into the cycle list anymore. Only actual_revenue_usd counts.
+        let pool = setup_pool().await;
+        ensure_cycle(&pool, 1, "c-est", Some("etsy")).await.unwrap();
+        record_contribution(&pool, 1, "c-est", "research", 1, 0.10, 0, 0, None)
+            .await.unwrap();
+        close_cycle(&pool, 1, "c-est", 50.0, Some(5555)).await.unwrap();
+
+        let cycles = list_recent_cycles(&pool, 1, 10).await.unwrap();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].revenue_usd, 0.0, "estimated revenue must not leak");
+        assert!((cycles[0].net_usd - (-0.10)).abs() < 1e-6, "net = -cost when no actual");
+
+        apply_actual_revenue(&pool, 1, 5555, 4.20).await.unwrap();
+        let cycles = list_recent_cycles(&pool, 1, 10).await.unwrap();
+        assert!((cycles[0].revenue_usd - 4.20).abs() < 1e-6);
+        assert!((cycles[0].net_usd - (4.20 - 0.10)).abs() < 1e-6);
     }
 
     #[tokio::test]

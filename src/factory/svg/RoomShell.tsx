@@ -10,7 +10,7 @@ import RoomShellIso from "./iso/RoomShellIso";
 import type { ReactNode } from "react";
 import {
   StrategyRoom, OpsBay, ListingDesk, ResearchLab, CsBooth, RenderStudio,
-  DesignStudio, FinanceRoom, LegalRoom, ArchiveRoom,
+  DesignStudio, FinanceRoom, LegalRoom, ArchiveRoom, MarketingStudio,
 } from "./iso/rooms";
 import { RoomTag } from "../state/types";
 
@@ -27,6 +27,7 @@ function isoFurnitureFor(tag: RoomTag, accent: string): ReactNode {
     case "finance":  return <FinanceRoom accent={accent} />;
     case "legal":    return <LegalRoom accent={accent} />;
     case "archive":  return <ArchiveRoom accent={accent} />;
+    case "marketing":return <MarketingStudio accent={accent} />;
     default:         return <StrategyRoom accent={accent} />;
   }
 }

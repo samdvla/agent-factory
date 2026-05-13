@@ -274,6 +274,19 @@ export default function ChatPanel({ agentId }: Props) {
           </button>
         </div>
       )}
+      {isSteerable && (
+        <div className="chat-steer-bar">
+          <button
+            type="button"
+            className="chat-steer"
+            onClick={steer}
+            disabled={inputBusy || !input.trim()}
+            title="Save the current message as a standing instruction. Applied to every future job until cleared."
+          >
+            {steerBusy ? "Saving…" : "↳ Steer"}
+          </button>
+        </div>
+      )}
       <div className="chat-input-row">
         <input
           className="chat-input"
@@ -301,20 +314,6 @@ export default function ChatPanel({ agentId }: Props) {
         >
           {pending ? "…" : "Send"}
         </button>
-        {isSteerable && (
-          <button
-            className="chat-send"
-            onClick={steer}
-            disabled={inputBusy || !input.trim()}
-            title="Save as a standing instruction. Applied to every future job until cleared."
-            style={{
-              background: "rgba(120, 200, 140, 0.12)",
-              borderColor: "rgba(120, 200, 140, 0.45)",
-            }}
-          >
-            {steerBusy ? "…" : "Steer"}
-          </button>
-        )}
       </div>
     </div>
   );

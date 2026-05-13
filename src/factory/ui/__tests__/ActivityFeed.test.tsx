@@ -3,6 +3,15 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { JobRow } from "../../../api";
 
 const listRecentJobs = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+// Pagination companion to listRecentJobs. ActivityFeed fires both in parallel
+// on every refresh — without this mock the Promise.all rejects and no rows
+// render. Default keeps tests on page 1: returns whatever length the last
+// listRecentJobs.mockResolvedValue produced.
+const countRecentJobs = vi.fn<(...args: unknown[]) => Promise<number>>().mockImplementation(async () => {
+  const last = listRecentJobs.mock.results[listRecentJobs.mock.results.length - 1];
+  const val = await last?.value;
+  return Array.isArray(val) ? val.length : 0;
+});
 const rateJob = vi.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined);
 const readJobSvg = vi.fn<(...args: unknown[]) => Promise<string | null>>().mockResolvedValue(null);
 // JobAssetPreview now hits readJobAsset first to detect SVG vs GLB vs STL.
@@ -20,6 +29,7 @@ const readJobAsset = vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResol
 vi.mock("../../../api", () => ({
   api: {
     listRecentJobs: (...a: unknown[]) => listRecentJobs(...a),
+    countRecentJobs: (...a: unknown[]) => countRecentJobs(...a),
     rateJob: (...a: unknown[]) => rateJob(...a),
     readJobSvg: (...a: unknown[]) => readJobSvg(...a),
     readJobAsset: (...a: unknown[]) => readJobAsset(...a),

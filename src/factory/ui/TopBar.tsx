@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+import MarketplaceDock from "./MarketplaceDock";
 
 export default function TopBar({
   onAlertClick,
@@ -18,13 +19,18 @@ export default function TopBar({
   const revenueUsd = useFactoryStore((s) => s.revenueTodayUsd);
   const alerts = useFactoryStore((s) => s.alerts);
   const setAllStop = useFactoryStore((s) => s.setAllStop);
+  const setSupervisorRunning = useFactoryStore((s) => s.setSupervisorRunning);
 
   useEffect(() => {
-    const refresh = async () => setStatus(await api.status());
+    const refresh = async () => {
+      const s = await api.status();
+      setStatus(s);
+      setSupervisorRunning(!!s?.running);
+    };
     refresh();
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
-  }, []);
+  }, [setSupervisorRunning]);
 
   // Poll real_etsy_enabled every 5s so the mode badge stays in sync with
   // any changes made in Settings without requiring a full reload.
@@ -78,7 +84,9 @@ export default function TopBar({
       await api.start();
       setAllStop(false);
     }
-    setStatus(await api.status());
+    const after = await api.status();
+    setStatus(after);
+    setSupervisorRunning(!!after?.running);
   };
 
   return (
@@ -89,15 +97,18 @@ export default function TopBar({
         <span className="float-brand-text">AF</span>
       </div>
 
-      <button
-        type="button"
-        className={`mode-toggle is-${modeKey}`}
-        onClick={() => setSandbox(!sandbox)}
-        title={modeTooltip}
-      >
-        <span className="mode-toggle-dot" />
-        <span className="mode-toggle-label">{modeText}</span>
-      </button>
+      <div className="mode-cluster">
+        <button
+          type="button"
+          className={`mode-toggle is-${modeKey}`}
+          onClick={() => setSandbox(!sandbox)}
+          title={modeTooltip}
+        >
+          <span className="mode-toggle-dot" />
+          <span className="mode-toggle-label">{modeText}</span>
+        </button>
+        <MarketplaceDock />
+      </div>
       </div>
 
       <div className="float-row float-row-center">

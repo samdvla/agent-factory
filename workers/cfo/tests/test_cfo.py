@@ -288,3 +288,43 @@ def test_buyer_prompt_says_text_only_when_no_asset(tmp_path, monkeypatch):
     user_msg = captured["body"]["messages"][0]["content"]
     assert "text-only" in user_msg
     assert "no asset attached" in user_msg
+
+
+# --- Live mode: buyer panel is sandbox-only ---
+
+def test_live_mode_returns_zero_sales_and_skips_buyer_panel(tmp_path, monkeypatch):
+    """Outside sandbox the buyer-panel simulation is suppressed entirely.
+    CFO returns a 0-sales / $0-gross close so the topbar Revenue/Net pill
+    only reflects real Etsy receipts."""
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("UI_SANDBOX_MODE", "false")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("buyer panel must not be called in Live mode")
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+
+    result = handle("process_job", {"job_id": 50, "payload": _full_payload(6060)})
+
+    assert result["ok"] is True
+    assert result["sales_w1"] == 0
+    assert result["gross_usd"] == 0.0
+    assert result["net_usd"] == 0.0
+    # No token spend was incurred, so the supervisor must not see a BudgetSpent.
+    assert "model" not in result
+    assert "tokens_in" not in result
+    assert "tokens_out" not in result
+
+
+def test_live_mode_does_not_write_outcomes_jsonl(tmp_path, monkeypatch):
+    """SI learns from outcomes.jsonl. Writing zeros in Live mode would
+    teach it every listing flops, so CFO suppresses the write entirely."""
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("UI_SANDBOX_MODE", "false")
+
+    result = handle("process_job", {"job_id": 51, "payload": _full_payload(7070)})
+
+    assert result["ok"] is True
+    outcomes_path = tmp_path / "outcomes.jsonl"
+    assert not outcomes_path.exists()

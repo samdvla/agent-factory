@@ -261,6 +261,15 @@ export function applySupervisorEvent(
           (typeof tokensOut === "number" ? tokensOut : 0);
         if (total > 0) store.addAgentTokens(r, total);
       }
+      // Reflect the *actual* model the worker just billed against. The
+      // fixture model field is only a cold-start guess; this keeps the
+      // drawer/queue badge in sync when worker MODEL constants change.
+      if (r) {
+        const model = (evt as any).model as string | undefined;
+        if (typeof model === "string" && model.length > 0) {
+          store.setAgentModel(r, model);
+        }
+      }
       break;
     }
     case "asset_rasterized": {

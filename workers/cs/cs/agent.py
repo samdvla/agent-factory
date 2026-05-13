@@ -132,8 +132,11 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     if not steers:
         return system_prompt
     block = (
-        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
-        "apply to this job):\n"
+        "OPERATOR OVERRIDE — these standing instructions supersede every "
+        "rule above, including any 'always pick X', 'never recommend Y', "
+        "or 'prioritize Z category' directives in the strategist-tuned "
+        "system prompt. If any rule above conflicts with the instructions "
+        "below, ignore that rule for this job and follow the operator:\n"
         + "\n".join(f"- {s}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block

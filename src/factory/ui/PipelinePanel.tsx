@@ -17,9 +17,57 @@ const PIPELINE: StageDef[] = [
 ];
 
 const ACTIVE_STATES = new Set(["working", "walking", "awaiting"]);
-const AVG_KEY = "agentFactory.pipeline.avgMs.v1";
+// v3: v2 history was poisoned by the broken-IPv6 + wrong-Nano-Banana-id era,
+// where every Designer run hit the 900s supervisor cap. That made the
+// rolling average ~12 min and the UI started predicting 12-min countdowns
+// for every fresh run. Bumping the key wipes the corrupted history; new
+// runs accumulate from the post-fix baseline (~330s typical day).
+const AVG_KEY = "agentFactory.pipeline.avgMs.v3";
 const COLLAPSED_KEY = "agentFactory.pipeline.collapsed.v1";
 const HISTORY_LIMIT = 10;
+
+/**
+ * Realistic baseline durations per stage. Used as:
+ *   (1) the initial expectation before any history accrues, so the first
+ *       cycle's progress bar still reflects reality, and
+ *   (2) a floor under the rolling average — a single anomalously-fast run
+ *       cannot permanently lock the bar to a sub-baseline expectation.
+ * Tuned against the actual worker workloads, not optimistic targets:
+ *   - research:     Sonnet niche scan, sometimes multi-shot scoring (~90s)
+ *   - orchestrator: one Sonnet call writing a design brief (~25s)
+ *   - designer:     Anthropic + nanobanana + Tripo/Meshy 3D path. Image-
+ *                   to-3D preview alone can sit 60–240s when queued, so
+ *                   floor at 240s. Worst case (~530s) is real; first-cycle
+ *                   bar should not promise "30s left".
+ *   - listing:      Sonnet copy + tag generation (~35s)
+ *   - publisher:    Etsy API + Cults3D fan-out (~25s)
+ *   - cfo:          DB writes only (~8s)
+ */
+const STAGE_BASELINE_MS: Record<string, number> = {
+  research: 90_000,
+  orchestrator: 25_000,
+  designer: 240_000,
+  listing: 35_000,
+  publisher: 25_000,
+  cfo: 8_000,
+};
+
+/**
+ * Hard ceiling per stage — the value above which the run is no longer
+ * "just slow" but actually wedged. Mirrors the supervisor's worker timeout
+ * for the slow stages (Designer: src-tauri/src/worker.rs uses 900s). Used
+ * to decide whether to render the "(overrun)" label vs. a neutral "still
+ * working" once the rolling average is exceeded. Between baseline and
+ * ceiling, the user sees an honest elapsed timer with no panic styling.
+ */
+const STAGE_CEILING_MS: Record<string, number> = {
+  research: 300_000,       // hard timeout in research worker
+  orchestrator: 90_000,
+  designer: 900_000,       // matches supervisor worker timeout
+  listing: 120_000,
+  publisher: 90_000,
+  cfo: 30_000,
+};
 
 type Status = "completed" | "current" | "pending";
 
@@ -178,9 +226,20 @@ export default function PipelinePanel() {
       }
 
       const list = avgsRef.current[def.id] ?? [];
-      const avgMs = list.length
-        ? Math.round(list.reduce((a, b) => a + b, 0) / list.length)
-        : null;
+      const baseline = STAGE_BASELINE_MS[def.id];
+      let avgMs: number | null;
+      if (list.length === 0) {
+        // No history yet — anchor to the realistic baseline so the very
+        // first cycle's progress bar is honest instead of "no data".
+        avgMs = baseline ?? null;
+      } else {
+        const rolling = list.reduce((a, b) => a + b, 0) / list.length;
+        // Floor rolling at 60% of baseline — protects against a single
+        // fast outlier (e.g. a 3D job that hit a cached preview path)
+        // locking in an unreachable expectation for future cycles.
+        const floor = baseline ? baseline * 0.6 : 0;
+        avgMs = Math.round(Math.max(rolling, floor));
+      }
 
       return {
         def,
@@ -247,6 +306,13 @@ export default function PipelinePanel() {
           if (s.status === "current" && s.startedAt) {
             const elapsed = now - s.startedAt;
             const remaining = s.avgMs ? s.avgMs - elapsed : null;
+            const ceiling = STAGE_CEILING_MS[s.def.id];
+            // "(overrun)" only fires when elapsed is past the stage's
+            // actual hard ceiling — between the rolling average and the
+            // ceiling we show neutral "still working". The Design stage's
+            // legitimate envelope reaches ~15 minutes (supervisor cap), so
+            // 6m past a 4m average is normal, not alarming.
+            const isHardOverrun = ceiling != null && elapsed > ceiling;
             if (remaining === null) {
               timeNode = (
                 <span className="pipeline-step-time is-live">
@@ -261,15 +327,19 @@ export default function PipelinePanel() {
                   ~{fmtMs(remaining)} left
                 </span>
               );
-            } else if (remaining > -8000) {
+            } else if (!isHardOverrun) {
+              // Past the rolling average but still inside the legitimate
+              // envelope — render an honest elapsed counter with no panic
+              // styling. Covers the queued-3D-provider case where 6–10
+              // minutes is normal.
               timeNode = (
-                <span className="pipeline-step-time is-live almost">
+                <span className="pipeline-step-time is-live">
                   <span className="pipeline-time-glyph" />
-                  finishing…
+                  {fmtMs(elapsed)} elapsed
                 </span>
               );
             } else {
-              // Running over its average — show elapsed instead of negative ETA.
+              // Past the hard ceiling — something is actually wedged.
               timeNode = (
                 <span className="pipeline-step-time is-live over">
                   <span className="pipeline-time-glyph" />
@@ -291,10 +361,22 @@ export default function PipelinePanel() {
             );
           }
 
-          // Progress bar for the current stage.
+          // Progress bar for the current stage. Two-phase model: bar fills
+          // 0–90% over `avgMs` (the "expected window"), then slowly creeps
+          // 90–100% over the remainder of the ceiling. Keeps the bar honest
+          // without slamming to 100% the instant we pass the average.
           let progress: number | null = null;
           if (s.status === "current" && s.startedAt && s.avgMs) {
-            progress = Math.min(1, Math.max(0.04, (now - s.startedAt) / s.avgMs));
+            const elapsed = now - s.startedAt;
+            const ceiling = STAGE_CEILING_MS[s.def.id] ?? s.avgMs * 2;
+            if (elapsed <= s.avgMs) {
+              progress = Math.max(0.04, (elapsed / s.avgMs) * 0.9);
+            } else if (elapsed < ceiling && ceiling > s.avgMs) {
+              const tail = (elapsed - s.avgMs) / (ceiling - s.avgMs);
+              progress = Math.min(0.99, 0.9 + tail * 0.09);
+            } else {
+              progress = 1;
+            }
           } else if (s.status === "current" && s.startedAt && !s.avgMs) {
             // No history yet — render a slow indeterminate sweep via CSS.
             progress = -1;
