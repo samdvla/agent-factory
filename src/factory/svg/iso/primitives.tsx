@@ -217,13 +217,19 @@ export function Plane({
   corners,
   color = "#ffffff",
   opacity = 1,
+  children,
 }: {
   corners: Array<[number, number, number]>;
   color?: string;
   opacity?: number;
+  children?: ReactNode;
 }) {
   const projected = corners.map(([x, y, z]) => iso3(x, y, z));
-  return <polygon points={pts(projected)} fill={color} opacity={opacity} />;
+  return (
+    <polygon points={pts(projected)} fill={color} opacity={opacity}>
+      {children}
+    </polygon>
+  );
 }
 
 // SVG filter defs used by Platform/FloorLightPool. Mount once near the top of

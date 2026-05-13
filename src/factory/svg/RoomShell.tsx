@@ -7,7 +7,29 @@ import { DoorSet } from "./layout";
 import { composeRoom } from "./kit/composer";
 import { DetailLevel } from "./viewport";
 import RoomShellIso from "./iso/RoomShellIso";
-import { StrategyRoomFurniture } from "./iso/strategyRoom";
+import type { ReactNode } from "react";
+import {
+  StrategyRoom, OpsBay, ListingDesk, ResearchLab, CsBooth, RenderStudio,
+  DesignStudio, FinanceRoom, LegalRoom, ArchiveRoom,
+} from "./iso/rooms";
+import { RoomTag } from "../state/types";
+
+function isoFurnitureFor(tag: RoomTag, accent: string): ReactNode {
+  switch (tag) {
+    case "bridge":   return <StrategyRoom accent={accent} />;
+    case "ops":      return <OpsBay accent={accent} />;
+    case "copy":     return <ListingDesk accent={accent} />;
+    case "analyst":  return <ResearchLab accent={accent} layout="row" />;
+    case "rd":       return <ResearchLab accent={accent} layout="central" />;
+    case "comms":    return <CsBooth accent={accent} />;
+    case "dev":      return <RenderStudio accent={accent} />;
+    case "creative": return <DesignStudio accent={accent} />;
+    case "finance":  return <FinanceRoom accent={accent} />;
+    case "legal":    return <LegalRoom accent={accent} />;
+    case "archive":  return <ArchiveRoom accent={accent} />;
+    default:         return <StrategyRoom accent={accent} />;
+  }
+}
 
 const DOOR_W = 1.0;
 const DOOR_H = WALL_H * 0.66;
@@ -162,9 +184,12 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
   const isSpawning = age < 600 && !room.dissolving && room.createdAt !== 0;
   const opacity = room.dissolving ? 0 : (isSpawning ? 0 : 1);
   const clipId = `room-clip-${roomId}`;
-  const useIsoShell = room.kit?.primaryTag === "bridge";
-
-  if (useIsoShell) {
+  // Every room now uses the iso shell. The recipe per primaryTag is
+  // selected in isoFurnitureFor(). The legacy composer fallback below is
+  // retained only for rooms whose kit lacks a primaryTag (shouldn't happen
+  // in normal operation, but kept as a safety net).
+  const tag = room.kit?.primaryTag;
+  if (tag) {
     return (
       <g
         className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
@@ -179,7 +204,7 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
           subtitle={subtitleText}
           showFurniture={showFurniture}
         >
-          <StrategyRoomFurniture accent={accent} />
+          {isoFurnitureFor(tag, accent)}
         </RoomShellIso>
       </g>
     );

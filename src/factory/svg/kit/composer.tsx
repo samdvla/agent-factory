@@ -37,8 +37,12 @@ export function layoutStations(kit: RoomKit): StationPos[] {
       break;
     }
     case "central": {
+      // Centered horizontally; first station sits at the workstation chair,
+      // second is the "visitor" spot in front of the desk. Used by creative,
+      // finance, and rd rooms — recipes in iso/rooms.tsx place chairs to
+      // match these coords.
       const positions = [
-        { x: 1.7, y: 4.6 }, { x: 4.3, y: 4.6 },
+        { x: 3.0, y: 3.4 }, { x: 3.0, y: 4.6 },
       ];
       for (let i = 0; i < c && i < positions.length; i++) {
         stations.push({ ...positions[i], label: `bench ${i + 1}` });
