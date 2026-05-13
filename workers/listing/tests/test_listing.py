@@ -35,13 +35,34 @@ def test_clamp_price_lifts_below_band_lower():
 
 
 def test_clamp_price_enforces_floor_when_band_lower_is_zero():
+    """Operator policy floor ($3) must override a brief lower bound of 0."""
     brief = {"price_band_usd": [0, 12]}
-    assert _clamp_price(0.50, brief) == 1.50
+    assert _clamp_price(0.50, brief) == 3.00
 
 
 def test_clamp_price_passthrough_in_band():
     brief = {"price_band_usd": [3, 12]}
     assert _clamp_price(6.99, brief) == 6.99
+
+
+def test_clamp_price_global_ceiling_supersedes_brief_band():
+    """Operator policy locks every digital sale to $3-$15. Even if research
+    returns a wider band, the global cap wins."""
+    brief = {"price_band_usd": [5, 50], "product_type": "stl_file"}
+    assert _clamp_price(40, brief) == 15.0
+
+
+def test_clamp_price_3d_model_capped_at_15():
+    """3d_model used to allow up to $30 — operator policy now caps all
+    digital types at $15."""
+    brief = {"product_type": "3d_model"}
+    assert _clamp_price(25, brief) == 15.0
+
+
+def test_clamp_price_global_floor_supersedes_brief_band():
+    """A brief that asks for $0.50 must still be raised to the operator $3 floor."""
+    brief = {"price_band_usd": [0.50, 8], "product_type": "stl_file"}
+    assert _clamp_price(1.00, brief) == 3.00
 
 
 def test_augment_listing_appends_ai_disclosure():

@@ -358,7 +358,7 @@ def _normalize_brief(brief: dict) -> None:
         brief["competition"] = "medium"
     pb = brief.get("price_band_usd")
     if not (isinstance(pb, list) and len(pb) == 2 and all(isinstance(x, (int, float)) for x in pb)):
-        brief["price_band_usd"] = [4, 12]
+        brief["price_band_usd"] = [3, 15]
     if not isinstance(brief.get("keywords"), list):
         brief["keywords"] = []
     if not isinstance(brief.get("design_direction"), str):
@@ -609,7 +609,7 @@ def process_job(job_id: int, payload: dict) -> dict:
             brief["product_type"] = product_type_preference
         # Defensive .get() — _normalize_brief filled these but be explicit.
         comp = brief.get("competition", "medium")
-        pb = brief.get("price_band_usd") or [4, 12]
+        pb = brief.get("price_band_usd") or [3, 15]
         ticker_text = (
             f"niche: {brief.get('niche', '?')} · {comp} comp "
             f"· ${pb[0]}-{pb[1]} · {brief.get('product_type', '?')}"

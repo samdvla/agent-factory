@@ -158,17 +158,19 @@ PRODUCT_MATERIALS = {
     "3d_model": ["GLB file", "STL file", "digital download", "3D asset"],
 }
 
-# 3D-printable assets typically sell higher than 2D digital prints on Etsy.
-# Adjust per product_type so the listing worker doesn't clamp a fair $15
-# tabletop mini down to $12 just because the 2D ceiling existed.
+# Per-product-type ceilings. All digital sales are capped at GLOBAL_PRICE_CEILING_USD
+# (operator policy: $3-$15 across the catalog for an unproven shop). Physical
+# POD types (mug, tee) keep their higher ceilings because they include real
+# fulfillment cost — those aren't "digital sales" and aren't gated by the
+# global cap below.
 PRICE_CEILING_BY_TYPE = {
-    "sticker": 12.0,
-    "digital_print": 12.0,
+    "sticker": 15.0,
+    "digital_print": 15.0,
     "mug": 22.0,
     "tee": 28.0,
-    "poster": 22.0,
-    "stl_file": 25.0,
-    "3d_model": 30.0,
+    "poster": 15.0,
+    "stl_file": 15.0,
+    "3d_model": 15.0,
 }
 
 
@@ -221,10 +223,13 @@ _LISTING_TOOL = {
             },
             "price_usd": {
                 "type": "number",
-                "minimum": 1.50,
+                "minimum": 3.0,
+                "maximum": 15.0,
                 "description": (
-                    "Listing price in USD. Must respect brief.price_band_usd "
-                    "if provided. Worker also enforces ceilings post-hoc."
+                    "Listing price in USD. Operator policy: digital sales "
+                    "must fall in [$3, $15]. Use brief.price_band_usd as a "
+                    "hint within that range. Worker silently clamps anything "
+                    "outside [$3, $15] post-hoc."
                 ),
             },
         },
@@ -268,16 +273,18 @@ def build_listing_prompt(brief: dict, asset: dict) -> tuple[str, str]:
     }.get(product_type, "Digital download.")
 
     pricing_guidance = (
-        "PRICING — Etsy 3D-printable digital downloads typically sell $4–$20. "
-        "Use brief.price_band_usd as your guide. For mini-figures aim $5–$10; "
-        "jewelry $4–$8; decor $8–$15; cosplay/props $10–$25. Never exceed "
-        "brief.price_band_usd[1]. Pick a price that converts."
+        "PRICING — operator policy locks every digital sale to $3–$15. "
+        "For 3D-printable downloads: mini-figures $4–$9, jewelry $3–$7, "
+        "decor $7–$12, cosplay/props $10–$15. Use brief.price_band_usd as "
+        "a hint, but the absolute cap is $15 and absolute floor is $3 — "
+        "anything outside [$3, $15] will be silently clamped by the "
+        "publisher. Pick a price that converts."
     ) if is_3d else (
-        "PRICING — the shop is brand new and has no reviews. Pick a price that "
-        "real buyers would impulse-purchase. Use brief.price_band_usd as your "
-        "guide; lean toward the LOWER end of that band, not the middle. Never "
-        "exceed brief.price_band_usd[1]. If no band is provided, price in the "
-        "$3–$8 range. Sub-$10 wins on a fresh shop."
+        "PRICING — operator policy locks every digital sale to $3–$15. "
+        "The shop is brand new and has no reviews — lean toward the LOWER "
+        "end of that range, not the middle. Use brief.price_band_usd as a "
+        "hint. Anything outside [$3, $15] is silently clamped. Sub-$10 "
+        "wins on a fresh shop."
     )
 
     shop_persona = (
@@ -313,21 +320,29 @@ def _augment_listing(listing: dict, brief: dict) -> dict:
     return listing
 
 
-# Hard ceiling used to clamp the model's price choice on a brand-new shop.
-# Until the SI loop learns from real Etsy sales (see project_north_star), the
-# safest policy is "cheap enough to actually impulse-buy from an unknown shop."
-NEW_SHOP_PRICE_CEILING_USD = 12.0
+# Operator policy: all digital sales priced $3-$15 for this unproven shop.
+# Applied as a hard final clamp in _clamp_price below — supersedes the brief
+# band and per-type ceilings. Until the SI loop learns from real Etsy sales
+# (see project_north_star), this is the safe-impulse-buy range.
+GLOBAL_PRICE_FLOOR_USD = 3.0
+GLOBAL_PRICE_CEILING_USD = 15.0
+
+# Hard ceiling used when product_type isn't in PRICE_CEILING_BY_TYPE.
+NEW_SHOP_PRICE_CEILING_USD = GLOBAL_PRICE_CEILING_USD
 
 
 def _clamp_price(price: float, brief: dict) -> float:
-    """Force the model's price into a sane band for a new, no-review shop.
+    """Force the model's price into the operator's $3-$15 band.
 
     Constraints, in order:
       1. price <= brief.price_band_usd[1] when provided
-      2. price <= per-product-type ceiling (3D printables can go higher
-         than 2D stickers — see PRICE_CEILING_BY_TYPE)
-      3. price >= brief.price_band_usd[0] when provided (no loss leaders)
-      4. price >= 1.50 (Etsy floor for impulse digital)
+      2. price <= per-product-type ceiling
+      3. price <= GLOBAL_PRICE_CEILING_USD (final cap — operator policy)
+      4. price >= brief.price_band_usd[0] when provided (no loss leaders)
+      5. price >= GLOBAL_PRICE_FLOOR_USD (operator floor)
+
+    The global cap/floor are applied LAST so a too-wide brief band or a
+    per-type ceiling can never bypass the operator's policy.
     """
     band = brief.get("price_band_usd") if isinstance(brief, dict) else None
     lo, hi = None, None
@@ -343,9 +358,10 @@ def _clamp_price(price: float, brief: dict) -> float:
     if hi is not None:
         capped = min(capped, hi)
     capped = min(capped, type_ceiling)
+    capped = min(capped, GLOBAL_PRICE_CEILING_USD)
     if lo is not None:
         capped = max(capped, lo)
-    capped = max(capped, 1.50)
+    capped = max(capped, GLOBAL_PRICE_FLOOR_USD)
     return round(capped, 2)
 
 
@@ -396,8 +412,11 @@ def _validate_tool_input(inp: dict) -> list[str]:
         errors.append("missing 'materials' (must be array of strings)")
     if not isinstance(inp.get("price_usd"), (int, float)):
         errors.append("missing or non-numeric 'price_usd'")
-    elif inp.get("price_usd") < 1.50:
-        errors.append(f"price_usd {inp['price_usd']} below floor 1.50")
+    elif inp.get("price_usd") < GLOBAL_PRICE_FLOOR_USD:
+        errors.append(
+            f"price_usd {inp['price_usd']} below operator floor "
+            f"${GLOBAL_PRICE_FLOOR_USD:.2f}"
+        )
     return errors
 
 
