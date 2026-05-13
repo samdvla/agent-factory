@@ -6,6 +6,8 @@ import {
 import { DoorSet } from "./layout";
 import { composeRoom } from "./kit/composer";
 import { DetailLevel } from "./viewport";
+import RoomShellIso from "./iso/RoomShellIso";
+import { StrategyRoomFurniture } from "./iso/strategyRoom";
 
 const DOOR_W = 1.0;
 const DOOR_H = WALL_H * 0.66;
@@ -160,6 +162,28 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
   const isSpawning = age < 600 && !room.dissolving && room.createdAt !== 0;
   const opacity = room.dissolving ? 0 : (isSpawning ? 0 : 1);
   const clipId = `room-clip-${roomId}`;
+  const useIsoShell = room.kit?.primaryTag === "bridge";
+
+  if (useIsoShell) {
+    return (
+      <g
+        className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}
+        data-room={roomId}
+        data-name={room.name}
+        style={{ opacity, transition: room.dissolving ? "opacity 800ms ease-out" : "opacity 500ms ease-in" }}
+      >
+        <RoomShellIso
+          b={b}
+          accent={accent}
+          name={room.name}
+          subtitle={subtitleText}
+          showFurniture={showFurniture}
+        >
+          <StrategyRoomFurniture accent={accent} />
+        </RoomShellIso>
+      </g>
+    );
+  }
 
   return (
     <g className={`iso-room is-${roomState}${room.dissolving ? " is-dissolving" : ""}${isSpawning ? " is-spawning" : ""}`}

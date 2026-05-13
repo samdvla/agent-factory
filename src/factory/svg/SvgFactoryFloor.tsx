@@ -8,6 +8,7 @@ import AvatarLayer from "./AvatarLayer";
 import HandoffLayer from "./HandoffLayer";
 import Corridors from "./Corridors";
 import { detailLevelsFor } from "./viewport";
+import { IsoDefs } from "./iso/primitives";
 
 type ViewBox = { minX: number; minY: number; w: number; h: number };
 
@@ -198,6 +199,7 @@ export default function SvgFactoryFloor() {
             <stop offset="100%" stopColor="#5fd4f0" stopOpacity={0} />
           </radialGradient>
         </defs>
+        <IsoDefs />
         <Corridors strips={layout.corridors} />
         {ordered.map((id) => (
           <RoomShell

@@ -24,9 +24,12 @@ export function layoutStations(kit: RoomKit): StationPos[] {
       break;
     }
     case "cluster": {
+      // Tuned to align with the chair seats in the new Strategy Room
+      // composition (see `iso/strategyRoom.tsx`). station[0] is the
+      // "boss seat" — east side, at the head of the oval table.
       const positions = [
-        { x: 2.0, y: 2.0 }, { x: 4.0, y: 2.0 },
-        { x: 2.0, y: 4.4 }, { x: 4.0, y: 4.4 },
+        { x: 4.53, y: 2.25 }, { x: 3.87, y: 1.17 },
+        { x: 3.87, y: 3.69 }, { x: 1.17, y: 2.25 },
       ];
       for (let i = 0; i < c && i < positions.length; i++) {
         stations.push({ ...positions[i], label: `seat ${i + 1}` });
