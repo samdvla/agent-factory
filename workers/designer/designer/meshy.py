@@ -3,9 +3,16 @@
 Meshy's v2 text-to-3D flow is two-stage:
   1. Preview — fast (~30s) untextured low-poly mesh, ~5 credits.
   2. Refine — slower (~3-5 min) textured high-poly mesh, ~10 credits.
-For Etsy STL listings the preview is already fine (STL is geometry only;
-3D-printer buyers don't care about textures), so we default to preview-only
-to keep cost + latency down. Set `refine=True` for game-asset routes.
+
+We default to BOTH stages (refine=True). The STL is geometry-only by
+format and doesn't carry textures regardless, but the GLB we ship to
+Cults3D + display in the in-app model viewer needs PBR materials so
+buyers see the actual look, not a white silhouette. The same goes for
+image-to-3D, where enable_pbr defaults to True.
+
+The extra ~5 credits and ~3min latency per job are the price of an
+actually-textured deliverable; the user has explicitly chosen quality
+over per-job cost.
 
 Stdlib HTTP, no third-party deps beyond what tripo.py / trimesh need.
 """
@@ -108,7 +115,7 @@ def submit_image_to_3d(
     api_key: str,
     image_path_or_url: str,
     *,
-    enable_pbr: bool = False,
+    enable_pbr: bool = True,
     ai_model: str = "meshy-4",
 ) -> str:
     """Create an image-to-3D task. Accepts a local file path (uploaded as a
@@ -151,7 +158,7 @@ def generate_3d_from_image(
     *,
     job_id: int,
     assets_dir: str,
-    enable_pbr: bool = False,
+    enable_pbr: bool = True,
 ) -> Tuple[str, str, str]:
     """One-shot image→3D via Meshy. Returns (glb_path, stl_path, preview_png).
     Mirrors generate_3d's shape so the designer can swap providers without
@@ -261,12 +268,14 @@ def generate_3d(
     job_id: int,
     assets_dir: str,
     art_style: str = "realistic",
-    refine: bool = False,
+    refine: bool = True,
 ) -> Tuple[str, str, str]:
     """One-shot text→3D via Meshy. Returns (glb_path, stl_path, preview_png).
 
-    Preview-only by default — fast + cheap, plenty for STL Etsy listings.
-    Set refine=True for textured game-asset routes (Fab / itch.io).
+    Defaults to preview + refine so the shipped GLB carries PBR textures —
+    Cults3D buyers and the in-app model viewer need them; without refine
+    Meshy returns a flat untextured mesh. Set refine=False only when you
+    explicitly want the cheap untextured preview (game-asset prototyping).
     """
     os.makedirs(assets_dir, exist_ok=True)
     print(f"[meshy] job_id={job_id} preview submit ({len(prompt)} chars)", file=sys.stderr, flush=True)
