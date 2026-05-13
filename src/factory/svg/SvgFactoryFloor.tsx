@@ -183,7 +183,11 @@ export default function SvgFactoryFloor() {
         width: "100%",
         height: "100%",
         overflow: "hidden",
-        background: isoTheme.sky,
+        // Stage backdrop tracks the user's app theme (pine / claude /
+        // espresso / plum / midnight / linen) so the room pavilions sit
+        // on the surrounding interface color. The iso room theme only
+        // controls floor/wall/glass *inside* each room.
+        background: "var(--bg-0)",
         cursor: isDragging.current ? "grabbing" : "grab",
       }}
       onWheel={onWheel}
