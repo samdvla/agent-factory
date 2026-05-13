@@ -147,9 +147,10 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
   const shoeColor = "#15171c";
   const skin = "var(--skin)";
 
-  // Shoes: two slim parallelograms suggesting iso boots
-  const shoe = (sx: number) => (
-    <g>
+  // Shoes: two slim parallelograms suggesting iso boots. side="l"/"r" lets
+  // CSS animate the left/right shoes independently when the avatar walks.
+  const shoe = (sx: number, side: "l" | "r") => (
+    <g className={`avatar-shoe avatar-shoe-${side}`}>
       <polygon
         points={`${sx - 1.6},2 ${sx + 1.7},2 ${sx + 2.0},0 ${sx - 1.2},0`}
         fill={shoeColor}
@@ -161,9 +162,10 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
     </g>
   );
 
-  // Legs: 3-face boxes with iso depth
-  const leg = (lx: number) => (
-    <g>
+  // Legs: 3-face boxes with iso depth. Same per-side class so the left and
+  // right leg can alternate-bob while walking.
+  const leg = (lx: number, side: "l" | "r") => (
+    <g className={`avatar-leg avatar-leg-${side}`}>
       <polygon
         points={`${lx - 1.1},-1 ${lx - 1.1},-12 ${lx + 0.4},-13 ${lx + 0.4},-2`}
         fill={darkerHex(pants, 0.2)}
@@ -191,10 +193,10 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
   const armR = 1.6;
   return (
     <g>
-      {shoe(-2.2)}
-      {shoe(2.2)}
-      {leg(-3.0)}
-      {leg(1.0)}
+      {shoe(-2.2, "l")}
+      {shoe(2.2, "r")}
+      {leg(-3.0, "l")}
+      {leg(1.0, "r")}
       {/* Torso — left/front face in role accent */}
       <polygon
         points={`${torsoLeft},${torsoBottom} ${torsoLeft},${torsoTop} ${torsoRight},${torsoTop} ${torsoRight},${torsoBottom}`}
@@ -219,13 +221,17 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
         fill={accentLight}
         fillOpacity={0.9}
       />
-      {/* Arms — visible as small accent circles either side of the torso, with
-          a skin-colored hand just below to suggest the hand resting at desk
-          level. Mirrors the handoff Agent's `arms + hands` rendering. */}
-      <circle cx={torsoLeft - 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
-      <circle cx={torsoRight + 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
-      <circle cx={torsoLeft - 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
-      <circle cx={torsoRight + 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
+      {/* Arms — small accent circles either side of the torso, with a
+          skin-colored hand just below. Wrapped in per-side groups so they
+          can swing independently while walking (and typing while working). */}
+      <g className="avatar-arm avatar-arm-l">
+        <circle cx={torsoLeft - 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
+        <circle cx={torsoLeft - 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
+      </g>
+      <g className="avatar-arm avatar-arm-r">
+        <circle cx={torsoRight + 0.8} cy={torsoTop + 5} r={armR} fill={accent} />
+        <circle cx={torsoRight + 0.8} cy={torsoTop + 5 + armR + 0.6} r={armR * 0.8} fill={skin} />
+      </g>
     </g>
   );
 }

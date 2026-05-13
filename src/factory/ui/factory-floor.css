@@ -2158,6 +2158,23 @@ button.etsy-pill {
 .avatar-working .avatar-figure { animation: avatar-typing 0.42s ease-in-out infinite alternate; }
 .avatar-walking .avatar-figure { animation: avatar-walk 0.6s ease-in-out infinite; }
 
+/* Per-body-part walking + working animation. Each leg/shoe/arm group is
+   wrapped in a `.avatar-leg-l` / `.avatar-leg-r` / `.avatar-arm-l` /
+   `.avatar-arm-r` class so we can drive them independently — matching
+   the handoff Agent's alternating-foot walk cycle and arm swing. */
+.avatar-shoe, .avatar-leg, .avatar-arm {
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+.avatar-walking .avatar-leg-l,
+.avatar-walking .avatar-shoe-l { animation: avatar-step-l 0.46s ease-in-out infinite; }
+.avatar-walking .avatar-leg-r,
+.avatar-walking .avatar-shoe-r { animation: avatar-step-r 0.46s ease-in-out infinite; }
+.avatar-walking .avatar-arm-l  { animation: avatar-swing-l 0.46s ease-in-out infinite; }
+.avatar-walking .avatar-arm-r  { animation: avatar-swing-r 0.46s ease-in-out infinite; }
+.avatar-working .avatar-arm-l  { animation: avatar-type-l  0.36s ease-in-out infinite alternate; }
+.avatar-working .avatar-arm-r  { animation: avatar-type-r  0.36s ease-in-out infinite alternate; }
+
 @keyframes avatar-breathe {
   0%, 100% { transform: translateY(0) scale(1); }
   50%      { transform: translateY(-1px) scale(1.015); }
@@ -2169,6 +2186,30 @@ button.etsy-pill {
 @keyframes avatar-walk {
   0%, 100% { transform: translateY(0) rotate(-1.2deg); }
   50%      { transform: translateY(-2.5px) rotate(1.2deg); }
+}
+@keyframes avatar-step-l {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2.2px); }
+}
+@keyframes avatar-step-r {
+  0%, 100% { transform: translateY(-2.2px); }
+  50%      { transform: translateY(0); }
+}
+@keyframes avatar-swing-l {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(0.6px, -1px); }
+}
+@keyframes avatar-swing-r {
+  0%, 100% { transform: translate(0, -1px); }
+  50%      { transform: translate(-0.6px, 0); }
+}
+@keyframes avatar-type-l {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(-0.7px); }
+}
+@keyframes avatar-type-r {
+  0%   { transform: translateY(-0.7px); }
+  100% { transform: translateY(0); }
 }
 @keyframes avatar-shake {
   0%, 100% { transform: translateX(0); }
