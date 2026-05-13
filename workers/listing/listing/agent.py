@@ -145,26 +145,43 @@ def _load_system_override(role: str) -> str | None:
     return None
 
 
-def _load_operator_steers(role: str) -> list[str]:
+def _load_operator_steers(role: str) -> list[dict]:
     """Read operator standing instructions written from the ChatPanel Steer
-    action. Returns [] when missing or malformed."""
+    action. Returns a normalized list of `{"text": str, "image_paths":
+    list[str]}` dicts. Both plain-string entries (legacy) and object
+    entries (new schema with image_paths) are accepted. Returns [] when
+    the file is missing or malformed."""
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         arr = data.get(role, {}).get("operator_steers")
-        if isinstance(arr, list):
-            return [s for s in arr if isinstance(s, str) and s.strip()]
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for entry in arr:
+            if isinstance(entry, str):
+                if entry.strip():
+                    out.append({"text": entry.strip(), "image_paths": []})
+            elif isinstance(entry, dict):
+                text = entry.get("text")
+                paths = entry.get("image_paths") or []
+                if isinstance(text, str) and text.strip():
+                    out.append({
+                        "text": text.strip(),
+                        "image_paths": [p for p in paths if isinstance(p, str)],
+                    })
+        return out
     except Exception:
         pass
     return []
 
 
 def _append_operator_steers(system_prompt: str, role: str) -> str:
-    """Append operator standing instructions as the final block. Operator
-    steers compose with and take precedence over the strategist-tuned
-    override, because the last block in the system prompt gets the model's
-    strongest attention."""
+    """Append operator standing instructions as the final block. Listing
+    is text-output (Etsy title + tags + description) so image references
+    aren't piped through to the model — only the TEXT half of each steer
+    lands in the system prompt."""
     steers = _load_operator_steers(role)
     if not steers:
         return system_prompt
@@ -174,7 +191,7 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
         "or 'prioritize Z category' directives in the strategist-tuned "
         "system prompt. If any rule above conflicts with the instructions "
         "below, ignore that rule for this job and follow the operator:\n"
-        + "\n".join(f"- {s}" for s in steers)
+        + "\n".join(f"- {s['text']}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
 

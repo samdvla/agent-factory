@@ -86,7 +86,7 @@ def _use_json_prefill() -> bool:
     return "api.anthropic.com" in url
 
 
-def _messages_for_json_call(user_content: str) -> list[dict]:
+def _messages_for_json_call(user_content) -> list[dict]:
     """Build the messages array for a JSON-emitting Anthropic call. Adds the
     assistant prefill only when the API supports it (direct Anthropic, not
     a bridge proxy)."""
@@ -248,16 +248,35 @@ def _load_system_override(role: str) -> str | None:
     return None
 
 
-def _load_operator_steers(role: str) -> list[str]:
+def _load_operator_steers(role: str) -> list[dict]:
     """Read operator standing instructions written from the ChatPanel Steer
-    action. Returns [] when missing or malformed."""
+    action. Returns a list of normalized dicts `{"text": str,
+    "image_paths": list[str]}`. Two on-disk shapes are accepted for
+    backward compatibility: plain strings (no images) and
+    `{"text": ..., "image_paths": [...]}` objects (images attached via
+    the ChatPanel paperclip). Returns [] when the file is missing or
+    malformed."""
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         arr = data.get(role, {}).get("operator_steers")
-        if isinstance(arr, list):
-            return [s for s in arr if isinstance(s, str) and s.strip()]
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for entry in arr:
+            if isinstance(entry, str):
+                if entry.strip():
+                    out.append({"text": entry.strip(), "image_paths": []})
+            elif isinstance(entry, dict):
+                text = entry.get("text")
+                paths = entry.get("image_paths") or []
+                if isinstance(text, str) and text.strip():
+                    out.append({
+                        "text": text.strip(),
+                        "image_paths": [p for p in paths if isinstance(p, str)],
+                    })
+        return out
     except Exception:
         pass
     return []
@@ -267,7 +286,12 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     """Append operator standing instructions as the final block. Operator
     steers compose with and take precedence over the strategist-tuned
     override, because the last block in the system prompt gets the model's
-    strongest attention."""
+    strongest attention.
+
+    Only the TEXT half of each steer lands in the system prompt — image
+    refs attach to the user message via _build_user_content_with_steer_images
+    because Anthropic's `system` field is text-only.
+    """
     steers = _load_operator_steers(role)
     if not steers:
         return system_prompt
@@ -277,9 +301,60 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
         "or 'prioritize Z category' directives in the strategist-tuned "
         "system prompt. If any rule above conflicts with the instructions "
         "below, ignore that rule for this job and follow the operator:\n"
-        + "\n".join(f"- {s}" for s in steers)
+        + "\n".join(f"- {s['text']}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
+
+
+def _build_user_content_with_steer_images(
+    user_prompt: str, role: str
+) -> "str | list[dict]":
+    """If any operator steer for `role` carries image references, upgrade
+    the user-message content from a plain string to a list of multimodal
+    blocks. No-op when no images are attached. See orchestrator/agent.py
+    for the canonical implementation — this is a verbatim copy so each
+    worker stays self-contained."""
+    import base64
+    import mimetypes
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in _load_operator_steers(role):
+        for path in entry.get("image_paths", []):
+            if not isinstance(path, str) or path in seen:
+                continue
+            seen.add(path)
+            refs.append((entry.get("text", ""), path))
+    if not refs:
+        return user_prompt
+    blocks: list[dict] = []
+    for text, path in refs:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            print(
+                f"[research] skipping unreadable steer image {path!r}: {e}",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        mime = mimetypes.guess_type(path)[0] or "image/png"
+        if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+            mime = "image/png"
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(raw).decode("ascii"),
+            },
+        })
+        snippet = text[:200] + ("…" if len(text) > 200 else "")
+        blocks.append({
+            "type": "text",
+            "text": f"^ Operator reference image for the steer: {snippet!r}",
+        })
+    blocks.append({"type": "text", "text": user_prompt})
+    return blocks
 
 
 def _load_rejection_avoid_list(limit: int = 12) -> list[dict]:
@@ -434,6 +509,25 @@ VALID_PRODUCT_TYPES = {
     "sticker", "digital_print", "mug", "tee", "poster",
     "stl_file", "3d_model",
 }
+
+
+# Natural-language labels for the Conversations panel — keeps agent chatter
+# from reading like a CSV row of enum values.
+_RESEARCH_PT_LABELS = {
+    "stl_file": "STL file",
+    "3d_model": "3D model",
+    "sticker": "sticker design",
+    "digital_print": "digital print",
+    "poster": "poster design",
+    "mug": "mug design",
+    "tee": "tee design",
+}
+
+
+def _humanize_research_pt(pt: str | None) -> str:
+    if not pt:
+        return "next product"
+    return _RESEARCH_PT_LABELS.get(pt, pt.replace("_", " "))
 
 
 def _normalize_product_type(brief: dict) -> None:
@@ -757,12 +851,15 @@ def call_anthropic(
     # "always pick X" decision rules baked into the strategist override.
     system_prompt = _append_rejection_avoid_block(system_prompt)
     system_prompt = _append_operator_steers(system_prompt, "research")
+    # Image-bearing steers attach to the user message as multimodal blocks
+    # (Anthropic's `system` is text-only). No-op when no image is attached.
+    user_content = _build_user_content_with_steer_images(user_prompt, "research")
 
     body = json.dumps({
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system_prompt,
-                "messages": _messages_for_json_call(user_prompt),
+                "messages": _messages_for_json_call(user_content),
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -851,21 +948,43 @@ def process_job(job_id: int, payload: dict) -> dict:
             handoff_payload["cycle_id"] = cycle_id
         # Conversation log: hand the designer a short, opinionated brief and
         # broadcast the same headline so listing / strategist can react.
+        # Phrased like Slack between teammates — read as natural prose in
+        # the Conversations panel, not log lines.
         design_direction = brief.get("design_direction") or ""
         keywords = brief.get("keywords") or []
         kw_line = ", ".join(keywords[:8]) if isinstance(keywords, list) else ""
         ip_risk = brief.get("ip_risk", "none")
-        risk_tag = f" [ip_risk={ip_risk}]" if ip_risk != "none" else ""
-        designer_msg = (
-            f"New brief: niche='{brief['niche']}' · product={brief['product_type']}"
-            f"{risk_tag}.\n"
-            f"Design direction: {design_direction.strip()[:600]}\n"
-            f"Keywords to bake into the visual: {kw_line}"
-        )
+        product_label = _humanize_research_pt(brief.get("product_type", "?"))
+        niche_name = brief.get("niche", "?")
+
+        designer_parts = [
+            f"Mara — brief for **{niche_name}** as a {product_label}.",
+            f"Design direction: {design_direction.strip()[:700]}",
+        ]
+        if kw_line:
+            designer_parts.append(f"Keywords: {kw_line}.")
+        if ip_risk == "mythology":
+            designer_parts.append(
+                "IP risk: mythology / public-domain."
+            )
+        elif ip_risk == "high":
+            designer_parts.append(
+                "IP risk: HIGH — publisher holds drafts in this tier for "
+                "operator approval before listing."
+            )
+        elif ip_risk == "original":
+            designer_parts.append("IP risk: original.")
+        designer_msg = "\n\n".join(designer_parts)
+
+        risk_aside = ""
+        if ip_risk == "high":
+            risk_aside = " HIGH IP risk — held for approval."
+        elif ip_risk == "mythology":
+            risk_aside = " (mythology / public-domain.)"
         floor_msg = (
-            f"Picked niche '{brief.get('niche', '?')}'{risk_tag} ({comp} comp, "
-            f"${pb[0]}-{pb[1]}, {brief.get('product_type', '?')}). "
-            f"Direction: {design_direction.strip()[:160]}"
+            f"Brief to Mara: **{niche_name}**, "
+            f"${pb[0]}-{pb[1]} as a {product_label}, {comp} competition.{risk_aside} "
+            f"Direction: {design_direction.strip()[:220]}"
         )
         messages = [
             {
