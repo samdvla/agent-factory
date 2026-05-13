@@ -94,9 +94,14 @@ def test_validate_missing_file_rejected(tmp_path):
 
 def test_repair_and_validate_fixes_inverted_winding(tmp_path):
     """Mesh with fully inverted normals → repair runs fix_normals → volume
-    flips back to positive → re-exports the GLB so downstream readers see
-    the fixed geometry. This is the realistic Tripo failure mode (whole
-    mesh's normals point inside-out, slicer creates internal walls)."""
+    flips back to positive → re-exports the STL with the fixed geometry.
+
+    The GLB on disk is deliberately NOT re-exported even when repair runs:
+    trimesh's force="mesh" / scene.dump() loader drops PBR materials + UVs
+    on round-trip, and the GLB is the textured deliverable shown in previews
+    + uploaded to Cults3D. STL has no materials by format anyway, so it
+    safely carries the repaired geometry forward to 3D-print buyers.
+    """
     glb = tmp_path / "inverted.glb"
     _inverted_winding_glb(str(glb))
     # Pre-repair: signed volume should be negative.
@@ -112,12 +117,19 @@ def test_repair_and_validate_fixes_inverted_winding(tmp_path):
     ok, reason, metrics = mq.repair_and_validate(str(glb), str(stl))
     assert ok is True, f"repair should rescue inverted normals, got {reason!r}"
     assert metrics["volume"] > 0
-    # Post-repair file on disk must read back with positive volume.
-    post = trimesh.load(str(glb), force="mesh")
-    if hasattr(post, "dump"):
-        post = post.dump(concatenate=True)
-    assert post.volume > 0
-    # STL was emitted alongside the repaired GLB.
+    # STL has the repaired geometry (positive volume).
+    stl_mesh = trimesh.load(str(stl), force="mesh")
+    if hasattr(stl_mesh, "dump"):
+        stl_mesh = stl_mesh.dump(concatenate=True)
+    assert stl_mesh.volume > 0
+    # GLB on disk is intentionally untouched so PBR textures survive.
+    post_glb = trimesh.load(str(glb), force="mesh")
+    if hasattr(post_glb, "dump"):
+        post_glb = post_glb.dump(concatenate=True)
+    assert post_glb.volume < 0, (
+        "GLB must NOT be re-exported by repair_and_validate — textures "
+        "would be stripped"
+    )
     assert stl.exists()
     assert stl.stat().st_size > 0
 

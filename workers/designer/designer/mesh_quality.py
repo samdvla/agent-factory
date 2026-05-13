@@ -185,19 +185,27 @@ def repair_and_validate(glb_path: str, stl_path: Optional[str]) -> Tuple[bool, O
         return False, "strict mode: mesh is not watertight after repair", final
 
     if repaired:
+        # Only re-export the STL. The GLB stays as the upstream provider
+        # returned it (textured / PBR materials intact). Trimesh's loader
+        # uses force="mesh" / scene.dump() up the call chain, which round-
+        # trips geometry but drops materials + UVs — re-exporting GLB here
+        # would silently strip textures on every repair pass. For 3D-print
+        # buyers the STL is the deliverable that needs the geometry fix;
+        # the GLB is for preview + Cults3D where unrepaired winding is
+        # cosmetic at worst (modern viewers tolerate both windings).
         try:
-            mesh.export(glb_path, file_type="glb")
             if stl_path:
                 mesh.export(stl_path, file_type="stl")
             _log(
-                f"re-exported repaired mesh: faces={final['face_count']} "
+                f"re-exported repaired STL (GLB preserved): "
+                f"faces={final['face_count']} "
                 f"vol={final['volume']:.2f} "
                 f"watertight={final['is_watertight']}"
             )
         except Exception as e:
-            _log(f"re-export failed after repair: {e}")
-            # Files are likely still valid (the original write succeeded
-            # upstream); we proceed with the originals.
+            _log(f"STL re-export failed after repair: {e}")
+            # STL is likely still valid (upstream wrote it before the gate
+            # ran); we proceed with the original.
 
     return True, None, final
 

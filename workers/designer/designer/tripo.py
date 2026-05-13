@@ -168,7 +168,14 @@ def submit_image_to_model(
     model_version: str = DEFAULT_MODEL_VERSION,
     style: Optional[str] = None,
 ) -> str:
-    """Create an image-to-3D task from a local PNG/JPG/WEBP. Returns task_id."""
+    """Create an image-to-3D task from a local PNG/JPG/WEBP. Returns task_id.
+
+    `texture` + `pbr` default to true on v2.0-20240919+ per Tripo's docs, so
+    omitting them works today. We set them explicitly anyway: a future
+    default flip would silently downgrade us to texture-less generation,
+    which already happened once after the worker's decimation step
+    overwrote textured GLBs in place.
+    """
     file_token = upload_image(api_key, image_path)
     body: dict = {
         "type": "image_to_model",
@@ -177,6 +184,9 @@ def submit_image_to_model(
             "type": _ext_from_path(image_path),
             "file_token": file_token,
         },
+        "texture": True,
+        "pbr": True,
+        "texture_quality": "standard",
     }
     if style:
         body["style"] = style
@@ -197,11 +207,17 @@ def submit_text_to_model(
     model_version: str = DEFAULT_MODEL_VERSION,
     style: Optional[str] = None,
 ) -> str:
-    """Create a text-to-3D task. Returns task_id on success."""
+    """Create a text-to-3D task. Returns task_id on success.
+
+    See submit_image_to_model docstring for why texture/pbr are explicit.
+    """
     body: dict = {
         "type": "text_to_model",
         "prompt": prompt,
         "model_version": model_version,
+        "texture": True,
+        "pbr": True,
+        "texture_quality": "standard",
     }
     if style:
         body["style"] = style
@@ -302,15 +318,25 @@ def glb_to_stl(glb_path: str, stl_path: str) -> None:
     scene_or_mesh.export(stl_path, file_type="stl")
 
 
-# Etsy's digital-file upload soft-fails at ~19 MB (the publisher's safety
-# margin under the documented 20 MB cap). Binary STL is roughly 3-4× the
-# size of the compressed GLB (each triangle = 50 bytes uncompressed in STL
-# vs. indexed/draco-compressed in GLB), so gating on GLB size lets oversized
-# STLs through. We aim for ≤ 18 MB on the STL with a 1 MB safety margin.
-ETSY_STL_MAX_BYTES = 18 * 1024 * 1024
+# Etsy's digital-file upload hard-caps at 19 MB on the publisher side (see
+# ETSY_DIGITAL_FILE_MAX_BYTES in src-tauri/src/etsy_publish.rs). Binary STL
+# is roughly 3-4× the size of the compressed GLB (each triangle = 50 bytes
+# uncompressed in STL vs. indexed/draco-compressed in GLB), so gating on
+# GLB size lets oversized STLs through. We aim for ≤ 16 MB on the STL with
+# a 3 MB safety margin — observed Tripo output sat at 23-24 MB with the
+# older 18 MB target × 0.85 ratio × 5 rounds budget, blowing through the
+# 19 MB cap and triggering ETSY_ASSET_TOO_LARGE on the publisher.
+ETSY_STL_MAX_BYTES = 16 * 1024 * 1024
 # Legacy alias — pre-2026-05-13 code gated on GLB size at 15 MB. Kept as
 # the first-pass target so small models still pass through untouched.
 ETSY_FILE_MAX_BYTES = 15 * 1024 * 1024
+
+
+class StlTooLargeError(Exception):
+    """Raised when ensure_stl_under_cap can't decimate the mesh below the
+    Etsy upload cap. The designer cycle should abort cleanly instead of
+    handing an oversized STL to the publisher (which would just reject it
+    with ETSY_ASSET_TOO_LARGE)."""
 
 
 def _decimate_glb_in_place(glb_path: str, target_ratio: float) -> bool:
@@ -368,54 +394,99 @@ def _decimate_glb_in_place(glb_path: str, target_ratio: float) -> bool:
 
 
 def ensure_stl_under_cap(glb_path: str, stl_path: str, max_bytes: int = ETSY_STL_MAX_BYTES) -> None:
-    """Convert GLB to STL. If the resulting STL exceeds `max_bytes`, decimate
-    the GLB and reconvert — looping until under cap or attempts exhausted.
+    """Convert GLB to STL preserving the textured GLB at glb_path. If the
+    resulting STL exceeds `max_bytes`, decimate a working copy of the GLB
+    and reconvert — looping until under cap or attempts exhausted.
 
-    This is the single source of truth for "ship a printable + Etsy-uploadable
-    STL". Replaces the previous `shrink_glb_for_etsy + glb_to_stl` pair which
-    gated only on GLB size and let big STLs through.
+    The textured GLB is the deliverable shown in previews + uploaded to
+    Cults3D and the model viewer. Decimation goes through trimesh, which
+    only round-trips geometry (force="mesh" or scene.dump()) and drops
+    PBR materials + UV maps on re-export. Before this change ensure_stl
+    overwrote glb_path with the decimated geometry, silently stripping
+    textures on every job whose STL didn't fit in one shot — which was
+    most of them. Now decimation runs against a sidecar copy and only the
+    STL is regenerated; the textured GLB stays exactly as Tripo returned it.
     """
-    import os, sys
+    import os, shutil, sys
 
-    glb_to_stl(glb_path, stl_path)
+    # Decimate against a sidecar copy so glb_path stays textured. If the
+    # copy fails (out-of-disk, permissions), fall back to in-place editing
+    # rather than failing the whole cycle — losing textures is bad, losing
+    # the whole asset is worse.
+    work_glb = os.path.splitext(glb_path)[0] + "-stl-src.glb"
+    cleanup_work = False
     try:
-        stl_size = os.path.getsize(stl_path)
-    except OSError:
-        return
-    if stl_size <= max_bytes:
-        return
-
-    # Iterative decimation. Each round targets stl_size→max_bytes proportionally,
-    # then re-converts. Bias each ratio a touch tighter (×0.85) to compensate
-    # for the STL/GLB compression ratio variance per mesh.
-    for round_idx in range(5):
-        target_ratio = (max_bytes / float(stl_size)) * 0.85
-        target_ratio = max(0.05, min(0.85, target_ratio))
+        shutil.copyfile(glb_path, work_glb)
+        cleanup_work = True
+    except OSError as e:
         print(
-            f"[tripo] ensure_stl_under_cap: STL is {stl_size / 1024 / 1024:.1f} MB "
-            f"(over {max_bytes / 1024 / 1024:.0f} MB cap), round {round_idx+1} "
-            f"decimating to {target_ratio:.0%} of current faces",
+            f"[tripo] ensure_stl_under_cap: working-copy failed ({e}); "
+            "decimation will run on the textured GLB and may strip materials",
             file=sys.stderr, flush=True,
         )
-        if not _decimate_glb_in_place(glb_path, target_ratio):
-            print("[tripo] ensure_stl_under_cap: decimate failed, leaving STL as-is", file=sys.stderr, flush=True)
-            return
-        glb_to_stl(glb_path, stl_path)
+        work_glb = glb_path
+
+    try:
+        glb_to_stl(work_glb, stl_path)
         try:
             stl_size = os.path.getsize(stl_path)
         except OSError:
             return
         if stl_size <= max_bytes:
+            return
+
+        # Iterative decimation. Each round targets stl_size→max_bytes
+        # proportionally, then re-converts. Bias each ratio harder (×0.7)
+        # to compensate for the STL/GLB compression ratio variance per
+        # mesh — observed earlier output at 23 MB after 5 rounds of ×0.85,
+        # blowing the publisher cap.
+        MAX_ROUNDS = 8
+        for round_idx in range(MAX_ROUNDS):
+            target_ratio = (max_bytes / float(stl_size)) * 0.7
+            target_ratio = max(0.05, min(0.85, target_ratio))
             print(
-                f"[tripo] ensure_stl_under_cap: STL now {stl_size / 1024 / 1024:.1f} MB — under cap",
+                f"[tripo] ensure_stl_under_cap: STL is {stl_size / 1024 / 1024:.1f} MB "
+                f"(over {max_bytes / 1024 / 1024:.0f} MB cap), round {round_idx+1}/{MAX_ROUNDS} "
+                f"decimating to {target_ratio:.0%} of current faces (sidecar — "
+                "textured GLB preserved)",
                 file=sys.stderr, flush=True,
             )
-            return
-    print(
-        f"[tripo] ensure_stl_under_cap: still {stl_size / 1024 / 1024:.1f} MB "
-        f"after 5 rounds — publisher's size guard will reject cleanly",
-        file=sys.stderr, flush=True,
-    )
+            if not _decimate_glb_in_place(work_glb, target_ratio):
+                # Decimation can't run (trimesh missing or method unavailable).
+                # Don't silently leave a 24 MB STL on disk — raise so the
+                # designer cycle aborts cleanly instead of the publisher
+                # rejecting it later.
+                raise StlTooLargeError(
+                    f"STL is {stl_size / 1024 / 1024:.1f} MB and decimation failed "
+                    f"(trimesh missing or decimation method unavailable). "
+                    f"Cap is {max_bytes / 1024 / 1024:.0f} MB."
+                )
+            glb_to_stl(work_glb, stl_path)
+            try:
+                stl_size = os.path.getsize(stl_path)
+            except OSError:
+                return
+            if stl_size <= max_bytes:
+                print(
+                    f"[tripo] ensure_stl_under_cap: STL now "
+                    f"{stl_size / 1024 / 1024:.1f} MB — under cap "
+                    "(textured GLB unchanged)",
+                    file=sys.stderr, flush=True,
+                )
+                return
+        # All rounds exhausted, still over cap. Fail fast — better to abort
+        # the cycle here than ship a doomed file to the publisher.
+        raise StlTooLargeError(
+            f"STL still {stl_size / 1024 / 1024:.1f} MB after {MAX_ROUNDS} decimation "
+            f"rounds (cap is {max_bytes / 1024 / 1024:.0f} MB). The source mesh is "
+            f"too dense — try a lower-detail Tripo/Meshy preset or a simpler subject."
+        )
+    finally:
+        if cleanup_work and work_glb != glb_path:
+            try:
+                os.unlink(work_glb)
+            except OSError:
+                pass
 
 
 def shrink_glb_for_etsy(glb_path: str) -> None:

@@ -467,22 +467,6 @@ def test_loose_parser_surfaces_response_preview():
         assert "Sure, here" in msg, f"expected response preview in error, got: {msg!r}"
 
 
-def test_is_character_brief_keyword_hits():
-    from designer.agent import _is_character_brief
-
-    assert _is_character_brief({"niche": "anime warrior figurine"}) is True
-    assert _is_character_brief({"niche": "yokai bust desk decor"}) is True
-    assert _is_character_brief({"niche": "D&D goblin mini", "ip_risk": "none"}) is True
-    # ip_risk override even when the niche text doesn't trigger a keyword
-    assert _is_character_brief({"niche": "untouched", "ip_risk": "mythology"}) is True
-    assert _is_character_brief({"niche": "untouched", "ip_risk": "high"}) is True
-    # Generic 3D-printable objects should NOT be routed via image-to-3D
-    assert _is_character_brief({"niche": "geometric vase planter"}) is False
-    assert _is_character_brief({"niche": "phone stand cable organizer"}) is False
-    assert _is_character_brief({}) is False
-    assert _is_character_brief(None) is False  # type: ignore[arg-type]
-
-
 def test_image_to_3d_provider_defaults_to_tripo(monkeypatch):
     from designer.agent import _image_to_3d_provider
 
@@ -834,6 +818,21 @@ def test_classify_3d_provider_failure_credits():
     )
     assert msg is not None
     assert "Meshy" in msg and "credit" in msg.lower()
+
+
+def test_classify_3d_provider_failure_tripo_zero_balance():
+    # Tripo rejects zero-balance task submits with HTTP 403 + code:2010,
+    # not the expected 402. Make sure the body-text match wins over the
+    # generic 403 branch so the UI says "out of credits" not "forbidden".
+    from designer.agent import _classify_3d_provider_failure
+    msg = _classify_3d_provider_failure(
+        "Tripo POST https://api.tripo3d.ai/v2/openapi/task HTTP 403: "
+        "{\"code\":2010,\"message\":\"You don't have enough credit to create this task\","
+        "\"suggestion\":\"Please purchase more credit\"}"
+    )
+    assert msg is not None
+    assert "Tripo" in msg and "credit" in msg.lower()
+    assert "forbidden" not in msg.lower()
 
 
 def test_classify_3d_provider_failure_auth():

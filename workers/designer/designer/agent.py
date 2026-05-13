@@ -98,7 +98,7 @@ def _use_json_prefill() -> bool:
     return "api.anthropic.com" in url
 
 
-def _messages_for_json_call(user_content: str) -> list[dict]:
+def _messages_for_json_call(user_content) -> list[dict]:
     """Build the messages array for a JSON-emitting Anthropic call. Adds the
     assistant prefill only when the API supports it (direct Anthropic, not
     a bridge proxy)."""
@@ -267,16 +267,34 @@ def _load_system_override(role: str) -> str | None:
     return None
 
 
-def _load_operator_steers(role: str) -> list[str]:
-    """Read operator standing instructions written by the operator from the
-    ChatPanel Steer action. Returns [] when missing or malformed."""
+def _load_operator_steers(role: str) -> list[dict]:
+    """Read operator standing instructions from the ChatPanel Steer action.
+    Returns a normalized list of `{"text": str, "image_paths": list[str]}`
+    dicts. Two on-disk shapes are accepted: plain strings (legacy / no
+    images) and `{"text": ..., "image_paths": [...]}` (new shape when
+    the operator attached reference images via the ChatPanel paperclip).
+    """
     path = os.path.expanduser("~/.agent-factory/prompts.json")
     try:
         with open(path) as f:
             data = json.load(f)
         arr = data.get(role, {}).get("operator_steers")
-        if isinstance(arr, list):
-            return [s for s in arr if isinstance(s, str) and s.strip()]
+        if not isinstance(arr, list):
+            return []
+        out: list[dict] = []
+        for entry in arr:
+            if isinstance(entry, str):
+                if entry.strip():
+                    out.append({"text": entry.strip(), "image_paths": []})
+            elif isinstance(entry, dict):
+                text = entry.get("text")
+                paths = entry.get("image_paths") or []
+                if isinstance(text, str) and text.strip():
+                    out.append({
+                        "text": text.strip(),
+                        "image_paths": [p for p in paths if isinstance(p, str)],
+                    })
+        return out
     except Exception:
         pass
     return []
@@ -286,7 +304,12 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
     """Append operator standing instructions as the final block of the system
     prompt. Operator steers compose with — and take precedence over — both the
     default prompt and any strategist-tuned override, because the last block
-    in the system prompt gets the model's strongest attention."""
+    in the system prompt gets the model's strongest attention.
+
+    Only the TEXT half of each steer lands in the system prompt — image
+    refs attach to the user message via _build_user_content_with_steer_images
+    because Anthropic's `system` field is text-only.
+    """
     steers = _load_operator_steers(role)
     if not steers:
         return system_prompt
@@ -296,9 +319,60 @@ def _append_operator_steers(system_prompt: str, role: str) -> str:
         "or 'prioritize Z category' directives in the strategist-tuned "
         "system prompt. If any rule above conflicts with the instructions "
         "below, ignore that rule for this job and follow the operator:\n"
-        + "\n".join(f"- {s}" for s in steers)
+        + "\n".join(f"- {s['text']}" for s in steers)
     )
     return system_prompt.rstrip() + "\n\n" + block
+
+
+def _build_user_content_with_steer_images(
+    user_prompt: str, role: str
+) -> "str | list[dict]":
+    """If any operator steer for `role` carries image references, upgrade
+    the user-message content from a plain string to a list of multimodal
+    blocks. No-op when no images are attached. The designer benefits most
+    from image refs (style / color / silhouette references) — they feed
+    directly into the brief_for_image_gen the model produces."""
+    import base64
+    import mimetypes
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in _load_operator_steers(role):
+        for path in entry.get("image_paths", []):
+            if not isinstance(path, str) or path in seen:
+                continue
+            seen.add(path)
+            refs.append((entry.get("text", ""), path))
+    if not refs:
+        return user_prompt
+    blocks: list[dict] = []
+    for text, path in refs:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            print(
+                f"[designer] skipping unreadable steer image {path!r}: {e}",
+                file=sys.stderr, flush=True,
+            )
+            continue
+        mime = mimetypes.guess_type(path)[0] or "image/png"
+        if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+            mime = "image/png"
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(raw).decode("ascii"),
+            },
+        })
+        snippet = text[:200] + ("…" if len(text) > 200 else "")
+        blocks.append({
+            "type": "text",
+            "text": f"^ Operator reference image for the steer: {snippet!r}",
+        })
+    blocks.append({"type": "text", "text": user_prompt})
+    return blocks
 
 
 def _designer_schema_block(brief: dict) -> str:
@@ -478,12 +552,16 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
         # that forgets to mention the schema can't break the parser.
         system_prompt = override.rstrip() + "\n\n" + _designer_schema_block(brief)
     system_prompt = _append_operator_steers(system_prompt, "designer")
+    # Image-bearing steers attach to the user message as multimodal blocks
+    # (Anthropic's `system` is text-only). Designer benefits most from these
+    # — style / palette / silhouette refs feed the brief_for_image_gen.
+    user_content = _build_user_content_with_steer_images(user_prompt, "designer")
 
     body = json.dumps({
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system_prompt,
-                "messages": _messages_for_json_call(user_prompt),
+                "messages": _messages_for_json_call(user_content),
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -723,35 +801,6 @@ def _save_svg(job_id: int, svg: str) -> str | None:
         return None
 
 
-CHARACTER_KEYWORDS = (
-    "character", "figurine", "figure", "mini", "miniature", "bust",
-    "hero", "villain", "warrior", "knight", "samurai", "ninja", "wizard",
-    "mage", "sorcerer", "monk", "paladin", "ranger", "rogue", "barbarian",
-    "elf", "orc", "goblin", "dwarf", "troll", "ogre", "demon", "angel",
-    "god", "goddess", "deity", "yokai", "spirit", "ghost",
-    "anime", "manga", "shonen", "shounen", "mecha", "magical-girl",
-    "magical girl", "cosplay", "fan art", "fan-art", "fanart",
-    "samurai", "shogun", "dragon rider", "valkyrie", "amazon", "centaur",
-    "minotaur", "nymph", "fairy", "elf", "wraith", "lich", "vampire",
-    "werewolf", "kitsune", "tengu", "oni",
-)
-
-
-def _is_character_brief(brief: dict) -> bool:
-    """Detect briefs whose subject is a character/figure — those benefit
-    from the nanobanana → image-to-3D route. Heuristic, not authoritative:
-    falls back to text-to-3D if uncertain, which is the safe default."""
-    if not isinstance(brief, dict):
-        return False
-    if brief.get("ip_risk") in {"high", "mythology", "original"}:
-        return True
-    haystack = " ".join(
-        str(brief.get(k) or "").lower()
-        for k in ("niche", "design_direction")
-    )
-    return any(kw in haystack for kw in CHARACTER_KEYWORDS)
-
-
 def _image_to_3d_provider() -> str:
     """tripo (default) | meshy. Validated; unknown values fall through to
     tripo to avoid surprising provider swaps from a typo."""
@@ -783,7 +832,9 @@ def _classify_3d_provider_failure(err_str: str) -> str | None:
     # Meshy both use 200-with-error-payload for some failure modes.
     if ("insufficient_credit" in s or "insufficient credit" in s
             or "out of credit" in s or "no credit" in s
-            or "credit_exhaust" in s or "balance is" in s):
+            or "credit_exhaust" in s or "balance is" in s
+            or "enough credit" in s or "purchase more credit" in s
+            or '"code":2010' in s or "'code': 2010" in s):
         return f"{provider}: out of credits — top up your account"
     if "payment required" in s or "http 402" in s:
         return f"{provider}: out of credits (HTTP 402)"
@@ -799,6 +850,19 @@ def _classify_3d_provider_failure(err_str: str) -> str | None:
         return f"{provider}: server error — try again later"
     if "network error" in s or "name resolution" in s:
         return f"{provider}: network unreachable"
+    # ensure_stl_under_cap raises StlTooLargeError when its decimation loop
+    # can't get the mesh under Etsy's 19 MB cap. Surface a clean operator
+    # message so the alert reads as "shrink upstream" not as a raw stacktrace.
+    if "stl still" in s and "decimation rounds" in s:
+        return (
+            f"{provider}: mesh too dense for Etsy's 19 MB cap even after "
+            "decimation — try a lower-detail preset or a simpler subject"
+        )
+    if "stl is" in s and "decimation failed" in s:
+        return (
+            f"{provider}: STL decimation unavailable (trimesh missing or "
+            "broken) — install trimesh in the designer venv"
+        )
     return None
 
 
@@ -967,7 +1031,12 @@ BUNDLE_MAX_ITEMS_DEFAULT = 4
 
 
 def _bundle_enabled() -> bool:
-    return os.environ.get("BUNDLE_GENERATION_ENABLED", "1").strip() == "1"
+    """Bundle generation fans out 3-4 Tripo tasks per listing — a 2-3×
+    cost multiplier with the image-first pipeline. Default OFF so each
+    listing is one product = one Tripo call. Set BUNDLE_GENERATION_ENABLED=1
+    when intentionally exploring bundle SKUs and you've decided the extra
+    spend is worth it."""
+    return os.environ.get("BUNDLE_GENERATION_ENABLED", "0").strip() == "1"
 
 
 def _bundle_max_items() -> int:
@@ -986,8 +1055,9 @@ def _generate_bundle_items(
     tripo_key: str,
     meshy_key: str,
 ) -> list[dict]:
-    """Run text-to-3D once per bundle item. Returns the list of successful
-    items as `{name, asset_path, glb_path, preview_png, model}` dicts.
+    """Generate each bundle item via Nano Banana → image-to-3D, falling back
+    to text-to-3D per-item if the reference render fails. Returns the list
+    of successful items as `{name, asset_path, glb_path, preview_png, model}`.
 
     Skipped silently when:
       • bundle field missing / malformed (research-side normalizer guarantees
@@ -999,9 +1069,11 @@ def _generate_bundle_items(
       • 1 item     → degraded single listing
       • 0 items    → fall through to existing single-item path
 
-    Bundle items always use text-to-3D (not image-to-3D). Image-to-3D's
-    Higgsfield credit is per-character and bundle items are typed item
-    descriptions, not character renders. Cheaper, simpler, more reliable.
+    Image-first per item produces dramatically better silhouettes than blind
+    text-to-3D — the ref PNG locks pose, proportions, and stylization before
+    the mesh reconstructor sees it. Falls back to text-to-3D per-item when
+    Higgsfield is unauthed or the ref render fails, so a missing CLI never
+    aborts the bundle.
     """
     if not _bundle_enabled():
         return []
@@ -1035,6 +1107,17 @@ def _generate_bundle_items(
         )
         return []
 
+    try:
+        from . import nanobanana as _nb
+        nb_available = _nb.is_configured()
+    except Exception as e:
+        print(
+            f"[designer] bundle nanobanana check failed: {e} — "
+            "items will use text-to-3D",
+            file=sys.stderr, flush=True,
+        )
+        nb_available = False
+
     shared_theme = bundle.get("shared_theme")
     if not isinstance(shared_theme, str) or not shared_theme.strip():
         shared_theme = brief.get("niche", "") or "bundle"
@@ -1055,19 +1138,52 @@ def _generate_bundle_items(
             f"Single static mesh, printable, consistent style with the rest of "
             f"the {shared_theme} set."
         ).strip()
+
+        ref_path: str | None = None
+        if nb_available:
+            try:
+                ref_path = _nb.generate_reference_image(
+                    None, per_item_prompt,
+                    job_id=sub_job_id, assets_dir=assets_dir,
+                )
+            except Exception as e:
+                print(
+                    f"[designer] bundle item {idx+1}/{len(items_named)} "
+                    f"'{item_name}' nanobanana failed: {e} — falling back "
+                    "to text-to-3D for this item",
+                    file=sys.stderr, flush=True,
+                )
+                ref_path = None
+
         try:
             if provider == "tripo":
                 from . import tripo as t3d
-                glb, stl, png = t3d.generate_3d(
-                    tripo_key, per_item_prompt, job_id=sub_job_id, assets_dir=assets_dir
-                )
-                model = "tripo-text-to-model"
+                if ref_path:
+                    glb, stl, png = t3d.generate_3d_from_image(
+                        tripo_key, ref_path,
+                        job_id=sub_job_id, assets_dir=assets_dir,
+                    )
+                    model = "tripo-image-to-3d"
+                else:
+                    glb, stl, png = t3d.generate_3d(
+                        tripo_key, per_item_prompt,
+                        job_id=sub_job_id, assets_dir=assets_dir,
+                    )
+                    model = "tripo-text-to-model"
             else:
                 from . import meshy as m3d
-                glb, stl, png = m3d.generate_3d(
-                    meshy_key, per_item_prompt, job_id=sub_job_id, assets_dir=assets_dir
-                )
-                model = "meshy-text-to-3d"
+                if ref_path:
+                    glb, stl, png = m3d.generate_3d_from_image(
+                        meshy_key, ref_path,
+                        job_id=sub_job_id, assets_dir=assets_dir,
+                    )
+                    model = "meshy-image-to-3d"
+                else:
+                    glb, stl, png = m3d.generate_3d(
+                        meshy_key, per_item_prompt,
+                        job_id=sub_job_id, assets_dir=assets_dir,
+                    )
+                    model = "meshy-text-to-3d"
         except Exception as e:
             # One item failing must NOT abort the bundle. Log + continue —
             # the caller decides whether to ship as a smaller bundle, a
@@ -1122,13 +1238,15 @@ def handle(method: str, params: dict) -> dict:
 
         if is_3d:
             # 3D product route. Three strategies, in priority order:
-            #   (0) brief.bundle present + enabled → generate N items via
-            #       text-to-3D loop, then ship as a multi-file listing.
-            #       Skipped if fewer than 2 items succeed.
-            #   (1) character-style brief + Higgsfield CLI authed →
-            #       Nano Banana Pro ref render (via Higgsfield CLI) →
-            #       image-to-3D (tripo or meshy). Better face/silhouette
-            #       preservation for characters.
+            #   (0) brief.bundle present + enabled → per-item Nano Banana
+            #       ref render → image-to-3D, ship as a multi-file listing.
+            #       Falls back to text-to-3D per-item if Higgsfield is
+            #       unauthed or a ref render fails. Skipped if fewer than
+            #       2 items succeed.
+            #   (1) Higgsfield CLI authed + 3D provider key → Nano Banana
+            #       Pro ref render (via Higgsfield CLI) → image-to-3D
+            #       (tripo or meshy). Default route — image-first locks
+            #       silhouette + proportions before the mesh step.
             #   (2) otherwise → text-to-3D fallback chain (meshy → tripo).
             # Image-gen cost is on Higgsfield credits; mesh-gen on Tripo/Meshy.
             meshy_key = os.environ.get("MESHY_API_KEY", "")
@@ -1248,7 +1366,7 @@ def handle(method: str, params: dict) -> dict:
 
                 i23 = None
                 image3d_timed_out = False
-            if not bundle_done and nb_available and _is_character_brief(brief) and (tripo_key or meshy_key):
+            if not bundle_done and nb_available and (tripo_key or meshy_key):
                 try:
                     i23 = _run_image_to_3d(
                         brief=brief,
@@ -1473,10 +1591,10 @@ def handle(method: str, params: dict) -> dict:
                         "topic": "asset_failed",
                         "importance": "critical",
                         "content": (
-                            f"Designer aborted: {fail_msg}. "
-                            f"niche={brief.get('niche', '?')}, "
-                            f"product_type={brief.get('product_type', '?')}. "
-                            f"No handoff to listing — cycle ended."
+                            f"Aborted this cycle. "
+                            f"{fail_msg.strip().rstrip('.')}. "
+                            f"The **{brief.get('niche', '?')}** brief never made it past "
+                            f"asset generation — no asset handoff to Theo for the listing."
                         ),
                     }
                 ],
@@ -1491,15 +1609,21 @@ def handle(method: str, params: dict) -> dict:
 
         # Conversation log: describe what we drew so listing can pick titles /
         # tags that match the actual image, and strategist sees the chain.
+        # Conversational prose — reads as the designer handing off to the
+        # listing copywriter, not as a log entry.
         title_hint = asset.get("title") or asset.get("concept") or asset_type
-        description_hint = asset.get("description") or ""
-        designer_to_listing = (
-            f"Asset ready: type={asset_type}, dims={dimensions}. "
-            f"Concept: {title_hint}. {description_hint[:280]}"
-        )
+        description_hint = (asset.get("description") or "").strip()
+        niche_name = brief.get("niche", "?")
+
+        listing_parts = [
+            f"Theo — asset ready for **{niche_name}**. "
+            f"**{title_hint}** as a {asset_type} at {dimensions}."
+        ]
+        if description_hint:
+            listing_parts.append(description_hint[:600])
+        designer_to_listing = "\n\n".join(listing_parts)
         broadcast = (
-            f"Drew '{title_hint}' for niche='{brief.get('niche', '?')}' "
-            f"({svg_glyph})."
+            f"Asset finished: **{title_hint}** for the **{niche_name}** brief."
         )
         messages = [
             {
