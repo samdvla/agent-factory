@@ -187,7 +187,7 @@ export default function Asset3DModal({ jobId, preloaded, title, onClose }: Props
                   />
                   <div className="asset-3d-modal-fallback-note">
                     Live 3D preview unavailable — file is{" "}
-                    {fmtBytes(info.bytes)} (over the 12 MB inline cap) or no
+                    {fmtBytes(info.bytes)} (over the 50 MB inline cap) or no
                     sibling GLB was produced. Static thumbnail shown.
                   </div>
                 </div>

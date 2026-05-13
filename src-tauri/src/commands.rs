@@ -1538,7 +1538,15 @@ pub struct JobAssetInfo {
     pub png_data_base64: Option<String>,
 }
 
-const MAX_INLINE_BYTES: u64 = 12 * 1024 * 1024; // 12 MB cap for inline base64
+// Cap on the file size we'll base64-encode and ship through the Tauri IPC for
+// inline 3D preview. Trade-off: bigger cap → modal can render larger meshes
+// (Tripo/Meshy busts and props commonly land in the 20-40 MB range with
+// detailed sculpts), but each preview open serializes ~1.33× the file size
+// through JSON IPC. 50 MB → ~67 MB base64 transfer; sub-second on this Mac.
+// If this ever becomes a UX problem, the better fix is to switch the
+// frontend to Tauri's `convertFileSrc()` so the WebView loads the file
+// directly from disk instead of through IPC — that scales to GB-class assets.
+const MAX_INLINE_BYTES: u64 = 50 * 1024 * 1024;
 
 fn classify(path: &std::path::Path) -> &'static str {
     let ext = path
