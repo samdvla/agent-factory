@@ -678,10 +678,13 @@ def test_designer_text_to_3d_honors_tripo_preference(tmp_path, monkeypatch):
     assert result["model"] == "tripo-text-to-model"
 
 
-def test_designer_text_to_3d_falls_through_when_preferred_key_missing(tmp_path, monkeypatch):
-    """Preferred provider (Tripo) but its key isn't set → fall back to Meshy
-    rather than failing the job. Keeps the pipeline running when the user
-    flips a setting without saving the matching key."""
+def test_designer_text_to_3d_hard_fails_when_preferred_key_missing(tmp_path, monkeypatch):
+    """Provider selection is EXCLUSIVE: when IMAGE_TO_3D_PROVIDER=tripo but
+    TRIPO_API_KEY isn't set, the designer must NOT silently swap to Meshy
+    (even when Meshy is fully configured). The operator pays per provider —
+    a silent swap burns credits on a service they didn't pick. Cycle fails
+    cleanly with a clear "TRIPO_API_KEY missing" signal instead.
+    """
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -692,14 +695,11 @@ def test_designer_text_to_3d_falls_through_when_preferred_key_missing(tmp_path, 
     fake = _mock_urlopen_factory([_haiku_3d_response()])
     monkeypatch.setattr(urllib.request, "urlopen", fake)
 
-    glb_path = str(tmp_path / "889.glb")
-    stl_path = str(tmp_path / "889.stl")
-    png_path = str(tmp_path / "889.png")
     calls = {"meshy": 0, "tripo": 0}
 
-    def fake_meshy_text(api_key, prompt, *, job_id, assets_dir, **kw):
+    def fake_meshy_text(*a, **kw):
         calls["meshy"] += 1
-        return glb_path, stl_path, png_path
+        raise AssertionError("meshy must NOT be silently used when tripo was selected")
 
     def fake_tripo_text(*a, **kw):
         calls["tripo"] += 1
@@ -713,10 +713,13 @@ def test_designer_text_to_3d_falls_through_when_preferred_key_missing(tmp_path, 
     monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
 
     result = handle("process_job", _character_brief_params(889))
-    assert result["ok"] is True
-    assert calls["meshy"] == 1
+    # Cycle aborts cleanly — no asset produced, neither provider was called.
+    assert result["ok"] is False
+    assert calls["meshy"] == 0
     assert calls["tripo"] == 0
-    assert result["model"] == "meshy-text-to-3d"
+    # Error message must surface the actual misconfiguration.
+    err = (result.get("error") or "") + " " + (result.get("ticker_text") or "")
+    assert "TRIPO_API_KEY" in err
 
 
 def test_designer_falls_through_when_nanobanana_fails(tmp_path, monkeypatch):

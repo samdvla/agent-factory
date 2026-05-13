@@ -927,14 +927,11 @@ def _run_image_to_3d(
         return None
 
     provider = _image_to_3d_provider()
-    # Honour the provider preference, but if the chosen provider's key isn't
-    # available, swap to whichever IS. We never let a config mismatch crash
-    # a job that already burned a nanobanana credit.
-    if provider == "tripo" and not tripo_key and meshy_key:
-        provider = "meshy"
-    elif provider == "meshy" and not meshy_key and tripo_key:
-        provider = "tripo"
-
+    # Provider selection is EXCLUSIVE: the settings choice picks one of
+    # tripo/meshy and we never silently use the other. If the selected
+    # provider's key isn't configured, hard-fail the job so the operator
+    # sees the actual misconfiguration — burning a nanobanana credit on a
+    # job that can't finish is worse than admitting the credential gap.
     try:
         if provider == "tripo":
             if not tripo_key:
@@ -1090,19 +1087,22 @@ def _generate_bundle_items(
     if len(items_named) < 2:
         return []
 
-    preferred = _image_to_3d_provider()
-    provider: str | None = None
-    if preferred == "tripo" and tripo_key:
-        provider = "tripo"
-    elif preferred == "meshy" and meshy_key:
-        provider = "meshy"
-    elif tripo_key:
-        provider = "tripo"
-    elif meshy_key:
-        provider = "meshy"
-    if provider is None:
+    # Provider selection is EXCLUSIVE — settings pick exactly one of
+    # tripo/meshy and we never silently use the other. If the selected
+    # provider's key is missing, skip the bundle and surface the
+    # misconfiguration in the log.
+    provider = _image_to_3d_provider()
+    if provider == "tripo" and not tripo_key:
         print(
-            "[designer] bundle skipped — no Tripo/Meshy key configured",
+            "[designer] bundle skipped — IMAGE_TO_3D_PROVIDER=tripo but "
+            "TRIPO_API_KEY not set",
+            file=sys.stderr, flush=True,
+        )
+        return []
+    if provider == "meshy" and not meshy_key:
+        print(
+            "[designer] bundle skipped — IMAGE_TO_3D_PROVIDER=meshy but "
+            "MESHY_API_KEY not set",
             file=sys.stderr, flush=True,
         )
         return []
@@ -1440,31 +1440,30 @@ def handle(method: str, params: dict) -> dict:
                 model_used = MODEL
                 svg_glyph = "3d timeout (provider queued)"
             else:
-                # Text-to-3D fallback. Honour the user's preferred 3D provider
-                # (IMAGE_TO_3D_PROVIDER env, default 'tripo') for this path
-                # too — the setting was originally scoped to image-to-3D but
-                # the user wants Tripo for ALL 3D work. Falls through to
-                # whichever provider's key is present if the preferred one
-                # isn't configured.
+                # Text-to-3D fallback. Provider selection is EXCLUSIVE —
+                # whatever IMAGE_TO_3D_PROVIDER is set to (default 'tripo')
+                # is the only provider we'll call. Never silently swap to
+                # the other side; the operator pays per provider and a
+                # silent swap burns credits on a service they didn't pick.
                 preferred = _image_to_3d_provider()
                 provider: str | None = None
                 if preferred == "tripo" and tripo_key:
                     provider = "tripo"
                 elif preferred == "meshy" and meshy_key:
                     provider = "meshy"
-                elif tripo_key:
-                    provider = "tripo"
-                elif meshy_key:
-                    provider = "meshy"
                 if provider is None:
+                    missing_key = (
+                        "TRIPO_API_KEY" if preferred == "tripo" else "MESHY_API_KEY"
+                    )
                     print(
-                        "[designer] 3d job but no Meshy/Tripo key — skipping mesh, "
+                        f"[designer] 3d job: IMAGE_TO_3D_PROVIDER={preferred} "
+                        f"but {missing_key} not set — skipping mesh, "
                         "publishing text-only brief",
                         file=sys.stderr, flush=True,
                     )
                     asset["asset_path"] = None
                     model_used = MODEL
-                    svg_glyph = "3d skipped (no 3d-gen key)"
+                    svg_glyph = f"3d skipped ({missing_key} missing)"
                 else:
                     try:
                         prompt_3d = (
