@@ -232,6 +232,191 @@ pub struct PrintifyStatus {
     pub pod_enabled: bool,
 }
 
+#[derive(Serialize)]
+pub struct TripoStatus {
+    pub key_present: bool,
+    pub balance: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct TripoVerifyOk {
+    pub balance: i64,
+}
+
+/// Verify the Tripo API key by calling the user-balance endpoint. On success
+/// persists the key + caches the most recent balance so the UI can show
+/// remaining credits.
+#[tauri::command]
+pub async fn cmd_tripo_verify(api_key: String) -> Result<TripoVerifyOk, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Tripo API key is empty".to_string());
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.tripo3d.ai/v2/openapi/user/balance")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|e| format!("Tripo verify network error: {e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Tripo verify HTTP {status}: {body}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Tripo verify parse: {e}: {body}"))?;
+    if parsed.get("code").and_then(|c| c.as_i64()) != Some(0) {
+        return Err(format!("Tripo verify returned non-zero code: {body}"));
+    }
+    let balance = parsed
+        .get("data")
+        .and_then(|d| d.get("balance"))
+        .and_then(|b| b.as_i64())
+        .unwrap_or(0);
+    secrets::set("tripo_api_key", key).map_err(|e| format!("save tripo_api_key: {e}"))?;
+    let _ = secrets::set("tripo_last_balance", &balance.to_string());
+    Ok(TripoVerifyOk { balance })
+}
+
+#[derive(Serialize)]
+pub struct MeshyStatus {
+    pub key_present: bool,
+    pub balance: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct MeshyVerifyOk {
+    pub balance: i64,
+}
+
+/// Verify the Meshy API key by calling the user-balance endpoint. On success
+/// persists the key + caches the most recent balance.
+#[tauri::command]
+pub async fn cmd_meshy_verify(api_key: String) -> Result<MeshyVerifyOk, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Meshy API key is empty".to_string());
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.meshy.ai/openapi/v1/balance")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|e| format!("Meshy verify network error: {e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Meshy verify HTTP {status}: {body}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Meshy verify parse: {e}: {body}"))?;
+    // Meshy returns {"balance": N} at the top level on v1, or {"data": {"balance": N}} on some
+    // tenants. Accept either.
+    let balance = parsed
+        .get("balance")
+        .and_then(|b| b.as_i64())
+        .or_else(|| parsed.get("data").and_then(|d| d.get("balance")).and_then(|b| b.as_i64()))
+        .unwrap_or(0);
+    secrets::set("meshy_api_key", key).map_err(|e| format!("save meshy_api_key: {e}"))?;
+    let _ = secrets::set("meshy_last_balance", &balance.to_string());
+    Ok(MeshyVerifyOk { balance })
+}
+
+#[tauri::command]
+pub async fn cmd_meshy_status() -> Result<MeshyStatus, String> {
+    let key_present = secrets::get("meshy_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let balance = secrets::get("meshy_last_balance")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok());
+    Ok(MeshyStatus { key_present, balance })
+}
+
+#[tauri::command]
+pub async fn cmd_tripo_status() -> Result<TripoStatus, String> {
+    let key_present = secrets::get("tripo_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let balance = secrets::get("tripo_last_balance")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok());
+    Ok(TripoStatus { key_present, balance })
+}
+
+// ─── Google AI (nanobanana / Gemini 2.5 Flash Image) ─────────────────────
+
+#[derive(Serialize)]
+pub struct GoogleAiStatus {
+    pub key_present: bool,
+}
+
+#[derive(Serialize)]
+pub struct GoogleAiVerifyOk {
+    pub model: String,
+}
+
+/// Verify the Google API key by calling Gemini 2.5 Flash Image with a tiny
+/// image-generation request. On success persists the key. Failure surfaces
+/// the upstream HTTP body so quota / billing / safety errors are legible.
+#[tauri::command]
+pub async fn cmd_google_verify(api_key: String) -> Result<GoogleAiVerifyOk, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Google API key is empty".to_string());
+    }
+    let model = "gemini-2.5-flash-image";
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    );
+    let body = serde_json::json!({
+        "contents": [{"role": "user", "parts": [{"text": "a small red circle"}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {"aspectRatio": "1:1"}
+        }
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .header("x-goog-api-key", key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Google verify network error: {e}"))?;
+    let status = resp.status();
+    let raw = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Google verify HTTP {status}: {raw}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Google verify parse: {e}: {raw}"))?;
+    if parsed.get("candidates").and_then(|c| c.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
+        return Err(format!("Google verify returned no candidates: {raw}"));
+    }
+    secrets::set("google_api_key", key).map_err(|e| format!("save google_api_key: {e}"))?;
+    Ok(GoogleAiVerifyOk { model: model.into() })
+}
+
+#[tauri::command]
+pub async fn cmd_google_status() -> Result<GoogleAiStatus, String> {
+    let key_present = secrets::get("google_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    Ok(GoogleAiStatus { key_present })
+}
+
 /// Report current Printify config without exposing the PAT itself.
 #[tauri::command]
 pub async fn cmd_printify_status() -> Result<PrintifyStatus, String> {
@@ -282,6 +467,92 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         monthly_usd: read_cap("monthly_budget_usd", 20.00),
     };
     let api_key_env: (String, String) = ("ANTHROPIC_API_KEY".into(), effective_key.clone());
+    // Shop focus — single source of truth for what kind of product mix the
+    // pipeline should pursue. "3d_only" makes orchestrator rotate ONLY between
+    // stl_file / 3d_model; "2d_only" reverts to the original 2D rotation;
+    // "mixed" includes 3D when keys are present. Default 3d_only — the user
+    // pivoted the shop to 3D after seeing Tripo's quality.
+    let shop_focus = secrets::get("shop_focus")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "3d_only".into());
+    let shop_focus_env: (String, String) = ("SHOP_FOCUS".into(), shop_focus.clone());
+
+    // Character pool — which archetype tiers the orchestrator + research
+    // are allowed to mine. Default `all` (user explicitly wants the full
+    // spectrum). High-IP content still gates at publish time.
+    let character_pool = secrets::get("character_pool")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "all".into());
+    let character_pool_env: (String, String) =
+        ("CHARACTER_POOL".into(), character_pool.clone());
+
+    // Image-to-3D provider — user wants Tripo by default with Meshy as a
+    // swap-in. The designer reads this when routing nanobanana renders to
+    // a 3D backend. Text-to-3D continues to use the meshy → tripo fallback
+    // chain (this setting does not affect that path).
+    let image_to_3d_provider = secrets::get("image_to_3d_provider")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "tripo".into());
+    let image_to_3d_env: (String, String) = (
+        "IMAGE_TO_3D_PROVIDER".into(),
+        image_to_3d_provider.clone(),
+    );
+
+    // 3D generation providers (text-to-3D) — optional. When either is
+    // present, orchestrator rotates stl_file / 3d_model into the product mix
+    // and designer routes 3D briefs to Meshy (preferred) or Tripo.
+    let meshy_key = secrets::get("meshy_api_key").ok().flatten().unwrap_or_default();
+    let meshy_env: Option<(String, String)> = if meshy_key.is_empty() {
+        None
+    } else {
+        Some(("MESHY_API_KEY".into(), meshy_key))
+    };
+    let tripo_key = secrets::get("tripo_api_key").ok().flatten().unwrap_or_default();
+    let tripo_env: Option<(String, String)> = if tripo_key.is_empty() {
+        None
+    } else {
+        Some(("TRIPO_API_KEY".into(), tripo_key))
+    };
+    // Google API key — formerly used by nanobanana for direct Gemini 2.5
+    // Flash Image calls. Designer was migrated to Higgsfield CLI's
+    // nano_banana_pro, so the worker no longer reads GOOGLE_API_KEY. The
+    // env var is still injected here in case any other path (or future
+    // worker) wants it; the Settings UI verify panel also remains
+    // functional for users who want to keep a Google key configured.
+    let google_key = secrets::get("google_api_key").ok().flatten().unwrap_or_default();
+    let google_env: Option<(String, String)> = if google_key.is_empty() {
+        None
+    } else {
+        Some(("GOOGLE_API_KEY".into(), google_key))
+    };
+    // YouTube Data API key — used by research's trends fetcher for the
+    // YouTube trending source. Optional: if missing, research skips
+    // YouTube but still hits Reddit + Google Trends.
+    let youtube_key = secrets::get("youtube_api_key").ok().flatten().unwrap_or_default();
+    let youtube_env: Option<(String, String)> = if youtube_key.is_empty() {
+        None
+    } else {
+        Some(("YOUTUBE_API_KEY".into(), youtube_key))
+    };
+    // Higgsfield product-photoshoot enhancement — designer reads this env
+    // var to decide whether to upgrade preview.png through Higgsfield.
+    // Auth + CLI install are managed externally (CLI's own credential
+    // cache); we only carry the on/off flag.
+    let higgsfield_enabled = secrets::get("higgsfield_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let higgsfield_env: (String, String) = (
+        "HIGGSFIELD_ENABLED".into(),
+        if higgsfield_enabled { "true".into() } else { "false".into() },
+    );
     // Resolve the absolute path to the `workers/` dir. The Tauri dev binary
     // runs with CWD=src-tauri (cargo's package root), so relative
     // "workers/foo" would resolve to src-tauri/workers/foo and fail with
@@ -291,14 +562,38 @@ pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(),
         let api_key_env = api_key_env.clone();
         let effective_base_url = effective_base_url.clone();
         let workers_root = workers_root.clone();
+        let meshy_env = meshy_env.clone();
+        let tripo_env = tripo_env.clone();
+        let google_env = google_env.clone();
+        let youtube_env = youtube_env.clone();
+        let higgsfield_env = higgsfield_env.clone();
+        let shop_focus_env = shop_focus_env.clone();
+        let character_pool_env = character_pool_env.clone();
+        let image_to_3d_env = image_to_3d_env.clone();
         move |role: &str, worker_dir: &str| {
             let mut env = vec![
                 api_key_env.clone(),
+                shop_focus_env.clone(),
+                character_pool_env.clone(),
+                image_to_3d_env.clone(),
                 ("PYTHONPATH".into(), workers_root.join(worker_dir).to_string_lossy().into_owned()),
             ];
             if let Some(ref u) = effective_base_url {
                 env.push(("ANTHROPIC_BASE_URL".into(), u.clone()));
             }
+            if let Some(ref m) = meshy_env {
+                env.push(m.clone());
+            }
+            if let Some(ref t) = tripo_env {
+                env.push(t.clone());
+            }
+            if let Some(ref g) = google_env {
+                env.push(g.clone());
+            }
+            if let Some(ref y) = youtube_env {
+                env.push(y.clone());
+            }
+            env.push(higgsfield_env.clone());
             supervisor::AgentSpec {
                 role: role.into(),
                 program: "python3.11".into(),
@@ -638,12 +933,19 @@ pub async fn cmd_etsy_activate_listing(
     let shop_id = status
         .shop_id
         .ok_or_else(|| "shop_id missing — reconnect Etsy".to_string())?;
-    let keystring = secrets::get("etsy_api_keystring")
+    // The keystring isn't passed through anymore — etsy::api_key_header() reads
+    // it (plus etsy_shared_secret) from the keychain inside every request — but
+    // we still surface a missing key here so the UI gets a clear error.
+    if secrets::get("etsy_api_keystring")
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "etsy_api_keystring not in keychain".to_string())?;
+        .map(|k| k.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("etsy_api_keystring not in keychain".into());
+    }
 
     let client = reqwest::Client::new();
-    etsy_publish::activate_listing(&client, &keystring, shop_id, etsy_listing_id)
+    etsy_publish::activate_listing(&client, shop_id, etsy_listing_id)
         .await
         .map_err(|e| format!("{:#}", e))?;
 
@@ -734,6 +1036,44 @@ pub async fn cmd_prompt_history(
     limit: Option<usize>,
 ) -> Result<Vec<prompts::PromptHistoryEntry>, String> {
     Ok(prompts::history_for(&role, limit.unwrap_or(5)))
+}
+
+// ---------- Operator steering ----------
+//
+// Operator-driven standing instructions, layered on top of whatever
+// `system_override` the strategist last wrote. The four LLM-driven roles
+// (research, designer, listing, cs) read these at job time and append them
+// to their system prompt; non-LLM agents (orchestrator, cfo, etc.) ignore
+// them. The ChatPanel hides the Steer button for ignored roles, so this is
+// never exposed to the operator as a dead-end action.
+
+/// Roles that actually honor operator steers. Mirrors `prompts::ROLES` but
+/// re-exported as a Vec so the frontend can ask whether to show the Steer
+/// button for a given agentId.
+#[tauri::command]
+pub async fn cmd_agent_steer_roles() -> Result<Vec<String>, String> {
+    Ok(prompts::ROLES.iter().map(|s| s.to_string()).collect())
+}
+
+#[derive(Deserialize)]
+pub struct AgentSteerAddArgs {
+    pub role: String,
+    pub text: String,
+}
+
+#[tauri::command]
+pub async fn cmd_agent_steer_add(args: AgentSteerAddArgs) -> Result<(), String> {
+    prompts::add_operator_steer(&args.role, &args.text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_agent_steer_list(role: String) -> Result<Vec<String>, String> {
+    Ok(prompts::list_operator_steers(&role))
+}
+
+#[tauri::command]
+pub async fn cmd_agent_steer_clear(role: String) -> Result<(), String> {
+    prompts::clear_operator_steers(&role).map_err(|e| e.to_string())
 }
 
 // ---------- SVG asset reader ----------
@@ -1174,6 +1514,199 @@ pub async fn cmd_rate_job(
     Ok(())
 }
 
+/// Read a 3D asset (GLB or STL) by job id, returned as base64 so the webview
+/// can hand it to `<model-viewer>` via a data URL. The webview can't read
+/// arbitrary paths off disk; this is the simplest, smallest-surface bridge.
+/// Returns the asset shape and metadata so the UI knows which viewer to pick.
+#[derive(Serialize)]
+pub struct JobAssetInfo {
+    /// "svg" | "glb" | "stl" | "png" | "none"
+    pub kind: String,
+    /// Path on disk (informational; the UI uses `data_base64` for the actual
+    /// bytes).
+    pub path: Option<String>,
+    /// Sibling GLB path if we have one alongside an STL (the model-viewer
+    /// can only render GLB; STL stays as a downloadable file).
+    pub glb_path: Option<String>,
+    pub bytes: u64,
+    /// Base64 of the file bytes — empty when kind is "none" or file is huge.
+    pub data_base64: String,
+    /// Base64 of the sibling GLB bytes when present (so we always have a
+    /// renderable preview for STL jobs).
+    pub glb_data_base64: Option<String>,
+    /// Sibling PNG preview, base64, when one exists alongside the asset.
+    pub png_data_base64: Option<String>,
+}
+
+const MAX_INLINE_BYTES: u64 = 12 * 1024 * 1024; // 12 MB cap for inline base64
+
+fn classify(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match ext.as_str() {
+        "svg" => "svg",
+        "glb" => "glb",
+        "stl" => "stl",
+        "png" => "png",
+        _ => "none",
+    }
+}
+
+fn read_b64(path: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    let bytes = std::fs::read(path).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[tauri::command]
+pub async fn cmd_read_job_asset(
+    state: State<'_, Arc<AppState>>,
+    job_id: i64,
+) -> Result<JobAssetInfo, String> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
+    )
+    .bind(job_id)
+    .bind(state.project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let mut info = JobAssetInfo {
+        kind: "none".into(),
+        path: None,
+        glb_path: None,
+        bytes: 0,
+        data_base64: String::new(),
+        glb_data_base64: None,
+        png_data_base64: None,
+    };
+    let Some((Some(result_json),)) = row else { return Ok(info) };
+    let value: serde_json::Value = match serde_json::from_str(&result_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(info),
+    };
+    // The designer writes asset.asset_path; the publisher mirrors it on the
+    // top level for handoffs. Check both.
+    let asset_path_str = value
+        .get("asset")
+        .and_then(|a| a.get("asset_path"))
+        .and_then(|p| p.as_str())
+        .or_else(|| value.get("asset_path").and_then(|p| p.as_str()));
+    let Some(asset_path_str) = asset_path_str else { return Ok(info) };
+    let path = std::path::PathBuf::from(asset_path_str);
+    if !path.exists() {
+        return Ok(info);
+    }
+    let kind = classify(&path);
+    info.kind = kind.into();
+    info.path = Some(path.display().to_string());
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    info.bytes = meta.len();
+    if meta.len() <= MAX_INLINE_BYTES {
+        if let Some(b) = read_b64(&path) {
+            info.data_base64 = b;
+        }
+    }
+    // For STL jobs, also surface the sibling GLB so <model-viewer> can render
+    // a preview (model-viewer doesn't support STL natively).
+    if kind == "stl" {
+        let glb_path = path.with_extension("glb");
+        if glb_path.exists() {
+            info.glb_path = Some(glb_path.display().to_string());
+            if let Ok(m) = std::fs::metadata(&glb_path) {
+                if m.len() <= MAX_INLINE_BYTES {
+                    info.glb_data_base64 = read_b64(&glb_path);
+                }
+            }
+        }
+    }
+    // Sibling PNG preview, if any.
+    let png_path = path.with_extension("png");
+    if png_path.exists() {
+        if let Ok(m) = std::fs::metadata(&png_path) {
+            if m.len() <= MAX_INLINE_BYTES {
+                info.png_data_base64 = read_b64(&png_path);
+            }
+        }
+    }
+    Ok(info)
+}
+
+/// Read the asset for a specific local_listing_id (the same shape as
+/// `cmd_read_job_asset` but resolved via `publisher_output.json`). Used by
+/// the listing-review modal so it can show SVG / GLB / STL uniformly.
+#[tauri::command]
+pub async fn cmd_read_listing_asset(listing_id: i64) -> Result<JobAssetInfo, String> {
+    let mut info = JobAssetInfo {
+        kind: "none".into(),
+        path: None,
+        glb_path: None,
+        bytes: 0,
+        data_base64: String::new(),
+        glb_data_base64: None,
+        png_data_base64: None,
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mock = PathBuf::from(home).join(".agent-factory").join("publisher_output.json");
+    let text = match std::fs::read_to_string(&mock) {
+        Ok(s) => s,
+        Err(_) => return Ok(info),
+    };
+    let records: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Ok(info),
+    };
+    let asset_path = records.as_array().and_then(|arr| {
+        arr.iter().rev().find_map(|r| {
+            let lid = r.get("listing_id").and_then(|v| v.as_i64())?;
+            if lid != listing_id {
+                return None;
+            }
+            r.get("asset_path")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+    });
+    let Some(asset_path) = asset_path else { return Ok(info) };
+    let path = std::path::PathBuf::from(&asset_path);
+    if !path.exists() {
+        return Ok(info);
+    }
+    let kind = classify(&path);
+    info.kind = kind.into();
+    info.path = Some(path.display().to_string());
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    info.bytes = meta.len();
+    if meta.len() <= MAX_INLINE_BYTES {
+        if let Some(b) = read_b64(&path) {
+            info.data_base64 = b;
+        }
+    }
+    if kind == "stl" {
+        let glb_path = path.with_extension("glb");
+        if glb_path.exists() {
+            info.glb_path = Some(glb_path.display().to_string());
+            if let Ok(m) = std::fs::metadata(&glb_path) {
+                if m.len() <= MAX_INLINE_BYTES {
+                    info.glb_data_base64 = read_b64(&glb_path);
+                }
+            }
+        }
+    }
+    let png_path = path.with_extension("png");
+    if png_path.exists() {
+        if let Ok(m) = std::fs::metadata(&png_path) {
+            if m.len() <= MAX_INLINE_BYTES {
+                info.png_data_base64 = read_b64(&png_path);
+            }
+        }
+    }
+    Ok(info)
+}
+
 /// Read the SVG asset produced by a designer job, looked up by job id.
 /// The designer worker stores the path in its result JSON at
 /// `asset.asset_path` and (for top-level publisher handoffs) `asset_path`.
@@ -1209,6 +1742,509 @@ pub async fn cmd_read_job_svg(
     }
 }
 
+// ─── Agent ↔ Agent messages (Conversations log) ─────────────────────────
+
+#[derive(Deserialize)]
+pub struct PostAgentMessageArgs {
+    pub from_role: String,
+    pub to_role: String,
+    pub topic: Option<String>,
+    pub content: String,
+    pub importance: Option<String>,
+    pub job_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AgentMessageRow {
+    pub id: i64,
+    pub from_role: String,
+    pub to_role: String,
+    pub topic: Option<String>,
+    pub content: String,
+    pub importance: String,
+    pub job_id: Option<i64>,
+    pub ts: i64,
+}
+
+/// Post a message from one agent to another (or '*' for broadcast). Used by
+/// the supervisor to mirror worker-emitted messages, and also exposed so the
+/// UI / boss can drop in a manual nudge.
+#[tauri::command]
+pub async fn cmd_post_agent_message(
+    state: State<'_, Arc<AppState>>,
+    args: PostAgentMessageArgs,
+) -> Result<i64, String> {
+    let importance = args.importance.unwrap_or_else(|| "info".into());
+    if !["info", "heads_up", "critical"].contains(&importance.as_str()) {
+        return Err(format!("invalid importance '{importance}'"));
+    }
+    let to = if args.to_role.trim().is_empty() { "*".into() } else { args.to_role };
+    let now = chrono::Utc::now().timestamp();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO agent_messages (project_id, from_role, to_role, topic, content, importance, job_id, ts) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(state.project_id)
+    .bind(&args.from_role)
+    .bind(&to)
+    .bind(&args.topic)
+    .bind(&args.content)
+    .bind(&importance)
+    .bind(args.job_id)
+    .bind(now)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// List recent agent-to-agent messages, newest first. Optional `role` filter
+/// matches messages sent FROM or TO that role (including broadcasts '*').
+#[tauri::command]
+pub async fn cmd_list_agent_messages(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+    role: Option<String>,
+) -> Result<Vec<AgentMessageRow>, String> {
+    let limit = limit.unwrap_or(100).clamp(1, 1000);
+    let mut sql = String::from(
+        "SELECT id, from_role, to_role, topic, content, importance, job_id, ts \
+         FROM agent_messages WHERE project_id = ?",
+    );
+    if role.is_some() {
+        sql.push_str(" AND (from_role = ? OR to_role = ? OR to_role = '*')");
+    }
+    sql.push_str(" ORDER BY id DESC LIMIT ?");
+
+    let mut q = sqlx::query_as::<
+        _,
+        (i64, String, String, Option<String>, String, String, Option<i64>, i64),
+    >(&sql)
+    .bind(state.project_id);
+    if let Some(r) = role.as_ref() {
+        q = q.bind(r).bind(r);
+    }
+    q = q.bind(limit);
+    let rows = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AgentMessageRow {
+            id: r.0,
+            from_role: r.1,
+            to_role: r.2,
+            topic: r.3,
+            content: r.4,
+            importance: r.5,
+            job_id: r.6,
+            ts: r.7,
+        })
+        .collect())
+}
+
+// ─── Shop focus (3D-only / 2D-only / Mixed) ──────────────────────────────
+
+#[derive(Serialize)]
+pub struct ShopFocus {
+    pub value: String,
+}
+
+/// Read the current shop_focus. Defaults to "3d_only" — the user pivoted the
+/// shop to 3D-only after the Tripo output looked good and the 2D ADHD-
+/// printable drafts had zero sales after 58 listings.
+#[tauri::command]
+pub async fn cmd_get_shop_focus() -> Result<ShopFocus, String> {
+    let value = secrets::get("shop_focus")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "3d_only".into());
+    Ok(ShopFocus { value })
+}
+
+#[tauri::command]
+pub async fn cmd_set_shop_focus(value: String) -> Result<(), String> {
+    let v = value.trim();
+    if !["3d_only", "2d_only", "mixed"].contains(&v) {
+        return Err(format!("invalid shop_focus '{v}' — must be 3d_only|2d_only|mixed"));
+    }
+    secrets::set("shop_focus", v).map_err(|e| e.to_string())
+}
+
+// ─── Character pool (IP-risk spectrum for 3D character output) ───────────
+//
+// Controls which character archetypes the orchestrator + research worker
+// pull from when picking a niche. `popular_ip` (anime/movie/game/TV
+// derivatives) is HIGH IP RISK — the publisher still routes those through
+// the manual approval gate (see ip_risk_approvals table). Default `all` so
+// the pipeline explores the full spectrum; the gate prevents accidental
+// auto-publish of risky content.
+
+#[derive(Serialize)]
+pub struct CharacterPool {
+    pub value: String,
+}
+
+const CHARACTER_POOLS: &[&str] = &[
+    "original_anime",
+    "mythology",
+    "own_universe",
+    "popular_ip",
+    "safe",
+    "all",
+];
+
+#[tauri::command]
+pub async fn cmd_get_character_pool() -> Result<CharacterPool, String> {
+    let value = secrets::get("character_pool")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "all".into());
+    Ok(CharacterPool { value })
+}
+
+#[tauri::command]
+pub async fn cmd_set_character_pool(value: String) -> Result<(), String> {
+    let v = value.trim();
+    if !CHARACTER_POOLS.contains(&v) {
+        return Err(format!(
+            "invalid character_pool '{v}' — must be one of {}",
+            CHARACTER_POOLS.join("|")
+        ));
+    }
+    secrets::set("character_pool", v).map_err(|e| e.to_string())
+}
+
+// ─── Image-to-3D provider selection (tripo | meshy) ──────────────────────
+//
+// The designer can route character-style briefs through a 2D reference
+// render (nanobanana) and then a image-to-3D provider. Both Tripo + Meshy
+// are wired; user defaults to Tripo today and can flip to Meshy without a
+// rebuild. Text-to-3D still uses the existing fallback chain (Meshy →
+// Tripo) — this setting governs ONLY the image-to-3D route.
+
+#[derive(Serialize)]
+pub struct ImageTo3dProvider {
+    pub value: String,
+}
+
+const IMAGE_TO_3D_PROVIDERS: &[&str] = &["tripo", "meshy"];
+
+#[tauri::command]
+pub async fn cmd_get_image_to_3d_provider() -> Result<ImageTo3dProvider, String> {
+    let value = secrets::get("image_to_3d_provider")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "tripo".into());
+    Ok(ImageTo3dProvider { value })
+}
+
+#[tauri::command]
+pub async fn cmd_set_image_to_3d_provider(value: String) -> Result<(), String> {
+    let v = value.trim();
+    if !IMAGE_TO_3D_PROVIDERS.contains(&v) {
+        return Err(format!(
+            "invalid image_to_3d_provider '{v}' — must be one of {}",
+            IMAGE_TO_3D_PROVIDERS.join("|")
+        ));
+    }
+    secrets::set("image_to_3d_provider", v).map_err(|e| e.to_string())
+}
+
+// ─── Cults3D + GitHub asset host ─────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct Cults3dStatus {
+    pub creds_present: bool,
+    pub asset_host_configured: bool,
+    pub enabled: bool,
+    pub daily_cap: i64,
+    pub today_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct Cults3dVerifyOk {
+    pub username: String,
+}
+
+#[derive(Serialize)]
+pub struct AssetHostVerifyOk {
+    pub repo: String,
+    pub default_branch: String,
+}
+
+#[tauri::command]
+pub async fn cmd_cults3d_verify(username: String, api_key: String) -> Result<Cults3dVerifyOk, String> {
+    let u = username.trim();
+    let k = api_key.trim();
+    if u.is_empty() || k.is_empty() {
+        return Err("Cults3D username and api_key are both required".into());
+    }
+    let client = reqwest::Client::new();
+    let creds = crate::cults3d::Creds {
+        username: u.into(),
+        api_key: k.into(),
+    };
+    let username = crate::cults3d::verify(&client, &creds)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    secrets::set("cults3d_username", u).map_err(|e| format!("save username: {e}"))?;
+    secrets::set("cults3d_api_key", k).map_err(|e| format!("save api_key: {e}"))?;
+    Ok(Cults3dVerifyOk { username })
+}
+
+#[tauri::command]
+pub async fn cmd_cults3d_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("cults3d_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_cults3d_status(state: State<'_, Arc<AppState>>) -> Result<Cults3dStatus, String> {
+    let creds_present = secrets::get("cults3d_username").ok().flatten().map(|v| !v.is_empty()).unwrap_or(false)
+        && secrets::get("cults3d_api_key").ok().flatten().map(|v| !v.is_empty()).unwrap_or(false);
+    let asset_host_configured = secrets::get("github_asset_repo").ok().flatten().map(|v| !v.is_empty()).unwrap_or(false)
+        && secrets::get("github_asset_token").ok().flatten().map(|v| !v.is_empty()).unwrap_or(false);
+    let enabled = secrets::get("cults3d_enabled").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let daily_cap = secrets::get("cults3d_daily_cap")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::cults3d_publish::DEFAULT_DAILY_CAP);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM cults3d_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
+    )
+    .bind(state.project_id)
+    .bind(&today)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    Ok(Cults3dStatus {
+        creds_present,
+        asset_host_configured,
+        enabled,
+        daily_cap,
+        today_count,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_cults3d_set_daily_cap(cap: i64) -> Result<(), String> {
+    if !(0..=50).contains(&cap) {
+        return Err("cap must be 0..=50".into());
+    }
+    secrets::set("cults3d_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_github_asset_host_verify(repo: String, token: String) -> Result<AssetHostVerifyOk, String> {
+    let r = repo.trim();
+    let t = token.trim();
+    if r.is_empty() || t.is_empty() {
+        return Err("repo and token are both required".into());
+    }
+    let client = reqwest::Client::new();
+    let branch = crate::asset_host_github::verify(&client, r, t)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    secrets::set("github_asset_repo", r).map_err(|e| format!("save repo: {e}"))?;
+    secrets::set("github_asset_token", t).map_err(|e| format!("save token: {e}"))?;
+    Ok(AssetHostVerifyOk {
+        repo: r.into(),
+        default_branch: branch,
+    })
+}
+
+#[derive(Serialize)]
+pub struct Cults3dPublishRow {
+    pub id: i64,
+    pub local_listing_id: Option<i64>,
+    pub cults3d_creation_id: Option<String>,
+    pub title: String,
+    pub url: Option<String>,
+    pub file_url: Option<String>,
+    pub image_url: Option<String>,
+    pub price_usd: Option<f64>,
+    pub state: String,
+    pub error: Option<String>,
+    pub published_at: i64,
+}
+
+#[tauri::command]
+pub async fn cmd_cults3d_list_publishes(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<Cults3dPublishRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+            String,
+            Option<String>,
+            i64,
+        ),
+    >(
+        "SELECT id, local_listing_id, cults3d_creation_id, title, url, file_url, image_url, \
+         price_usd, state, error, published_at \
+         FROM cults3d_publishes WHERE project_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Cults3dPublishRow {
+            id: r.0,
+            local_listing_id: r.1,
+            cults3d_creation_id: r.2,
+            title: r.3,
+            url: r.4,
+            file_url: r.5,
+            image_url: r.6,
+            price_usd: r.7,
+            state: r.8,
+            error: r.9,
+            published_at: r.10,
+        })
+        .collect())
+}
+
+// ─── Listing-stats feedback loop ─────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ListingStatsRow {
+    pub id: i64,
+    pub etsy_listing_id: i64,
+    pub local_listing_id: Option<i64>,
+    pub views: i64,
+    pub favorites: i64,
+    pub total_orders: i64,
+    pub ts: i64,
+}
+
+#[derive(Serialize)]
+pub struct ListingStatsSummary {
+    pub etsy_listing_id: i64,
+    pub local_listing_id: Option<i64>,
+    pub title: String,
+    pub views: i64,
+    pub favorites: i64,
+    pub total_orders: i64,
+    /// Most recent ts in the time series for this listing (epoch seconds).
+    pub last_polled_ts: i64,
+}
+
+/// List the latest stats per listing — one row per listing, joined with
+/// `etsy_publishes.title` so the UI can show a single human-readable feed
+/// of which drafts are getting traction.
+#[tauri::command]
+pub async fn cmd_list_listing_stats(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<ListingStatsSummary>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<_, (i64, Option<i64>, String, i64, i64, i64, i64)>(
+        "WITH latest AS ( \
+            SELECT etsy_listing_id, MAX(ts) AS max_ts \
+            FROM listing_stats WHERE project_id = ? \
+            GROUP BY etsy_listing_id \
+         ) \
+         SELECT s.etsy_listing_id, s.local_listing_id, COALESCE(p.title, '') AS title, \
+                s.views, s.favorites, s.total_orders, s.ts \
+         FROM listing_stats s \
+         JOIN latest l ON l.etsy_listing_id = s.etsy_listing_id AND l.max_ts = s.ts \
+         LEFT JOIN etsy_publishes p ON p.etsy_listing_id = s.etsy_listing_id \
+         WHERE s.project_id = ? \
+         ORDER BY s.views DESC, s.favorites DESC \
+         LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ListingStatsSummary {
+            etsy_listing_id: r.0,
+            local_listing_id: r.1,
+            title: r.2,
+            views: r.3,
+            favorites: r.4,
+            total_orders: r.5,
+            last_polled_ts: r.6,
+        })
+        .collect())
+}
+
+/// Time series of stats for a single listing (newest last) so the UI can
+/// chart impression growth.
+#[tauri::command]
+pub async fn cmd_listing_stats_history(
+    state: State<'_, Arc<AppState>>,
+    etsy_listing_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<ListingStatsRow>, String> {
+    let limit = limit.unwrap_or(96).clamp(1, 1000);
+    let rows = sqlx::query_as::<_, (i64, i64, Option<i64>, i64, i64, i64, i64)>(
+        "SELECT id, etsy_listing_id, local_listing_id, views, favorites, total_orders, ts \
+         FROM listing_stats WHERE project_id = ? AND etsy_listing_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(etsy_listing_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .rev()
+        .map(|r| ListingStatsRow {
+            id: r.0,
+            etsy_listing_id: r.1,
+            local_listing_id: r.2,
+            views: r.3,
+            favorites: r.4,
+            total_orders: r.5,
+            ts: r.6,
+        })
+        .collect())
+}
+
+/// Count of agent messages newer than `since_unix` — used by the CommandRail
+/// to badge unread conversation activity.
+#[tauri::command]
+pub async fn cmd_agent_messages_since(
+    state: State<'_, Arc<AppState>>,
+    since_unix: i64,
+) -> Result<i64, String> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM agent_messages WHERE project_id = ? AND ts > ?",
+    )
+    .bind(state.project_id)
+    .bind(since_unix)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
 /// Count of jobs in the last 24 h that don't yet have an operator rating —
 /// used by the CommandRail badge to nudge the boss to review new outputs.
 #[tauri::command]
@@ -1227,4 +2263,740 @@ pub async fn cmd_unrated_job_count(state: State<'_, Arc<AppState>>) -> Result<i6
     .await
     .map_err(|e| e.to_string())?;
     Ok(count)
+}
+
+// ─── Sketchfab ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SketchfabStatus {
+    pub creds_present: bool,
+    pub enabled: bool,
+    pub sell_on_store: bool,
+    pub daily_cap: i64,
+    pub today_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct SketchfabVerifyOk {
+    pub username: String,
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_verify(api_token: String) -> Result<SketchfabVerifyOk, String> {
+    let t = api_token.trim();
+    if t.is_empty() {
+        return Err("Sketchfab API token is required".into());
+    }
+    let client = reqwest::Client::new();
+    let creds = crate::sketchfab::Creds { api_token: t.into() };
+    let username = crate::sketchfab::verify(&client, &creds)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    secrets::set("sketchfab_api_token", t).map_err(|e| format!("save token: {e}"))?;
+    Ok(SketchfabVerifyOk { username })
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("sketchfab_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_set_sell_on_store(sell: bool) -> Result<(), String> {
+    secrets::set("sketchfab_sell_on_store", if sell { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<SketchfabStatus, String> {
+    let creds_present = secrets::get("sketchfab_api_token")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let enabled = secrets::get("sketchfab_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let sell_on_store = secrets::get("sketchfab_sell_on_store")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let daily_cap = secrets::get("sketchfab_daily_cap")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::sketchfab_publish::DEFAULT_DAILY_CAP);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sketchfab_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
+    )
+    .bind(state.project_id)
+    .bind(&today)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    Ok(SketchfabStatus {
+        creds_present,
+        enabled,
+        sell_on_store,
+        daily_cap,
+        today_count,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_set_daily_cap(cap: i64) -> Result<(), String> {
+    if !(0..=50).contains(&cap) {
+        return Err("cap must be 0..=50".into());
+    }
+    secrets::set("sketchfab_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct SketchfabPublishRow {
+    pub id: i64,
+    pub local_listing_id: Option<i64>,
+    pub sketchfab_uid: Option<String>,
+    pub store_product_id: Option<String>,
+    pub title: String,
+    pub url: Option<String>,
+    pub price_usd: Option<f64>,
+    pub state: String,
+    pub error: Option<String>,
+    pub warning: Option<String>,
+    pub published_at: i64,
+}
+
+// ─── Higgsfield (product-photoshoot thumbnail enhancement) ─────────────
+
+#[derive(Serialize)]
+pub struct HiggsfieldStatus {
+    pub cli_installed: bool,
+    pub cli_authed: bool,
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn cmd_higgsfield_status() -> Result<HiggsfieldStatus, String> {
+    // Probe by shelling out — auth state lives inside the CLI's own
+    // credential cache, we don't store anything in our secrets.
+    let cli_installed = which("higgsfield").is_ok();
+    let cli_authed = if cli_installed {
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("higgsfield")
+                .args(["account", "status"])
+                .output()
+                .ok()
+                .map(|o| {
+                    let combined = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr)
+                    )
+                    .to_lowercase();
+                    o.status.success()
+                        && !combined.contains("session expired")
+                        && !combined.contains("not authenticated")
+                })
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
+    } else {
+        false
+    };
+    let enabled = secrets::get("higgsfield_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    Ok(HiggsfieldStatus {
+        cli_installed,
+        cli_authed,
+        enabled,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_higgsfield_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("higgsfield_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+// Tiny `which` helper — avoids adding a crate for a single shell-out probe.
+fn which(bin: &str) -> Result<std::path::PathBuf, String> {
+    let path_env = std::env::var_os("PATH").ok_or_else(|| "PATH unset".to_string())?;
+    for dir in std::env::split_paths(&path_env) {
+        let candidate = dir.join(bin);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!("{bin} not on PATH"))
+}
+
+// ─── YouTube Data API (for trend signals) ───────────────────────────────
+
+#[derive(Serialize)]
+pub struct YoutubeStatus {
+    pub key_present: bool,
+}
+
+#[derive(Serialize)]
+pub struct YoutubeVerifyOk {
+    pub sample_video_title: String,
+}
+
+#[tauri::command]
+pub async fn cmd_youtube_verify(api_key: String) -> Result<YoutubeVerifyOk, String> {
+    let k = api_key.trim();
+    if k.is_empty() {
+        return Err("YouTube API key is required".into());
+    }
+    // Smallest possible ping — most-popular videos, US, 1 result.
+    let url = format!(
+        "https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&regionCode=US&maxResults=1&key={}",
+        urlencoding::encode(k)
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("youtube GET failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("youtube HTTP {status}: {text}"));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("youtube parse error: {e} — body: {text}"))?;
+    let title = parsed
+        .get("items")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|i| i.get("snippet"))
+        .and_then(|s| s.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("(no items)")
+        .to_string();
+    secrets::set("youtube_api_key", k).map_err(|e| format!("save key: {e}"))?;
+    Ok(YoutubeVerifyOk {
+        sample_video_title: title,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_youtube_status() -> Result<YoutubeStatus, String> {
+    let key_present = secrets::get("youtube_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    Ok(YoutubeStatus { key_present })
+}
+
+// ─── MyMiniFactory ───────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct MmfStatus {
+    pub creds_present: bool,
+    pub enabled: bool,
+    pub sell_paid: bool,
+    pub daily_cap: i64,
+    pub today_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct MmfVerifyOk {
+    pub account: String,
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_verify(api_key: String) -> Result<MmfVerifyOk, String> {
+    let k = api_key.trim();
+    if k.is_empty() {
+        return Err("MyMiniFactory API key is required".into());
+    }
+    let client = reqwest::Client::new();
+    let creds = crate::myminifactory::Creds { api_key: k.into() };
+    let account = crate::myminifactory::verify(&client, &creds)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    secrets::set("mmf_api_key", k).map_err(|e| format!("save key: {e}"))?;
+    Ok(MmfVerifyOk { account })
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("mmf_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_set_sell_paid(sell: bool) -> Result<(), String> {
+    secrets::set("mmf_sell_paid", if sell { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_status(state: State<'_, Arc<AppState>>) -> Result<MmfStatus, String> {
+    let creds_present = secrets::get("mmf_api_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let enabled = secrets::get("mmf_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let sell_paid = secrets::get("mmf_sell_paid")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let daily_cap = secrets::get("mmf_daily_cap")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::myminifactory_publish::DEFAULT_DAILY_CAP);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mmf_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
+    )
+    .bind(state.project_id)
+    .bind(&today)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    Ok(MmfStatus {
+        creds_present,
+        enabled,
+        sell_paid,
+        daily_cap,
+        today_count,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_set_daily_cap(cap: i64) -> Result<(), String> {
+    if !(0..=50).contains(&cap) {
+        return Err("cap must be 0..=50".into());
+    }
+    secrets::set("mmf_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct MmfPublishRow {
+    pub id: i64,
+    pub local_listing_id: Option<i64>,
+    pub mmf_object_id: Option<String>,
+    pub title: String,
+    pub url: Option<String>,
+    pub price_usd: Option<f64>,
+    pub state: String,
+    pub error: Option<String>,
+    pub warning: Option<String>,
+    pub published_at: i64,
+}
+
+#[tauri::command]
+pub async fn cmd_mmf_list_publishes(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<MmfPublishRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<f64>,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        ),
+    >(
+        "SELECT id, local_listing_id, mmf_object_id, title, url, \
+         price_usd, state, error, warning, published_at \
+         FROM mmf_publishes WHERE project_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| MmfPublishRow {
+            id: r.0,
+            local_listing_id: r.1,
+            mmf_object_id: r.2,
+            title: r.3,
+            url: r.4,
+            price_usd: r.5,
+            state: r.6,
+            error: r.7,
+            warning: r.8,
+            published_at: r.9,
+        })
+        .collect())
+}
+
+// ─── Gumroad ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct GumroadStatus {
+    pub creds_present: bool,
+    pub enabled: bool,
+    pub daily_cap: i64,
+    pub today_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct GumroadVerifyOk {
+    pub account: String,
+}
+
+#[tauri::command]
+pub async fn cmd_gumroad_verify(access_token: String) -> Result<GumroadVerifyOk, String> {
+    let t = access_token.trim();
+    if t.is_empty() {
+        return Err("Gumroad access token is required".into());
+    }
+    let client = reqwest::Client::new();
+    let creds = crate::gumroad::Creds { access_token: t.into() };
+    let account = crate::gumroad::verify(&client, &creds)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    secrets::set("gumroad_access_token", t).map_err(|e| format!("save token: {e}"))?;
+    Ok(GumroadVerifyOk { account })
+}
+
+#[tauri::command]
+pub async fn cmd_gumroad_set_enabled(enabled: bool) -> Result<(), String> {
+    secrets::set("gumroad_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_gumroad_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<GumroadStatus, String> {
+    let creds_present = secrets::get("gumroad_access_token")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let enabled = secrets::get("gumroad_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let daily_cap = secrets::get("gumroad_daily_cap")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::gumroad_publish::DEFAULT_DAILY_CAP);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM gumroad_publishes WHERE project_id = ? AND day = ? AND state IN ('published','published_no_file')",
+    )
+    .bind(state.project_id)
+    .bind(&today)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    Ok(GumroadStatus {
+        creds_present,
+        enabled,
+        daily_cap,
+        today_count,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_gumroad_set_daily_cap(cap: i64) -> Result<(), String> {
+    if !(0..=50).contains(&cap) {
+        return Err("cap must be 0..=50".into());
+    }
+    secrets::set("gumroad_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct GumroadPublishRow {
+    pub id: i64,
+    pub local_listing_id: Option<i64>,
+    pub gumroad_product_id: Option<String>,
+    pub title: String,
+    pub short_url: Option<String>,
+    pub edit_url: Option<String>,
+    pub price_usd: Option<f64>,
+    pub state: String,
+    pub error: Option<String>,
+    pub warning: Option<String>,
+    pub published_at: i64,
+}
+
+#[tauri::command]
+pub async fn cmd_gumroad_list_publishes(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<GumroadPublishRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        ),
+    >(
+        "SELECT id, local_listing_id, gumroad_product_id, title, short_url, edit_url, \
+         price_usd, state, error, warning, published_at \
+         FROM gumroad_publishes WHERE project_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| GumroadPublishRow {
+            id: r.0,
+            local_listing_id: r.1,
+            gumroad_product_id: r.2,
+            title: r.3,
+            short_url: r.4,
+            edit_url: r.5,
+            price_usd: r.6,
+            state: r.7,
+            error: r.8,
+            warning: r.9,
+            published_at: r.10,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn cmd_sketchfab_list_publishes(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<SketchfabPublishRow>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<f64>,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        ),
+    >(
+        "SELECT id, local_listing_id, sketchfab_uid, store_product_id, title, url, \
+         price_usd, state, error, warning, published_at \
+         FROM sketchfab_publishes WHERE project_id = ? \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(state.project_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SketchfabPublishRow {
+            id: r.0,
+            local_listing_id: r.1,
+            sketchfab_uid: r.2,
+            store_product_id: r.3,
+            title: r.4,
+            url: r.5,
+            price_usd: r.6,
+            state: r.7,
+            error: r.8,
+            warning: r.9,
+            published_at: r.10,
+        })
+        .collect())
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Chat-with-agent — lets the operator have a conversation with any role's
+// persona. Goes through the same bridge proxy the workers use (so credits
+// + budget caps are tracked uniformly). Stateless on the backend; the
+// frontend keeps the conversation history and sends it whole each turn.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Trim the random suffix off a role id like "research-ab12" → "research".
+/// hireResolver.ts generates ids as `${slug}-${random}` so this is the
+/// canonical inverse. For ids without a dash (already a kind), return as-is.
+fn role_kind_from_id(role_id: &str) -> String {
+    if let Some((kind, _)) = role_id.rsplit_once('-') {
+        if !kind.is_empty() {
+            return kind.to_string();
+        }
+    }
+    role_id.to_string()
+}
+
+/// Per-role chat persona. The system prompt sent to Claude when the
+/// operator chats with this agent. Kept conversational + concise — these
+/// are NOT the production worker prompts that demand structured JSON
+/// output; they're the in-character chat voice for each role.
+fn chat_persona_for(kind: &str) -> &'static str {
+    match kind {
+        "orchestrator" => "You are the Orchestrator at an AI-run 3D-asset Etsy shop selling STL + GLB files. You dispatch jobs across the research → designer → listing → publisher pipeline and handle failures. When the operator chats, reply in 1-3 sentences, in-character: focused on pipeline state, scheduling, and operational decisions. If they ask about specific live state you'd need DB access to know, say so plainly.",
+        "research" => "You are the Market Research Analyst at an AI-run 3D-asset shop (STL + GLB on Etsy + Cults3D). You hunt for niches the shop can win in. Reply in 1-3 sentences, opinionated about demand signals, competition, and printability fit. Don't fabricate specific listing numbers — if asked for them, say you'd need to look them up.",
+        "designer" => "You are the Designer at an AI-run 3D-asset shop. You translate Demand Briefs into concrete generation prompts for Tripo / Meshy / Nano Banana Pro. Reply in 1-3 sentences with strong opinions on style, stylization, printability, and composition. Stay in a designer's voice.",
+        "listing" => "You are the Listing Copywriter at an AI-run 3D-asset Etsy shop. You write titles, tags, descriptions, and prices. Reply in 1-3 sentences with opinions about SEO, pricing psychology, buyer intent, and Etsy policy. Stay in a copywriter's voice.",
+        "publisher" => "You are the Publisher at an AI-run 3D-asset shop. You push approved drafts to Etsy, Cults3D, Sketchfab, MyMiniFactory, and Gumroad. Reply in 1-3 sentences with opinions about marketplace fit, publishing cadence, and quality gates.",
+        "cfo" => "You are the CFO at an AI-run 3D-asset shop. You track every dollar: token spend, generation credits, listing fees, revenue. Reply in 1-3 sentences with opinions on budget, runway, and P&L per niche. Never invent specific numbers — if asked for figures you'd need DB access for, say so.",
+        "cs" => "You are Customer Support at an AI-run 3D-asset shop. You answer buyer DMs and handle returns / print-issue conversations. Reply in 1-3 sentences in a friendly professional voice — opinions about buyer sentiment, conversation quality, and refund policy.",
+        "si" => "You are the Self-Improvement engine at an AI-run 3D-asset shop. You read recent outcomes and tune the team's system prompts to improve revenue. Reply in 1-3 sentences with opinions on what's working, what to tune next, and why the current overrides are what they are.",
+        "strategist" => "You are the Design Strategist at an AI-run 3D-asset shop. You rewrite the Designer's system prompt to nudge it toward better-converting design choices. Reply in 1-3 sentences with opinions about composition, palette, audience, and what recent outcomes suggest you should change.",
+        "guardian" => "You are the Guardian at an AI-run 3D-asset shop. You watch IP risk, content safety, and policy compliance across the pipeline. Reply in 1-3 sentences with opinions about trademark exposure, mythology / character / franchise lines, and what to escalate for manual review.",
+        _ => "You are an AI staff member at an operator-run AI Etsy shop. Reply in 1-3 sentences, in-character. If the operator asks for specific data you'd need DB access to provide, say so plainly.",
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ChatTurn {
+    pub from: String,  // "user" or "agent"
+    pub text: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct ChatReply {
+    pub text: String,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub model: String,
+}
+
+/// Have a conversational turn with an agent. The frontend owns history;
+/// this command is stateless. Routes through the user's bridge proxy with
+/// `anthropic_bridge_key` (NEVER a direct Anthropic key) so spend lands on
+/// the same billing the workers use.
+#[tauri::command]
+pub async fn cmd_chat_with_agent(
+    agent_id: String,
+    history: Vec<ChatTurn>,
+    message: String,
+) -> Result<ChatReply, String> {
+    let kind = role_kind_from_id(&agent_id);
+    let persona = chat_persona_for(&kind);
+
+    let bridge_url = secrets::get("anthropic_bridge_url")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "anthropic_bridge_url not set in secrets".to_string())?;
+    let bridge_key = secrets::get("anthropic_bridge_key")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "anthropic_bridge_key not set in secrets".to_string())?;
+
+    // Build the Anthropic messages array from history. Skip empty entries
+    // defensively — early-development UI sometimes left those around.
+    let mut messages: Vec<serde_json::Value> = history
+        .into_iter()
+        .filter(|t| !t.text.trim().is_empty())
+        .map(|t| {
+            let role = if t.from == "user" { "user" } else { "assistant" };
+            serde_json::json!({"role": role, "content": t.text})
+        })
+        .collect();
+    // Anthropic requires the conversation to end with a user turn.
+    let trimmed_msg = message.trim();
+    if trimmed_msg.is_empty() {
+        return Err("empty message".to_string());
+    }
+    messages.push(serde_json::json!({"role": "user", "content": trimmed_msg}));
+
+    let model = "claude-haiku-4-5-20251001";
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 400,
+        "system": persona,
+        "messages": messages,
+    });
+    let url = format!("{}/v1/messages", bridge_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .header("x-api-key", &bridge_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("chat: bridge network error: {e}"))?;
+    let status = resp.status();
+    let raw = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Keep the upstream body — bridge / Anthropic error envelopes carry
+        // the actual diagnostic (quota, key invalid, etc.).
+        return Err(format!("chat: bridge HTTP {status}: {}", raw.chars().take(400).collect::<String>()));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("chat: parse response: {e}: {raw}"))?;
+
+    // Take the first text block from content[].
+    let text = parsed.get("content")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")))
+        .and_then(|b| b.get("text"))
+        .and_then(|t| t.as_str())
+        .map(String::from)
+        .ok_or_else(|| format!("chat: no text block in response: {raw}"))?;
+
+    let usage = parsed.get("usage");
+    let tokens_in = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let tokens_out = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // Record spend so chat lands on the same hourly/daily/monthly cap the
+    // workers track against. Fire-and-forget; if the recorder isn't
+    // available we still return the reply.
+    // (No project_id plumbed into this command yet — chat is "free-standing"
+    //  and the budget ledger logs spend per project; for now skip if absent.
+    //  TODO: thread project_id once chat becomes a regular activity.)
+
+    Ok(ChatReply {
+        text,
+        tokens_in,
+        tokens_out,
+        model: model.to_string(),
+    })
 }

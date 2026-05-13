@@ -333,9 +333,17 @@ pub async fn ensure_fresh_token(client: &reqwest::Client) -> anyhow::Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serializes tests that mutate the shared in-process secrets cache.
+    // Without this, cargo test's parallel runner races: one test writes
+    // etsy_api_keystring="HEADERKS" while another expects "ONLYKS", and the
+    // second test's assertion sees the first test's value.
+    static SECRET_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_api_key_header_includes_shared_secret_when_present() {
+        let _g = SECRET_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::secrets::set_cache_for_test("etsy_api_keystring", Some("HEADERKS"));
         crate::secrets::set_cache_for_test("etsy_shared_secret", Some("HEADERSEC"));
         let got = api_key_header().unwrap();
@@ -344,6 +352,7 @@ mod tests {
 
     #[test]
     fn test_api_key_header_falls_back_when_secret_missing() {
+        let _g = SECRET_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::secrets::set_cache_for_test("etsy_api_keystring", Some("ONLYKS"));
         crate::secrets::set_cache_for_test("etsy_shared_secret", None);
         let got = api_key_header().unwrap();

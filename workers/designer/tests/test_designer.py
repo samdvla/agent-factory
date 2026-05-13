@@ -1,4 +1,5 @@
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -51,7 +52,12 @@ def _capture_anthropic_system(monkeypatch):
     return captured
 
 
-def test_override_replaces_system(tmp_path, monkeypatch):
+def test_override_keeps_philosophy_and_reappends_schema(tmp_path, monkeypatch):
+    """Strategist may overwrite the design-philosophy layer, but the
+    JSON-schema contract must always survive. Regression for: 'designer
+    job #N failed: Expecting property name enclosed in double quotes:
+    line 1 column 2 (char 1)' — caused by an override that dropped the
+    schema directive, letting Haiku emit prose after the prefilled '{'."""
     monkeypatch.setenv("HOME", str(tmp_path))
     af_dir = tmp_path / ".agent-factory"
     af_dir.mkdir()
@@ -63,7 +69,29 @@ def test_override_replaces_system(tmp_path, monkeypatch):
     captured = _capture_anthropic_system(monkeypatch)
     from designer.agent import call_anthropic
     call_anthropic("k-test", {"niche": "x"})
-    assert captured["body"]["system"] == override_text
+    sent = captured["body"]["system"]
+    assert override_text.strip() in sent, "philosophy override must be preserved"
+    assert "asset_type" in sent, "schema must be re-appended even with override"
+    assert "JSON only" in sent, "JSON-only directive must be re-appended even with override"
+
+
+def test_override_with_3d_brief_uses_3d_schema(tmp_path, monkeypatch):
+    """Override path must use the 3D schema (stl_file/3d_model) when the
+    brief is 3D — otherwise the 2D enum sneaks back in and the downstream
+    pipeline rejects the asset_type."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    (af_dir / "prompts.json").write_text(json.dumps({
+        "designer": {"system_override": "tune the philosophy"},
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "dragon mini", "product_type": "stl_file"})
+    sent = captured["body"]["system"]
+    assert "stl_file" in sent
+    assert "printable | svg" not in sent, "2D enum must not leak into 3D path"
 
 
 def test_no_override_uses_default(tmp_path, monkeypatch):
@@ -200,7 +228,11 @@ def test_svg_call_saves_file_and_returns_path(tmp_path, monkeypatch):
     assert result["handoff"]["payload"]["asset"]["asset_path"] == asset_path
 
 
-def test_svg_invalid_output_falls_back_to_text_only(tmp_path, monkeypatch):
+def test_svg_invalid_output_short_circuits_pipeline(tmp_path, monkeypatch):
+    """3D-only-shop contract: an asset-less designer result must NOT hand off
+    to listing/publisher. We return ok=False with no handoff so the cycle
+    stops cleanly instead of cascading "missing asset_path" errors through
+    every marketplace fan-out."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -213,15 +245,16 @@ def test_svg_invalid_output_falls_back_to_text_only(tmp_path, monkeypatch):
 
     result = handle("process_job", _job_params(101))
 
-    assert result["ok"] is True
-    assert result["asset"]["asset_path"] is None
-    assert result["model"] == MODEL  # Haiku — Sonnet failed
-    # Tokens come from the Haiku call only.
+    assert result["ok"] is False
+    assert "no asset produced" in result["error"]
+    assert "handoff" not in result
+    assert result["model"] == MODEL
     assert result["tokens_in"] == 50
     assert result["tokens_out"] == 80
-    assert "text only" in result["ticker_text"]
-    # Pipeline still hands off.
-    assert result["handoff"]["to_role"] == "listing"
+    assert "CYCLE STOPPED" in result["ticker_text"]
+    # A single critical message goes to *, no asset_ready message to listing.
+    msg_topics = [m["topic"] for m in result["messages"]]
+    assert msg_topics == ["asset_failed"]
 
 
 def test_svg_call_failure_does_not_crash(tmp_path, monkeypatch):
@@ -241,21 +274,25 @@ def test_svg_call_failure_does_not_crash(tmp_path, monkeypatch):
 
     result = handle("process_job", _job_params(202))
 
-    assert result["ok"] is True
-    assert result["asset"]["asset_path"] is None
+    # Network failure during SVG generation → no asset → ok=False, no handoff.
+    # The Haiku call still succeeded, so tokens/model from that pass come through.
+    assert result["ok"] is False
+    assert "no asset produced" in result["error"]
+    assert "handoff" not in result
     assert result["model"] == MODEL
     assert result["tokens_in"] == 50
     assert result["tokens_out"] == 80
-    assert result["handoff"]["to_role"] == "listing"
 
 
 def test_cycle_id_propagates(tmp_path, monkeypatch):
-    """Designer echoes the inbound cycle_id into its result and handoff."""
+    """Designer echoes the inbound cycle_id into its result, on both success and
+    short-circuit paths. CFO needs cycle_id even on failed cycles to close P&L."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     cid = "designer-cycle-7777"
-    # Two responses queued: Haiku asset + invalid SVG (falls back to text-only).
+    # Use the failure path: Haiku asset + invalid SVG. Short-circuits with
+    # ok=False — cycle_id must still come back so CFO can close the cycle.
     fake = _mock_urlopen_factory([
         _haiku_response(),
         _svg_response("not a valid svg"),
@@ -270,9 +307,494 @@ def test_cycle_id_propagates(tmp_path, monkeypatch):
         },
     }
     result = handle("process_job", params)
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert result.get("cycle_id") == cid
-    assert result["handoff"]["payload"]["cycle_id"] == cid
+    assert "handoff" not in result
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Phase 1.1-1.3 — image-to-3D pipeline routing
+#
+# These tests lock the contract: when the designer sees a character-style
+# 3D brief AND Higgsfield CLI is configured (is_configured() returns True)
+# AND an image-to-3D provider is wired, it MUST run nanobanana (Nano Banana
+# Pro via Higgsfield CLI) → chosen provider instead of the text-to-3D path.
+# The parallel marketplace work edits many of the same files, so the regression
+# coverage matters.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_call_anthropic_sends_assistant_prefill(tmp_path, monkeypatch):
+    """Regression for the 2026-05-12 'Haiku returns markdown' incident:
+    designer.call_anthropic MUST include an assistant turn with content='{'
+    so the model is forced to continue with valid JSON. Without it Haiku
+    occasionally returns a long-form product-strategy markdown document
+    that has no JSON object anywhere."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=60):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _haiku_response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "x"})
+
+    msgs = captured["body"]["messages"]
+    assert len(msgs) == 2, f"expected user + assistant prefill, got {msgs!r}"
+    assert msgs[0]["role"] == "user"
+    assert msgs[1]["role"] == "assistant"
+    assert msgs[1]["content"] == "{", (
+        f"assistant prefill must be exactly '{{', got {msgs[1]['content']!r}"
+    )
+
+
+def test_call_anthropic_skips_prefill_in_bridge_mode(tmp_path, monkeypatch):
+    """Bridge proxies (ANTHROPIC_BASE_URL != api.anthropic.com) reject the
+    trailing assistant 'role:assistant' turn with HTTP 400. Regression: when
+    a bridge is configured, the prefill MUST be omitted so the bridge accepts
+    the request. We still see correct JSON output via the loose parser."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://my-bridge.example.com")
+
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=60):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _haiku_response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "x"})
+
+    msgs = captured["body"]["messages"]
+    assert len(msgs) == 1, (
+        f"bridge mode must NOT include the assistant prefill turn; got {msgs!r}"
+    )
+    assert msgs[0]["role"] == "user"
+    # No assistant message because the bridge would reject it.
+
+
+def test_designer_prompt_branches_on_3d_product_type():
+    """Regression for the 2026-05-12 'no JSON object found in response' crash:
+    when product_type=stl_file briefs arrived under the legacy 2D prompt
+    (enum: printable|svg|template|ebook), Haiku went off-script with prose.
+    The 3D branch must surface stl_file / 3d_model in the schema, mention
+    Tripo/Meshy/nanobanana so the model knows which generator the prompt
+    feeds, and instruct 'JSON only'."""
+    sys2d, _ = build_designer_prompt({"product_type": "sticker"})
+    assert "printable | svg | template | ebook" in sys2d
+    assert "stl_file" not in sys2d.split("asset_type")[1].split("\n")[0]
+
+    sys3d, _ = build_designer_prompt({"product_type": "stl_file"})
+    assert "stl_file" in sys3d
+    assert "3d_model" in sys3d
+    assert "JSON only" in sys3d
+    # Either Tripo or Meshy must be referenced so the model treats the
+    # output as a 3D-gen prompt, not a 2D image prompt.
+    assert ("Tripo" in sys3d) or ("Meshy" in sys3d) or ("text-to-3D" in sys3d)
+
+
+def test_loose_parser_surfaces_response_preview():
+    """Diagnostic regression: when the model returns prose (no '{'), the
+    raised error must include a preview of what was actually said. The
+    original 'no JSON object found in response' message was too opaque to
+    debug from the alert tray."""
+    from designer.agent import _parse_loose_json_object
+    try:
+        _parse_loose_json_object("Sure, here's the brief: it's a 3D model of a cat.")
+    except ValueError as e:
+        msg = str(e)
+        assert "no JSON object found" in msg
+        assert "Sure, here" in msg, f"expected response preview in error, got: {msg!r}"
+
+
+def test_is_character_brief_keyword_hits():
+    from designer.agent import _is_character_brief
+
+    assert _is_character_brief({"niche": "anime warrior figurine"}) is True
+    assert _is_character_brief({"niche": "yokai bust desk decor"}) is True
+    assert _is_character_brief({"niche": "D&D goblin mini", "ip_risk": "none"}) is True
+    # ip_risk override even when the niche text doesn't trigger a keyword
+    assert _is_character_brief({"niche": "untouched", "ip_risk": "mythology"}) is True
+    assert _is_character_brief({"niche": "untouched", "ip_risk": "high"}) is True
+    # Generic 3D-printable objects should NOT be routed via image-to-3D
+    assert _is_character_brief({"niche": "geometric vase planter"}) is False
+    assert _is_character_brief({"niche": "phone stand cable organizer"}) is False
+    assert _is_character_brief({}) is False
+    assert _is_character_brief(None) is False  # type: ignore[arg-type]
+
+
+def test_image_to_3d_provider_defaults_to_tripo(monkeypatch):
+    from designer.agent import _image_to_3d_provider
+
+    monkeypatch.delenv("IMAGE_TO_3D_PROVIDER", raising=False)
+    assert _image_to_3d_provider() == "tripo"
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "meshy")
+    assert _image_to_3d_provider() == "meshy"
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "TRIPO")  # case-insensitive
+    assert _image_to_3d_provider() == "tripo"
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "garbage")  # unknown → tripo
+    assert _image_to_3d_provider() == "tripo"
+
+
+def _haiku_3d_response():
+    """Designer's first call returns the asset description; for 3D briefs we
+    just need any well-formed JSON to thread into the 3D branch."""
+    return _resp({
+        "content": [{"type": "text", "text": json.dumps({
+            "asset_type": "stl_file",
+            "style": "stylized cartoon mini",
+            "palette": ["#888", "#aaa", "#ccc"],
+            "dimensions": "28mm tabletop",
+            "mockup_count": 1,
+            "brief_for_image_gen": "shonen swordsman, sword raised, dynamic pose",
+        })}],
+        "usage": {"input_tokens": 60, "output_tokens": 100},
+    })
+
+
+def _character_brief_params(job_id: int = 555):
+    return {
+        "job_id": job_id,
+        "payload": {
+            "brief": {
+                "niche": "anime swordsman figurine",
+                "product_type": "stl_file",
+                "ip_risk": "original",
+                "design_direction": "shonen-style warrior, stylized, 28mm",
+                "keywords": ["anime", "figurine", "stl"],
+                "price_band_usd": [6, 12],
+            }
+        },
+    }
+
+
+def test_designer_routes_to_image_to_3d_when_eligible(tmp_path, monkeypatch):
+    """Character brief + Higgsfield CLI configured + tripo key →
+    nanobanana → tripo image-to-3D path runs, asset_path points at the
+    produced STL, model tag reflects the image-to-3d provider."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    calls: dict = {"nano": 0, "tripo_img": 0, "tripo_text": 0, "meshy_any": 0}
+    ref_path = str(tmp_path / "555-ref.png")
+    glb_path = str(tmp_path / "555.glb")
+    stl_path = str(tmp_path / "555.stl")
+    png_path = str(tmp_path / "555.png")
+
+    def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["nano"] += 1
+        return ref_path
+
+    def fake_tripo_img(api_key, image_path, *, job_id, assets_dir, **kw):
+        calls["tripo_img"] += 1
+        return glb_path, stl_path, png_path
+
+    def fake_tripo_text(*a, **kw):
+        calls["tripo_text"] += 1
+        raise AssertionError("text-to-3D path should NOT run when image route is eligible")
+
+    def fake_meshy_any(*a, **kw):
+        calls["meshy_any"] += 1
+        raise AssertionError("meshy should NOT run when provider=tripo")
+
+    from designer import nanobanana as nano_mod
+    from designer import tripo as tripo_mod
+    from designer import meshy as meshy_mod
+
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(tripo_mod, "generate_3d_from_image", fake_tripo_img)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+    monkeypatch.setattr(meshy_mod, "generate_3d_from_image", fake_meshy_any)
+    monkeypatch.setattr(meshy_mod, "generate_3d", fake_meshy_any)
+
+    result = handle("process_job", _character_brief_params(555))
+
+    assert result["ok"] is True
+    assert calls["nano"] == 1
+    assert calls["tripo_img"] == 1
+    assert calls["tripo_text"] == 0
+    assert calls["meshy_any"] == 0
+    assert result["asset"]["asset_path"] == stl_path
+    assert result["asset"]["glb_path"] == glb_path
+    assert result["asset"]["preview_png"] == png_path
+    assert result["model"] == "tripo-image-to-3d"
+
+
+def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatch):
+    """Same as above but provider=meshy → Meshy image-to-3D runs, Tripo
+    image-to-3D does not."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("MESHY_API_KEY", "m-test")
+    monkeypatch.delenv("TRIPO_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "meshy")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    calls = {"nano": 0, "meshy_img": 0, "tripo_any": 0}
+    ref_path = str(tmp_path / "777-ref.png")
+    glb_path = str(tmp_path / "777.glb")
+    stl_path = str(tmp_path / "777.stl")
+    png_path = str(tmp_path / "777.png")
+
+    def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["nano"] += 1
+        return ref_path
+
+    def fake_meshy_img(api_key, image_path, *, job_id, assets_dir, **kw):
+        calls["meshy_img"] += 1
+        return glb_path, stl_path, png_path
+
+    def fake_tripo_any(*a, **kw):
+        calls["tripo_any"] += 1
+        raise AssertionError("tripo should NOT run when provider=meshy without tripo key")
+
+    from designer import nanobanana as nano_mod
+    from designer import meshy as meshy_mod
+    from designer import tripo as tripo_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(meshy_mod, "generate_3d_from_image", fake_meshy_img)
+    monkeypatch.setattr(tripo_mod, "generate_3d_from_image", fake_tripo_any)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_any)
+    monkeypatch.setattr(meshy_mod, "generate_3d", fake_tripo_any)
+
+    result = handle("process_job", _character_brief_params(777))
+
+    assert result["ok"] is True
+    assert calls["nano"] == 1
+    assert calls["meshy_img"] == 1
+    assert calls["tripo_any"] == 0
+    assert result["model"] == "meshy-image-to-3d"
+
+
+def test_designer_text_to_3d_honors_tripo_preference(tmp_path, monkeypatch):
+    """Higgsfield CLI not configured → text-to-3D path. Both Meshy +
+    Tripo keys present, IMAGE_TO_3D_PROVIDER=tripo → text-to-3D MUST
+    pick Tripo. The setting governs both image-to-3D and text-to-3D so
+    the user's 'I want Tripo' preference applies everywhere."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("MESHY_API_KEY", "m-test")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    calls = {"nano": 0, "meshy_text": 0, "tripo_text": 0, "image_any": 0}
+    glb_path = str(tmp_path / "888.glb")
+    stl_path = str(tmp_path / "888.stl")
+    png_path = str(tmp_path / "888.png")
+
+    def fake_nano(*a, **kw):
+        calls["nano"] += 1
+        raise AssertionError("nanobanana must not run when CLI not configured")
+
+    def fake_tripo_text(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["tripo_text"] += 1
+        return glb_path, stl_path, png_path
+
+    def fake_meshy_text(*a, **kw):
+        calls["meshy_text"] += 1
+        raise AssertionError("meshy text path should not run when tripo is preferred + available")
+
+    def fake_image(*a, **kw):
+        calls["image_any"] += 1
+        raise AssertionError("image-to-3D path must not run when CLI not configured")
+
+    from designer import nanobanana as nano_mod
+    from designer import meshy as meshy_mod
+    from designer import tripo as tripo_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: False)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", fake_nano)
+    monkeypatch.setattr(meshy_mod, "generate_3d", fake_meshy_text)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+    monkeypatch.setattr(meshy_mod, "generate_3d_from_image", fake_image)
+    monkeypatch.setattr(tripo_mod, "generate_3d_from_image", fake_image)
+
+    result = handle("process_job", _character_brief_params(888))
+
+    assert result["ok"] is True
+    assert calls["nano"] == 0
+    assert calls["tripo_text"] == 1
+    assert calls["meshy_text"] == 0
+    assert calls["image_any"] == 0
+    assert result["model"] == "tripo-text-to-model"
+
+
+def test_designer_text_to_3d_falls_through_when_preferred_key_missing(tmp_path, monkeypatch):
+    """Preferred provider (Tripo) but its key isn't set → fall back to Meshy
+    rather than failing the job. Keeps the pipeline running when the user
+    flips a setting without saving the matching key."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("MESHY_API_KEY", "m-test")
+    monkeypatch.delenv("TRIPO_API_KEY", raising=False)
+    monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    glb_path = str(tmp_path / "889.glb")
+    stl_path = str(tmp_path / "889.stl")
+    png_path = str(tmp_path / "889.png")
+    calls = {"meshy": 0, "tripo": 0}
+
+    def fake_meshy_text(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["meshy"] += 1
+        return glb_path, stl_path, png_path
+
+    def fake_tripo_text(*a, **kw):
+        calls["tripo"] += 1
+        raise AssertionError("tripo must not run when its key is missing")
+
+    from designer import nanobanana as nano_mod
+    from designer import meshy as meshy_mod
+    from designer import tripo as tripo_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: False)
+    monkeypatch.setattr(meshy_mod, "generate_3d", fake_meshy_text)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+
+    result = handle("process_job", _character_brief_params(889))
+    assert result["ok"] is True
+    assert calls["meshy"] == 1
+    assert calls["tripo"] == 0
+    assert result["model"] == "meshy-text-to-3d"
+
+
+def test_designer_falls_through_when_nanobanana_fails(tmp_path, monkeypatch):
+    """nanobanana raises → designer recovers via text-to-3D rather than
+    failing the whole job. Locks the resilience contract."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TRIPO_API_KEY", "t-test")
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+
+    fake = _mock_urlopen_factory([_haiku_3d_response()])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    glb_path = str(tmp_path / "999.glb")
+    stl_path = str(tmp_path / "999.stl")
+    png_path = str(tmp_path / "999.png")
+    calls = {"tripo_text": 0}
+
+    def explode_nano(*a, **kw):
+        raise RuntimeError("safety blocked")
+
+    def fake_tripo_text(api_key, prompt, *, job_id, assets_dir, **kw):
+        calls["tripo_text"] += 1
+        return glb_path, stl_path, png_path
+
+    from designer import nanobanana as nano_mod
+    from designer import tripo as tripo_mod
+    monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(nano_mod, "generate_reference_image", explode_nano)
+    monkeypatch.setattr(tripo_mod, "generate_3d", fake_tripo_text)
+
+    result = handle("process_job", _character_brief_params(999))
+
+    assert result["ok"] is True
+    assert calls["tripo_text"] == 1
+    assert result["asset"]["asset_path"] == stl_path
+    assert result["model"] == "tripo-text-to-model"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Phase 1.4 — multi-angle preview renderer
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _make_test_glb(path: str) -> None:
+    """Build a small but non-degenerate GLB so the renderer has real geometry
+    to chew through. Uses trimesh's primitive builders so we don't ship a
+    binary fixture into the repo."""
+    import trimesh  # type: ignore
+    mesh = trimesh.creation.icosphere(subdivisions=2)  # ~320 triangles
+    mesh.export(path)
+
+
+def test_render_angles_writes_n_pngs_with_real_content(tmp_path):
+    """End-to-end: build a GLB, render the default 5 angles, confirm each
+    PNG exists, is non-trivial (>1KB), and the pixel data is not all the
+    same background colour (i.e. the mesh actually appeared)."""
+    from designer import preview as _preview
+    from PIL import Image  # type: ignore
+
+    glb = tmp_path / "smoke.glb"
+    _make_test_glb(str(glb))
+
+    paths = _preview.render_angles(
+        str(glb),
+        output_dir=str(tmp_path),
+        job_id=42,
+        resolution=256,  # small for test speed; production uses 1024
+    )
+    assert len(paths) == 5
+    seen_hashes = set()
+    for p in paths:
+        assert os.path.exists(p), f"missing {p}"
+        size = os.path.getsize(p)
+        assert size > 1024, f"{p} suspiciously small ({size}B)"
+        img = Image.open(p).convert("RGB")
+        assert img.size == (256, 256)
+        # Confirm something rendered: count non-background pixels.
+        import numpy as np  # type: ignore
+        arr = np.array(img)
+        bg = np.array(_preview._BG_RGB, dtype=np.uint8)
+        non_bg = np.any(arr != bg, axis=-1).sum()
+        assert non_bg > 100, f"{p} renders ~empty ({non_bg} non-bg pixels)"
+        # Each angle should produce a meaningfully different image (no
+        # accidental identical renders from a broken rotation matrix).
+        h = hash(arr.tobytes())
+        seen_hashes.add(h)
+    assert len(seen_hashes) == 5, "two angles produced identical pixels"
+
+
+def test_try_render_angles_swallows_missing_file(tmp_path):
+    """try_render_angles must never raise — callers rely on the soft-fail
+    contract to keep the publishing pipeline running even on a bad mesh."""
+    from designer import preview as _preview
+
+    out = _preview.try_render_angles(
+        str(tmp_path / "does-not-exist.glb"),
+        output_dir=str(tmp_path),
+        job_id=99,
+    )
+    assert out == []
+
+
+def test_try_render_angles_swallows_degenerate_mesh(tmp_path):
+    """A single-vertex 'mesh' is degenerate; the wrapper must return empty
+    rather than propagate PreviewError."""
+    import trimesh  # type: ignore
+    from designer import preview as _preview
+
+    bad = tmp_path / "flat.glb"
+    # An empty mesh that should round-trip through trimesh without faces.
+    mesh = trimesh.Trimesh(vertices=[[0, 0, 0], [1, 0, 0], [0, 1, 0]], faces=[])
+    mesh.export(str(bad))
+    out = _preview.try_render_angles(str(bad), output_dir=str(tmp_path), job_id=11)
+    assert out == []
 
 
 def test_svg_validation_rejects_no_drawing_elements(tmp_path, monkeypatch):
@@ -288,6 +810,8 @@ def test_svg_validation_rejects_no_drawing_elements(tmp_path, monkeypatch):
 
     result = handle("process_job", _job_params(303))
 
-    assert result["ok"] is True
-    assert result["asset"]["asset_path"] is None
+    # Empty SVG fails validation → no asset → short-circuit.
+    assert result["ok"] is False
+    assert "no asset produced" in result["error"]
+    assert "handoff" not in result
     assert result["model"] == MODEL

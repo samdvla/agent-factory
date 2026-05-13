@@ -7,13 +7,20 @@ import urllib.error
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 
-def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 5) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
     Returns the response body as utf-8 string. Raises on final failure.
+
+    HTTP 529 is Anthropic's load-shedding signal — typical overload events
+    last 30s-2min, so the legacy 1s/2s/4s schedule (~7s total) blew right
+    through them and failed real jobs. 529 gets its own longer schedule
+    (8s/15s/30s/60s/60s). Other 5xx + URLError keep the fast schedule.
 
     _retry_request: see workers/research/tests/test_research.py for behavior coverage.
     """
     import time as _time
+    overload_delays = (8, 15, 30, 60, 60)
+    fast_delays = (1, 2, 4, 8, 16)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -21,8 +28,26 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             last_exc = e
+            # Capture the response body once; HTTPError\'s default
+            # str() is just "HTTP Error N: Reason" and the actual
+            # diagnostic lives in the body that Anthropic returns.
+            try:
+                _body = e.read().decode("utf-8", errors="replace")
+                if _body:
+                    e.msg = f"{e.msg}: {_body[:600]}"
+            except Exception:
+                pass
+            if e.code == 529 and attempt < max_attempts - 1:
+                delay = overload_delays[min(attempt, len(overload_delays) - 1)]
+                print(
+                    f"[retry] HTTP 529 (Anthropic overloaded) attempt "
+                    f"{attempt+1}/{max_attempts}; sleeping {delay}s",
+                    file=sys.stderr, flush=True,
+                )
+                _time.sleep(delay)
+                continue
             if 500 <= e.code < 600 and attempt < max_attempts - 1:
-                delay = (2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -30,7 +55,7 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
         except urllib.error.URLError as e:
             last_exc = e
             if attempt < max_attempts - 1:
-                delay = (2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -52,6 +77,37 @@ def _load_system_override(role: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _load_operator_steers(role: str) -> list[str]:
+    """Read operator standing instructions written from the ChatPanel Steer
+    action. Returns [] when missing or malformed."""
+    path = os.path.expanduser("~/.agent-factory/prompts.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        arr = data.get(role, {}).get("operator_steers")
+        if isinstance(arr, list):
+            return [s for s in arr if isinstance(s, str) and s.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _append_operator_steers(system_prompt: str, role: str) -> str:
+    """Append operator standing instructions as the final block. Operator
+    steers compose with and take precedence over the strategist-tuned
+    override, because the last block in the system prompt gets the model's
+    strongest attention."""
+    steers = _load_operator_steers(role)
+    if not steers:
+        return system_prompt
+    block = (
+        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
+        "apply to this job):\n"
+        + "\n".join(f"- {s}" for s in steers)
+    )
+    return system_prompt.rstrip() + "\n\n" + block
 
 
 def build_reply_prompt(buyer_message: str, listing_title: str | None = None) -> tuple[str, str]:
@@ -107,6 +163,7 @@ def handle(method, params):
         override = _load_system_override("cs")
         if override:
             system = override
+        system = _append_operator_steers(system, "cs")
         resp = call_claude(system, user)
         text = resp["content"][0]["text"]
         parsed = json.loads(text)

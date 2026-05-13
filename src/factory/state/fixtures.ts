@@ -42,14 +42,14 @@ export const ROOMS: Record<string, Room> = {
 };
 
 export const INITIAL_AGENTS: Record<string, AgentEntry> = {
-  orchestrator: { role:"orchestrator", name:"Orchestrator", state:"idle", task:"", model:"Sonnet", tokensToday:0, currentJobId:null },
-  research: { role:"research", name:"Iris Vega", state:"idle", task:"", model:"Haiku", tokensToday:0, currentJobId:null },
-  designer: { role:"designer", name:"Mara Chen", state:"idle", task:"", model:"Sonnet", tokensToday:0, currentJobId:null },
-  listing: { role:"listing", name:"Theo Park", state:"idle", task:"", model:"Haiku", tokensToday:0, currentJobId:null },
-  publisher: { role:"publisher", name:"Avery Holt", state:"idle", task:"", model:"Haiku", tokensToday:0, currentJobId:null },
-  cs: { role:"cs", name:"Lina Okafor", state:"idle", task:"", model:"Haiku", tokensToday:0, currentJobId:null },
-  cfo: { role:"cfo", name:"Roman Voss", state:"idle", task:"", model:"Haiku", tokensToday:0, currentJobId:null },
-  si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Sonnet", tokensToday:0, currentJobId:null },
+  orchestrator: { role:"orchestrator", name:"Orchestrator", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  research: { role:"research", name:"Iris Vega", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  designer: { role:"designer", name:"Mara Chen", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  listing: { role:"listing", name:"Theo Park", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  publisher: { role:"publisher", name:"Avery Holt", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  cs: { role:"cs", name:"Lina Okafor", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  cfo: { role:"cfo", name:"Roman Voss", state:"idle", task:"", model:"Haiku", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
+  si: { role:"si", name:"Sable Wynn", state:"idle", task:"", model:"Sonnet", tokensToday:0, completedToday:0, failedToday:0, currentJobId:null },
 };
 
 export const SUPERVISOR_ROLE_MAP: Record<string, string> = {

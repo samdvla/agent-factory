@@ -3,11 +3,21 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type JobRow } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+import AssetViewer from "./AssetViewer";
+import Asset3DModal from "./Asset3DModal";
 
 /** Context so deeply-nested role renderers can pop the SVG lightbox without prop drilling. */
 const SvgLightboxCtx = createContext<((svg: string, label: string) => void) | null>(null);
 function useOpenSvgLightbox() {
   return useContext(SvgLightboxCtx);
+}
+
+/** Context for the tap-to-inspect 3D modal. Set near the feed root; consumed
+ *  by JobAssetPreview when a compact 3D thumbnail is tapped. Decoupled from
+ *  the existing SVG lightbox so the two flows don't conflict. */
+const Open3DModalCtx = createContext<((jobId: number, title: string) => void) | null>(null);
+function useOpen3DModal() {
+  return useContext(Open3DModalCtx);
 }
 
 /**
@@ -163,6 +173,125 @@ function SvgLightbox({ svg, label, onClose }: { svg: string; label: string; onCl
   );
 }
 
+function JobAssetPreview({
+  jobId,
+  hasAsset,
+  label,
+}: {
+  jobId: number;
+  hasAsset: boolean;
+  label: string;
+}) {
+  const openLightbox = useOpenSvgLightbox();
+  const open3DModal = useOpen3DModal();
+  const [info, setInfo] = useState<import("../../api").JobAssetInfo | null>(null);
+  const [svg, setSvg] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!hasAsset) return;
+    let cancelled = false;
+    api
+      .readJobAsset(jobId)
+      .then((v) => {
+        if (cancelled) return;
+        setInfo(v);
+        if (v.kind === "svg") {
+          // model-viewer doesn't render SVG; the lightbox flow is built
+          // around inline-SVG markup. Fetch the markup separately.
+          api.readJobSvg(jobId).then((s) => {
+            if (!cancelled) setSvg(s);
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, hasAsset]);
+
+  if (!hasAsset) {
+    return (
+      <div className="af-svg-tile is-empty" title="No asset path on this job">
+        no asset yet
+      </div>
+    );
+  }
+  if (!loaded) return <div className="af-svg-tile is-loading">…</div>;
+
+  // 3D path — wrap the AssetViewer in a role=button div that distinguishes
+  // a quick tap (open the fullscreen modal) from a drag-orbit (let
+  // model-viewer handle the rotation in place). The inner model-viewer
+  // keeps camera-controls + auto-rotate so the thumbnail itself remains
+  // interactive — the user gets BOTH inline orbit AND tap-to-expand.
+  if (info && (info.kind === "glb" || info.kind === "stl")) {
+    const openModal = open3DModal;
+    // pointerdown coords; nulled on pointerup so each gesture is its own
+    // span. ~6px slop matches macOS click-vs-drag conventions and avoids
+    // accidental modal opens during a tiny drag start.
+    const DRAG_SLOP_PX = 6;
+    return (
+      <div
+        className="af-3d-thumb"
+        role="button"
+        tabIndex={0}
+        aria-label="Inspect 3D asset — drag to rotate, tap to open fullscreen"
+        title="Drag to rotate · Tap to inspect fullscreen"
+        onPointerDown={(e) => {
+          // Record where the pointer landed; we'll compare on pointerup.
+          (e.currentTarget as HTMLElement).dataset.dx0 = String(e.clientX);
+          (e.currentTarget as HTMLElement).dataset.dy0 = String(e.clientY);
+        }}
+        onPointerUp={(e) => {
+          const node = e.currentTarget as HTMLElement;
+          const x0 = parseFloat(node.dataset.dx0 ?? "NaN");
+          const y0 = parseFloat(node.dataset.dy0 ?? "NaN");
+          delete node.dataset.dx0;
+          delete node.dataset.dy0;
+          if (Number.isNaN(x0) || Number.isNaN(y0)) return;
+          const dx = e.clientX - x0;
+          const dy = e.clientY - y0;
+          // Drag → model-viewer handled the orbit; do NOT open modal.
+          if (Math.hypot(dx, dy) > DRAG_SLOP_PX) return;
+          openModal?.(jobId, label);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openModal?.(jobId, label);
+          }
+        }}
+      >
+        <AssetViewer jobId={jobId} preloaded={info} compact />
+        <span className="af-3d-thumb-hint" aria-hidden>
+          ⤢ Inspect
+        </span>
+      </div>
+    );
+  }
+
+  // SVG path — keep the existing lightbox flow so click-to-enlarge still
+  // works (model-viewer doesn't render SVG).
+  if (info?.kind === "svg" && svg) {
+    return (
+      <button
+        type="button"
+        className="af-svg-tile-btn"
+        onClick={() => openLightbox?.(svg, label)}
+        title="Click to enlarge"
+      >
+        <img className="af-svg-tile" src={svgDataUri(svg)} alt={label} />
+        <span className="af-svg-zoom-hint" aria-hidden>⤢</span>
+      </button>
+    );
+  }
+
+  return <div className="af-svg-tile is-empty">file missing</div>;
+}
+
 function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
   const asset = result?.asset ?? {};
   const palette: string[] = Array.isArray(asset.palette) ? asset.palette : [];
@@ -170,55 +299,14 @@ function DesignerOutput({ result, jobId }: { result: any; jobId: number }) {
   const style = asset.style ?? "";
   const briefForImage = asset.brief_for_image_gen ?? "";
   const hasAsset = typeof asset.asset_path === "string" && asset.asset_path.length > 0;
-  const openLightbox = useOpenSvgLightbox();
-  const [svg, setSvg] = useState<string | null>(null);
-  const [svgLoaded, setSvgLoaded] = useState(false);
-  useEffect(() => {
-    if (!hasAsset) return;
-    let cancelled = false;
-    api
-      .readJobSvg(jobId)
-      .then((v) => {
-        if (!cancelled) {
-          setSvg(v);
-          setSvgLoaded(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setSvgLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId, hasAsset]);
   return (
     <div className="af-body af-body--designer">
       <div className="af-preview">
-        {hasAsset ? (
-          svg ? (
-            <button
-              type="button"
-              className="af-svg-tile-btn"
-              onClick={() => openLightbox?.(svg, `designer #${jobId} · ${dims || "preview"}`)}
-              title="Click to enlarge"
-            >
-              <img
-                className="af-svg-tile"
-                src={svgDataUri(svg)}
-                alt="Designer SVG preview"
-              />
-              <span className="af-svg-zoom-hint" aria-hidden>⤢</span>
-            </button>
-          ) : svgLoaded ? (
-            <div className="af-svg-tile is-empty">file missing</div>
-          ) : (
-            <div className="af-svg-tile is-loading">…</div>
-          )
-        ) : (
-          <div className="af-svg-tile is-empty" title="The designer's SVG step failed or was truncated; only the text brief was produced">
-            no svg yet
-          </div>
-        )}
+        <JobAssetPreview
+          jobId={jobId}
+          hasAsset={hasAsset}
+          label={`designer #${jobId} · ${dims || "preview"}`}
+        />
       </div>
       <div className="af-meta-block">
         {dims && <div className="af-meta">{dims}</div>}
@@ -275,55 +363,14 @@ function PublisherOutput({ result, jobId }: { result: any; jobId: number }) {
   const niche = typeof result?.niche === "string" ? result.niche : null;
   const description = typeof result?.description === "string" ? result.description : "";
   const hasAsset = typeof result?.asset_path === "string" && result.asset_path.length > 0;
-  const openLightbox = useOpenSvgLightbox();
-  const [svg, setSvg] = useState<string | null>(null);
-  const [svgLoaded, setSvgLoaded] = useState(false);
-  useEffect(() => {
-    if (!hasAsset) return;
-    let cancelled = false;
-    api
-      .readJobSvg(jobId)
-      .then((v) => {
-        if (!cancelled) {
-          setSvg(v);
-          setSvgLoaded(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setSvgLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId, hasAsset]);
   return (
     <div className="af-body af-body--designer">
       <div className="af-preview">
-        {hasAsset ? (
-          svg ? (
-            <button
-              type="button"
-              className="af-svg-tile-btn"
-              onClick={() => openLightbox?.(svg, `publisher #${jobId} · ${title || `Listing #${listingId}`}`)}
-              title="Click to enlarge"
-            >
-              <img
-                className="af-svg-tile"
-                src={svgDataUri(svg)}
-                alt="Final product preview"
-              />
-              <span className="af-svg-zoom-hint" aria-hidden>⤢</span>
-            </button>
-          ) : svgLoaded ? (
-            <div className="af-svg-tile is-empty">file missing</div>
-          ) : (
-            <div className="af-svg-tile is-loading">…</div>
-          )
-        ) : (
-          <div className="af-svg-tile is-empty" title="Listing published without an SVG asset (text-only listing)">
-            no svg
-          </div>
-        )}
+        <JobAssetPreview
+          jobId={jobId}
+          hasAsset={hasAsset}
+          label={`publisher #${jobId} · ${title || `Listing #${listingId}`}`}
+        />
       </div>
       <div className="af-meta-block">
         <div className="af-title">{title || `Listing #${listingId}`}</div>
@@ -643,6 +690,11 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>("all");
   const [lightbox, setLightbox] = useState<{ svg: string; label: string } | null>(null);
   const openLightbox = useCallback((svg: string, label: string) => setLightbox({ svg, label }), []);
+  const [modal3d, setModal3d] = useState<{ jobId: number; title: string } | null>(null);
+  const openModal3d = useCallback(
+    (jobId: number, title: string) => setModal3d({ jobId, title }),
+    [],
+  );
   const refreshTimer = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -756,6 +808,7 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
 
   return (
     <SvgLightboxCtx.Provider value={openLightbox}>
+    <Open3DModalCtx.Provider value={openModal3d}>
     <div className={`af-panel${alwaysOpen ? " is-always-open" : ""}${wide ? " is-wide" : ""}`}>
       <div className="af-controls">
         <div className="af-chip-row">
@@ -828,7 +881,15 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
       {lightbox && (
         <SvgLightbox svg={lightbox.svg} label={lightbox.label} onClose={() => setLightbox(null)} />
       )}
+      {modal3d && (
+        <Asset3DModal
+          jobId={modal3d.jobId}
+          title={modal3d.title}
+          onClose={() => setModal3d(null)}
+        />
+      )}
     </div>
+    </Open3DModalCtx.Provider>
     </SvgLightboxCtx.Provider>
   );
 }

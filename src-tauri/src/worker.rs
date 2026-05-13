@@ -112,7 +112,15 @@ impl Worker {
         self.stdin.lock().await.write_all(line.as_bytes()).await?;
         self.stdin.lock().await.flush().await?;
 
-        let value = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
+        // Designer for 3D jobs is the slowest agent: Anthropic asset-description
+        // call (~10s) → optional nanobanana ref render (~10s) → Meshy/Tripo
+        // text-or-image-to-3D (often 60–180s preview, up to ~300s when queued)
+        // → multi-angle pure-numpy rasterizer (~20-40s for 5 angles at 1024px
+        // on a real generated mesh). 240s blew past on legit jobs; 600s gives
+        // comfortable headroom for Meshy preview + our renderer without
+        // masking a truly stuck process (refine pass is still bounded to
+        // ~600s inside the meshy client itself).
+        let value = tokio::time::timeout(std::time::Duration::from_secs(600), rx)
             .await
             .map_err(|_| anyhow!("worker request timed out"))??;
         Ok(value)

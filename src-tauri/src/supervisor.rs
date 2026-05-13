@@ -310,6 +310,70 @@ async fn run_worker_loop(
                                     result: result.clone(),
                                 });
 
+                                // Agent-to-agent message logging. Workers can
+                                // attach a top-level `messages` array of
+                                // {from, to, topic?, content, importance?} to
+                                // teach / nudge other agents. Mirror each into
+                                // the agent_messages table so the UI can show a
+                                // conversation log.
+                                if let Some(msgs) = result.get("messages").and_then(|v| v.as_array()) {
+                                    let pool_msgs = pool.clone();
+                                    let bus_msgs = bus.clone();
+                                    let role_msgs = role.to_string();
+                                    let msgs_owned: Vec<serde_json::Value> = msgs.clone();
+                                    let job_id_msgs = job_id;
+                                    let project_id_msgs = project_id;
+                                    tokio::spawn(async move {
+                                        let now = chrono::Utc::now().timestamp();
+                                        for m in &msgs_owned {
+                                            let from = m.get("from").and_then(|v| v.as_str())
+                                                .unwrap_or(role_msgs.as_str()).to_string();
+                                            let to = m.get("to").and_then(|v| v.as_str())
+                                                .unwrap_or("*").to_string();
+                                            let topic = m.get("topic").and_then(|v| v.as_str()).map(String::from);
+                                            let content = m.get("content").and_then(|v| v.as_str())
+                                                .unwrap_or("").to_string();
+                                            if content.is_empty() { continue; }
+                                            let importance = m.get("importance").and_then(|v| v.as_str())
+                                                .filter(|i| matches!(*i, "info" | "heads_up" | "critical"))
+                                                .unwrap_or("info").to_string();
+                                            let job_link = m.get("job_id").and_then(|v| v.as_i64())
+                                                .or(Some(job_id_msgs));
+                                            let insert = sqlx::query(
+                                                "INSERT INTO agent_messages \
+                                                 (project_id, from_role, to_role, topic, content, importance, job_id, ts) \
+                                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                            )
+                                            .bind(project_id_msgs)
+                                            .bind(&from)
+                                            .bind(&to)
+                                            .bind(&topic)
+                                            .bind(&content)
+                                            .bind(&importance)
+                                            .bind(job_link)
+                                            .bind(now)
+                                            .execute(&pool_msgs)
+                                            .await;
+                                            if let Err(e) = insert {
+                                                tracing::warn!("agent_messages insert failed: {e}");
+                                                continue;
+                                            }
+                                            bus_msgs.send(SupervisorEvent::WorkerNotification {
+                                                role: from.clone(),
+                                                method: "agent_message".into(),
+                                                params: serde_json::json!({
+                                                    "from": from,
+                                                    "to": to,
+                                                    "topic": topic,
+                                                    "content": content,
+                                                    "importance": importance,
+                                                    "ts": now,
+                                                }),
+                                            });
+                                        }
+                                    });
+                                }
+
                                 // CFO closes the pipeline cycle: sum contributions,
                                 // compute true net (using gross_usd so Etsy fees are
                                 // excluded from cost-margin math), distribute wealth.
@@ -458,6 +522,25 @@ async fn run_worker_loop(
                                 // full no-op so the sandbox pipeline keeps
                                 // running unchanged.
                                 if role == "publisher" {
+                                    // Defense-in-depth: if the publisher result lacks an
+                                    // asset_path, every downstream marketplace handler
+                                    // (POD/Cults3D/Sketchfab/Gumroad/MMF/Etsy) will fail
+                                    // with the same "missing asset_path" error. Emit one
+                                    // JobFailed event and skip the fan-out instead of
+                                    // cascading five identical errors to the UI.
+                                    let has_asset = result.get("asset_path")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| !s.is_empty())
+                                        .unwrap_or(false);
+                                    if !has_asset {
+                                        bus.send(SupervisorEvent::JobFailed {
+                                            role: "publisher".into(),
+                                            job_id,
+                                            error: "publisher result missing asset_path — skipping marketplace fan-out (upstream designer produced no asset)".into(),
+                                        });
+                                        continue;
+                                    }
+
                                     let pod_enabled = crate::secrets::get("pod_enabled")
                                         .ok().flatten()
                                         .map(|v| v.eq_ignore_ascii_case("true"))
@@ -466,6 +549,7 @@ async fn run_worker_loop(
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
                                     let route_to_pod = pod_enabled && product_type == "sticker";
+                                    let is_3d = matches!(product_type, "stl_file" | "3d_model");
 
                                     if route_to_pod {
                                         // POD path: skip direct Etsy publish — Printify
@@ -503,6 +587,94 @@ async fn run_worker_loop(
                                                 .await;
                                             });
                                         }
+                                    }
+
+                                    // Parallel Cults3D fan-out for 3D assets. Runs alongside
+                                    // (not instead of) the Etsy path — same mesh listed on
+                                    // both stores. Gated on cults3d_enabled so disabled
+                                    // accounts pay zero cost.
+                                    let cults3d_enabled = crate::secrets::get("cults3d_enabled")
+                                        .ok().flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    if is_3d && cults3d_enabled {
+                                        let bus_for_c3d = bus.clone();
+                                        let pool_for_c3d = pool.clone();
+                                        let project_id_for_c3d = project_id;
+                                        let result_clone = result.clone();
+                                        tokio::spawn(async move {
+                                            crate::cults3d_publish::handle_publisher_complete_cults3d(
+                                                &pool_for_c3d,
+                                                project_id_for_c3d,
+                                                &bus_for_c3d,
+                                                &result_clone,
+                                            )
+                                            .await;
+                                        });
+                                    }
+
+                                    // Parallel Sketchfab fan-out for 3D assets. Same pattern:
+                                    // gated on sketchfab_enabled, runs alongside Etsy + Cults3D.
+                                    let sketchfab_enabled = crate::secrets::get("sketchfab_enabled")
+                                        .ok().flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    if is_3d && sketchfab_enabled {
+                                        let bus_for_sf = bus.clone();
+                                        let pool_for_sf = pool.clone();
+                                        let project_id_for_sf = project_id;
+                                        let result_clone = result.clone();
+                                        tokio::spawn(async move {
+                                            crate::sketchfab_publish::handle_publisher_complete_sketchfab(
+                                                &pool_for_sf,
+                                                project_id_for_sf,
+                                                &bus_for_sf,
+                                                &result_clone,
+                                            )
+                                            .await;
+                                        });
+                                    }
+
+                                    // Parallel Gumroad fan-out. Same pattern.
+                                    let gumroad_enabled = crate::secrets::get("gumroad_enabled")
+                                        .ok().flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    if is_3d && gumroad_enabled {
+                                        let bus_for_gr = bus.clone();
+                                        let pool_for_gr = pool.clone();
+                                        let project_id_for_gr = project_id;
+                                        let result_clone = result.clone();
+                                        tokio::spawn(async move {
+                                            crate::gumroad_publish::handle_publisher_complete_gumroad(
+                                                &pool_for_gr,
+                                                project_id_for_gr,
+                                                &bus_for_gr,
+                                                &result_clone,
+                                            )
+                                            .await;
+                                        });
+                                    }
+
+                                    // Parallel MyMiniFactory fan-out. Same pattern.
+                                    let mmf_enabled = crate::secrets::get("mmf_enabled")
+                                        .ok().flatten()
+                                        .map(|v| v.eq_ignore_ascii_case("true"))
+                                        .unwrap_or(false);
+                                    if is_3d && mmf_enabled {
+                                        let bus_for_mmf = bus.clone();
+                                        let pool_for_mmf = pool.clone();
+                                        let project_id_for_mmf = project_id;
+                                        let result_clone = result.clone();
+                                        tokio::spawn(async move {
+                                            crate::myminifactory_publish::handle_publisher_complete_mmf(
+                                                &pool_for_mmf,
+                                                project_id_for_mmf,
+                                                &bus_for_mmf,
+                                                &result_clone,
+                                            )
+                                            .await;
+                                        });
                                     }
                                 }
 

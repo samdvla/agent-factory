@@ -1,13 +1,20 @@
+pub mod asset_host_github;
 pub mod budget;
 pub mod commands;
+pub mod cults3d;
+pub mod cults3d_publish;
 pub mod db;
 pub mod etsy;
 pub mod etsy_ingest;
 pub mod etsy_polling;
 pub mod etsy_publish;
 pub mod events;
+pub mod gumroad;
+pub mod gumroad_publish;
 pub mod heartbeat;
 pub mod llm;
+pub mod myminifactory;
+pub mod myminifactory_publish;
 pub mod oauth_server;
 pub mod pnl;
 pub mod pod_publish;
@@ -16,6 +23,8 @@ pub mod prompts;
 pub mod queue;
 pub mod raster;
 pub mod secrets;
+pub mod sketchfab;
+pub mod sketchfab_publish;
 pub mod supervisor;
 pub mod worker;
 
@@ -143,6 +152,10 @@ pub fn run() {
             commands::cmd_set_prompt_override,
             commands::cmd_clear_prompt_override,
             commands::cmd_prompt_history,
+            commands::cmd_agent_steer_roles,
+            commands::cmd_agent_steer_add,
+            commands::cmd_agent_steer_list,
+            commands::cmd_agent_steer_clear,
             commands::cmd_read_asset_svg,
             commands::cmd_etsy_listing_review_info,
             commands::cmd_etsy_discard_draft,
@@ -151,10 +164,57 @@ pub fn run() {
             commands::cmd_resume_from_smoke_test,
             commands::cmd_list_recent_jobs,
             commands::cmd_rate_job,
+            commands::cmd_chat_with_agent,
             commands::cmd_read_job_svg,
             commands::cmd_unrated_job_count,
             commands::cmd_printify_verify,
             commands::cmd_printify_status,
+            commands::cmd_post_agent_message,
+            commands::cmd_list_agent_messages,
+            commands::cmd_agent_messages_since,
+            commands::cmd_list_listing_stats,
+            commands::cmd_listing_stats_history,
+            commands::cmd_tripo_verify,
+            commands::cmd_tripo_status,
+            commands::cmd_meshy_verify,
+            commands::cmd_meshy_status,
+            commands::cmd_cults3d_verify,
+            commands::cmd_cults3d_set_enabled,
+            commands::cmd_cults3d_status,
+            commands::cmd_cults3d_set_daily_cap,
+            commands::cmd_cults3d_list_publishes,
+            commands::cmd_sketchfab_verify,
+            commands::cmd_sketchfab_set_enabled,
+            commands::cmd_sketchfab_status,
+            commands::cmd_sketchfab_set_daily_cap,
+            commands::cmd_sketchfab_set_sell_on_store,
+            commands::cmd_sketchfab_list_publishes,
+            commands::cmd_gumroad_verify,
+            commands::cmd_gumroad_set_enabled,
+            commands::cmd_gumroad_status,
+            commands::cmd_gumroad_set_daily_cap,
+            commands::cmd_gumroad_list_publishes,
+            commands::cmd_mmf_verify,
+            commands::cmd_mmf_set_enabled,
+            commands::cmd_mmf_set_sell_paid,
+            commands::cmd_mmf_status,
+            commands::cmd_mmf_set_daily_cap,
+            commands::cmd_mmf_list_publishes,
+            commands::cmd_youtube_verify,
+            commands::cmd_youtube_status,
+            commands::cmd_higgsfield_status,
+            commands::cmd_higgsfield_set_enabled,
+            commands::cmd_github_asset_host_verify,
+            commands::cmd_read_job_asset,
+            commands::cmd_read_listing_asset,
+            commands::cmd_get_shop_focus,
+            commands::cmd_set_shop_focus,
+            commands::cmd_get_character_pool,
+            commands::cmd_set_character_pool,
+            commands::cmd_get_image_to_3d_provider,
+            commands::cmd_set_image_to_3d_provider,
+            commands::cmd_google_verify,
+            commands::cmd_google_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

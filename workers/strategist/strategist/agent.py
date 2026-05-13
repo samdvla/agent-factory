@@ -47,7 +47,20 @@ def _prompts_path() -> str:
     return os.path.join(_data_dir(), "prompts.json")
 
 
-def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 5) -> str:
+    """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
+    Returns the response body as utf-8 string. Raises on final failure.
+
+    HTTP 529 is Anthropic's load-shedding signal — typical overload events
+    last 30s-2min, so the legacy 1s/2s/4s schedule (~7s total) blew right
+    through them and failed real jobs. 529 gets its own longer schedule
+    (8s/15s/30s/60s/60s). Other 5xx + URLError keep the fast schedule.
+
+    _retry_request: see workers/research/tests/test_research.py for behavior coverage.
+    """
+    import time as _time
+    overload_delays = (8, 15, 30, 60, 60)
+    fast_delays = (1, 2, 4, 8, 16)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -55,19 +68,64 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             last_exc = e
+            # Capture the response body once; HTTPError\'s default
+            # str() is just "HTTP Error N: Reason" and the actual
+            # diagnostic lives in the body that Anthropic returns.
+            try:
+                _body = e.read().decode("utf-8", errors="replace")
+                if _body:
+                    e.msg = f"{e.msg}: {_body[:600]}"
+            except Exception:
+                pass
+            if e.code == 529 and attempt < max_attempts - 1:
+                delay = overload_delays[min(attempt, len(overload_delays) - 1)]
+                print(
+                    f"[retry] HTTP 529 (Anthropic overloaded) attempt "
+                    f"{attempt+1}/{max_attempts}; sleeping {delay}s",
+                    file=sys.stderr, flush=True,
+                )
+                _time.sleep(delay)
+                continue
             if 500 <= e.code < 600 and attempt < max_attempts - 1:
-                time.sleep(2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
+                print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
                 continue
             raise
         except urllib.error.URLError as e:
             last_exc = e
             if attempt < max_attempts - 1:
-                time.sleep(2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
+                print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
+                _time.sleep(delay)
                 continue
             raise
     if last_exc:
         raise last_exc
     raise RuntimeError("retry: unreachable")
+
+def _use_json_prefill() -> bool:
+    """Anthropic's Messages API supports assistant prefill (seeding the
+    assistant turn with "{" to force structured JSON output). Some bridge
+    proxies normalize / strip the trailing assistant message and reject the
+    request with HTTP 400. Default ON; flip OFF when ANTHROPIC_BASE_URL
+    points at anything other than Anthropic's direct host."""
+    import os as _os
+    url = _os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if not url:
+        return True
+    return "api.anthropic.com" in url
+
+
+def _messages_for_json_call(user_content: str) -> list[dict]:
+    """Build the messages array for a JSON-emitting Anthropic call. Adds the
+    assistant prefill only when the API supports it (direct Anthropic, not
+    a bridge proxy)."""
+    msgs: list[dict] = [{"role": "user", "content": user_content}]
+    if _use_json_prefill():
+        msgs.append({"role": "assistant", "content": "{"})
+    return msgs
+
 
 
 def read_outcomes(path: str | None = None, limit: int = TAIL_LIMIT) -> list[dict]:
@@ -115,16 +173,41 @@ def write_prompts(prompts: dict) -> None:
     os.replace(tmp, p)
 
 
+_MARKETPLACE_SOURCES = {
+    "cults3d_publish": "cults3d",
+    "sketchfab_publish": "sketchfab",
+    "gumroad_publish": "gumroad",
+    "mmf_publish": "mmf",
+}
+
+
 def summarize_outcomes(outcomes: list[dict]) -> str:
-    """One-line per outcome: niche · sales · revenue. Lets the model
-    pattern-match what's working without dumping raw JSON at it."""
+    """One-line per outcome: niche · sales · revenue · views/favorites · marketplace.
+    Lets the model pattern-match four distinct failure modes:
+      - no views: the niche/visual is wrong (boring concept, bad SEO)
+      - views, no favorites: the thumbnail isn't pulling clicks
+      - views + favorites, no sales: price/title/description is the blocker
+      - listed everywhere, zero traction: niche has no demand on ANY platform
+    """
     rows: list[str] = []
     for o in outcomes:
         niche = o.get("niche") or "?"
         sales = o.get("sales", "?")
         rev = o.get("revenue_usd", "?")
+        views = o.get("views")
+        favs = o.get("favorites")
         rationale = o.get("rationale") or ""
-        rows.append(f"  · niche={niche!r}  sales={sales}  rev=${rev}  {rationale[:80]}")
+        source = (o.get("source") or "").strip()
+        marketplace_label = _MARKETPLACE_SOURCES.get(source)
+        impression = ""
+        if views is not None or favs is not None:
+            impression = f"  views={views}  favorites={favs}"
+        marketplace_suffix = ""
+        if marketplace_label:
+            marketplace_suffix = f"  marketplace={marketplace_label}"
+        rows.append(
+            f"  · niche={niche!r}  sales={sales}  rev=${rev}{impression}{marketplace_suffix}  {rationale[:80]}"
+        )
     return "\n".join(rows) if rows else "  (no outcomes yet)"
 
 
@@ -142,6 +225,32 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         "with the rasterizer\n"
         " • Product-specific framing (currently sticker-first)\n"
         " • Hard structural rules (viewBox, shape count, no markdown)\n\n"
+
+        "DIAGNOSE FROM THE OUTCOMES TABLE — distinguish three failure modes:\n"
+        " • LOW VIEWS → niche/SEO problem (boring concept, wrong tags). "
+        "Designer can help by making the thumbnail more arresting; tags + "
+        "title fixes are the listing worker's job.\n"
+        " • VIEWS BUT NO FAVORITES → thumbnail doesn't pull. This is the "
+        "Designer's PRIMARY signal. Fix: stronger focal point, bolder "
+        "color contrast, clearer subject at 200px scale.\n"
+        " • FAVORITES BUT NO SALES → price/listing copy problem. Tell the "
+        "Designer to keep doing what's pulling favorites; the conversion "
+        "fix lives elsewhere.\n"
+        "Use the views/favorites columns to decide which mode dominates "
+        "before you rewrite the prompt.\n\n"
+
+        "ATTEND TO MARKETPLACE SIGNAL — outcomes may carry a `marketplace=` "
+        "tag (etsy / cults3d / sketchfab / mmf / gumroad). Same design "
+        "fanned out across all 5; different audiences live on each:\n"
+        " • etsy / cults3d → gift-buyers, hobby printers (clean silhouettes, "
+        "printable scale)\n"
+        " • sketchfab → indie game devs, AR/VR audiences (cleaner topology, "
+        "appealing turntable preview)\n"
+        " • mmf → mini collectors, tabletop (28mm scale, support-friendly)\n"
+        " • gumroad → general digital-goods buyers (presentation-driven, "
+        "thumbnail does all the work)\n"
+        "If one marketplace consistently lags, the design has a fit problem "
+        "for THAT audience — note it so the Designer can adjust framing.\n\n"
 
         "DRAW ON EXTERNAL DESIGN KNOWLEDGE — use what you know about:\n"
         " • Battle-tested prompt patterns from Midjourney / Stable Diffusion "
@@ -190,7 +299,7 @@ def call_anthropic(api_key: str, system: str, user: str) -> tuple[dict, int, int
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system,
-        "messages": [{"role": "user", "content": user}],
+                "messages": _messages_for_json_call(user),
     }).encode("utf-8")
     req = urllib.request.Request(
         f"{ANTHROPIC_BASE_URL}/v1/messages",
@@ -205,6 +314,12 @@ def call_anthropic(api_key: str, system: str, user: str) -> tuple[dict, int, int
     raw = _retry_request(req, timeout=90)
     response = json.loads(raw)
     text = response["content"][0]["text"].strip()
+    # Restore the prefilled "{" assistant.content so the JSON parser
+    # sees a complete object. We only prepend when the response
+    # contains no "{" at all — fenced or wrapped mock responses
+    # already carry their own brace and pass through untouched.
+    if "{" not in text:
+        text = "{" + text
     usage = response.get("usage", {})
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
@@ -294,6 +409,32 @@ def process_job(job_id: int, payload: dict) -> dict:
         f"[strategist] job_id={job_id} updated designer prompt ({len(improved)} chars). rationale: {rationale[:120]}",
         file=sys.stderr, flush=True,
     )
+    # Conversation log: tell the rest of the floor what changed, and why.
+    # Designer is the direct recipient; the broadcast keeps research / listing
+    # aware that the playbook just shifted under them.
+    summary = rationale.strip() or "Tightened designer prompt based on recent outcomes."
+    messages = [
+        {
+            "from": "strategist",
+            "to": "designer",
+            "topic": "prompt_update",
+            "importance": "heads_up",
+            "content": (
+                f"Updated your system prompt ({len(improved)} chars). "
+                f"Why: {summary}"
+            ),
+        },
+        {
+            "from": "strategist",
+            "to": "*",
+            "topic": "prompt_update",
+            "importance": "info",
+            "content": (
+                f"Designer playbook refreshed after {len(read_outcomes())} outcomes. "
+                f"Headline: {summary[:160]}"
+            ),
+        },
+    ]
     return {
         "ok": True,
         "role_tweaked": "designer",
@@ -302,4 +443,5 @@ def process_job(job_id: int, payload: dict) -> dict:
         "model": MODEL,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "messages": messages,
     }

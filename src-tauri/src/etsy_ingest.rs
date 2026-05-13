@@ -103,13 +103,26 @@ pub struct MessagesPage {
     pub results: Vec<Message>,
 }
 
+/// Snapshot of a listing's impression stats from Etsy's
+/// `/shops/{shop_id}/listings/{listing_id}/stats` endpoint. Etsy v3 names
+/// the fields `views`, `favorites`, `listings_total_orders`; we normalize
+/// to `total_orders` for our own bookkeeping.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ListingStats {
+    #[serde(default)]
+    pub views: i64,
+    #[serde(default)]
+    pub favorites: i64,
+    #[serde(default, rename = "listings_total_orders")]
+    pub total_orders: i64,
+}
+
 /// Fetch the most recent paid + non-canceled receipts from a shop, returning
 /// only those whose `receipt_id` is strictly greater than `last_seen_id`.
 pub async fn fetch_new_receipts(
     client: &reqwest::Client,
     api_base: &str,
     access_token: &str,
-    keystring: &str,
     shop_id: i64,
     last_seen_id: i64,
 ) -> Result<Vec<Receipt>> {
@@ -139,13 +152,44 @@ pub async fn fetch_new_receipts(
         .collect())
 }
 
+/// Fetch impression stats for a single listing. Returns views, favorites,
+/// and total orders. The endpoint is rate-limited per app — callers should
+/// poll on a long interval and stagger requests across listings.
+pub async fn fetch_listing_stats(
+    client: &reqwest::Client,
+    api_base: &str,
+    access_token: &str,
+    shop_id: i64,
+    etsy_listing_id: i64,
+) -> Result<ListingStats> {
+    let url = format!(
+        "{}/shops/{}/listings/{}/stats",
+        api_base, shop_id, etsy_listing_id
+    );
+    let resp = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .header("x-api-key", crate::etsy::api_key_header()?)
+        .send()
+        .await
+        .context("fetch listing stats GET failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("fetch listing stats HTTP {}: {}", status, body);
+    }
+    let body = resp.text().await.context("read listing stats body")?;
+    let stats: ListingStats = serde_json::from_str(&body)
+        .with_context(|| format!("parse listing stats JSON: {body}"))?;
+    Ok(stats)
+}
+
 /// Fetch recent conversations for the shop. The caller iterates these and
 /// requests messages per conversation.
 pub async fn fetch_conversations(
     client: &reqwest::Client,
     api_base: &str,
     access_token: &str,
-    keystring: &str,
     shop_id: i64,
 ) -> Result<Vec<Conversation>> {
     let url = format!(
@@ -175,7 +219,6 @@ pub async fn fetch_messages(
     client: &reqwest::Client,
     api_base: &str,
     access_token: &str,
-    keystring: &str,
     shop_id: i64,
     conversation_id: i64,
 ) -> Result<Vec<Message>> {
@@ -209,14 +252,13 @@ pub async fn fetch_new_messages(
     client: &reqwest::Client,
     api_base: &str,
     access_token: &str,
-    keystring: &str,
     shop_id: i64,
     last_seen_id: i64,
 ) -> Result<Vec<Message>> {
-    let convs = fetch_conversations(client, api_base, access_token, keystring, shop_id).await?;
+    let convs = fetch_conversations(client, api_base, access_token, shop_id).await?;
     let mut out: Vec<Message> = Vec::new();
     for c in convs {
-        match fetch_messages(client, api_base, access_token, keystring, shop_id, c.conversation_id)
+        match fetch_messages(client, api_base, access_token, shop_id, c.conversation_id)
             .await
         {
             Ok(msgs) => {
@@ -251,7 +293,6 @@ pub async fn post_reply(
     client: &reqwest::Client,
     api_base: &str,
     access_token: &str,
-    keystring: &str,
     shop_id: i64,
     conversation_id: i64,
     text: &str,
@@ -284,14 +325,19 @@ pub async fn post_reply_with_status(
     conversation_id: i64,
     text: &str,
 ) -> Result<()> {
-    let keystring = crate::secrets::get("etsy_api_keystring")?
-        .ok_or_else(|| anyhow::anyhow!("etsy_api_keystring not in keychain"))?;
+    // api_key_header() reads the keystring from the keychain on each request,
+    // but we still surface a missing key early for a clearer error.
+    if crate::secrets::get("etsy_api_keystring")?
+        .map(|k| k.is_empty())
+        .unwrap_or(true)
+    {
+        return Err(anyhow::anyhow!("etsy_api_keystring not in keychain"));
+    }
     let access = etsy::ensure_fresh_token(client).await?;
     post_reply(
         client,
         etsy::API_BASE,
         &access,
-        &keystring,
         shop_id,
         conversation_id,
         text,
@@ -312,6 +358,82 @@ fn data_dir() -> std::path::PathBuf {
 
 fn outcomes_path() -> std::path::PathBuf {
     data_dir().join("outcomes.jsonl")
+}
+
+/// Append an impression-only row to outcomes.jsonl. We emit one of these
+/// whenever a listing's view or favorite count changes — that gives the
+/// strategist + orchestrator a signal to learn from even before any sale
+/// lands. `source` is "etsy_impressions" so downstream consumers can tell
+/// these apart from receipt rows (which have sales > 0).
+pub fn append_impression_outcome(
+    etsy_listing_id: i64,
+    niche: &str,
+    views: i64,
+    favorites: i64,
+    delta_views: i64,
+    delta_favorites: i64,
+) -> Result<()> {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    let path = outcomes_path();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    use std::io::Write;
+    let row = serde_json::json!({
+        "ts": chrono::Utc::now().timestamp(),
+        "listing_id": etsy_listing_id,
+        "niche": niche,
+        "sales": 0,
+        "revenue_usd": 0.0,
+        "views": views,
+        "favorites": favorites,
+        "delta_views": delta_views,
+        "delta_favorites": delta_favorites,
+        "source": "etsy_impressions",
+    });
+    writeln!(f, "{row}").context("write outcomes.jsonl impression row")?;
+    Ok(())
+}
+
+/// Append a cross-marketplace publish row to outcomes.jsonl. Used by the
+/// non-Etsy publishers (Cults3D, Sketchfab, Gumroad, MyMiniFactory) so the
+/// strategist can see how listings are spread across all stores even before
+/// any sale lands. `source` should be "sketchfab_publish", etc.
+pub fn append_marketplace_publish_outcome(
+    source: &str,
+    local_listing_id: i64,
+    niche: &str,
+    title: &str,
+    marketplace_id: &str,
+    url: Option<&str>,
+    price_usd: f64,
+) -> Result<()> {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    let path = outcomes_path();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    use std::io::Write;
+    let row = serde_json::json!({
+        "ts": chrono::Utc::now().timestamp(),
+        "listing_id": local_listing_id,
+        "niche": niche,
+        "title": title,
+        "sales": 0,
+        "revenue_usd": 0.0,
+        "price_usd": price_usd,
+        "marketplace_id": marketplace_id,
+        "url": url,
+        "source": source,
+    });
+    writeln!(f, "{row}").context("write outcomes.jsonl marketplace publish row")?;
+    Ok(())
 }
 
 /// Append one outcomes.jsonl row per transaction in the receipt. The shape
@@ -477,7 +599,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let new_receipts =
-            fetch_new_receipts(&client, &server.url(), "fake.tok", "KEY123", 9999, 10)
+            fetch_new_receipts(&client, &server.url(), "fake.tok", 9999, 10)
                 .await
                 .unwrap();
         mock.assert_async().await;
@@ -511,7 +633,6 @@ mod tests {
             &client,
             &server.url(),
             "tok123",
-            "k",
             42,
             77,
             "hello world!",
@@ -536,7 +657,7 @@ mod tests {
             .create_async()
             .await;
         let client = reqwest::Client::new();
-        post_reply(&client, &server.url(), "tok", "k", 42, 77, "hi there")
+        post_reply(&client, &server.url(), "tok", 42, 77, "hi there")
             .await
             .unwrap();
         mock.assert_async().await;
@@ -572,7 +693,7 @@ mod tests {
             .await;
         let client = reqwest::Client::new();
         let new_msgs =
-            fetch_new_messages(&client, &server.url(), "tok", "k", 1, /*last_seen=*/ 2)
+            fetch_new_messages(&client, &server.url(), "tok", 1, /*last_seen=*/ 2)
                 .await
                 .unwrap();
         // Only message_id 5 survives (>2, is_seller=false).

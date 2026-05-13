@@ -12,13 +12,20 @@ MAX_TOKENS = 200
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 
-def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 5) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
     Returns the response body as utf-8 string. Raises on final failure.
+
+    HTTP 529 is Anthropic's load-shedding signal — typical overload events
+    last 30s-2min, so the legacy 1s/2s/4s schedule (~7s total) blew right
+    through them and failed real jobs. 529 gets its own longer schedule
+    (8s/15s/30s/60s/60s). Other 5xx + URLError keep the fast schedule.
 
     _retry_request: see workers/research/tests/test_research.py for behavior coverage.
     """
     import time as _time
+    overload_delays = (8, 15, 30, 60, 60)
+    fast_delays = (1, 2, 4, 8, 16)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -26,8 +33,26 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             last_exc = e
+            # Capture the response body once; HTTPError\'s default
+            # str() is just "HTTP Error N: Reason" and the actual
+            # diagnostic lives in the body that Anthropic returns.
+            try:
+                _body = e.read().decode("utf-8", errors="replace")
+                if _body:
+                    e.msg = f"{e.msg}: {_body[:600]}"
+            except Exception:
+                pass
+            if e.code == 529 and attempt < max_attempts - 1:
+                delay = overload_delays[min(attempt, len(overload_delays) - 1)]
+                print(
+                    f"[retry] HTTP 529 (Anthropic overloaded) attempt "
+                    f"{attempt+1}/{max_attempts}; sleeping {delay}s",
+                    file=sys.stderr, flush=True,
+                )
+                _time.sleep(delay)
+                continue
             if 500 <= e.code < 600 and attempt < max_attempts - 1:
-                delay = (2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -35,7 +60,7 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
         except urllib.error.URLError as e:
             last_exc = e
             if attempt < max_attempts - 1:
-                delay = (2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -43,6 +68,131 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
     if last_exc:
         raise last_exc
     raise RuntimeError("retry: unreachable")
+
+def _use_json_prefill() -> bool:
+    """Anthropic's Messages API supports assistant prefill (seeding the
+    assistant turn with "{" to force structured JSON output). Some bridge
+    proxies normalize / strip the trailing assistant message and reject the
+    request with HTTP 400. Default ON; flip OFF when ANTHROPIC_BASE_URL
+    points at anything other than Anthropic's direct host."""
+    import os as _os
+    url = _os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if not url:
+        return True
+    return "api.anthropic.com" in url
+
+
+def _messages_for_json_call(user_content: str) -> list[dict]:
+    """Build the messages array for a JSON-emitting Anthropic call. Adds the
+    assistant prefill only when the API supports it (direct Anthropic, not
+    a bridge proxy)."""
+    msgs: list[dict] = [{"role": "user", "content": user_content}]
+    if _use_json_prefill():
+        msgs.append({"role": "assistant", "content": "{"})
+    return msgs
+
+
+
+def _parse_loose_json_object(text: str) -> dict:
+    """Parse the first JSON object out of `text`, tolerating fences, trailing
+    prose, and the most common Claude-emitted JSON breakage. Three layers:
+
+      1. Strip leading markdown fences.
+      2. raw_decode from the first '{' — handles trailing prose for free.
+      3. On JSONDecodeError inside the JSON, attempt a small set of repairs
+         (trailing-comma strip, newline-in-string normalization) and retry.
+
+    Raises ValueError with a 240-char preview when no JSON exists at all, or
+    when repair attempts still fail. Both the preview AND the failing
+    parser-error location are logged to stderr so they show up in LiveLog.
+    """
+    s = text.strip()
+    if s.startswith("```"):
+        nl = s.find("\n")
+        s = s[nl + 1 :] if nl != -1 else s
+    start = s.find("{")
+    if start == -1:
+        preview = text.strip().replace("\n", " ")[:240]
+        print(
+            f"[parse] no JSON object found; first 240 chars of response: {preview!r}",
+            file=sys.stderr, flush=True,
+        )
+        raise ValueError(
+            f"no JSON object found in response (got prose). first 240 chars: {preview!r}"
+        )
+    body = s[start:]
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError as first_err:
+        repaired = _repair_json_text(body)
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(repaired)
+            print(
+                f"[parse] repaired JSON after initial error: {first_err}",
+                file=sys.stderr, flush=True,
+            )
+        except json.JSONDecodeError as second_err:
+            point = max(0, first_err.pos - 60)
+            snippet = body[point : first_err.pos + 60].replace("\n", " ")
+            print(
+                f"[parse] JSON repair failed. first={first_err} second={second_err}; "
+                f"body near pos {first_err.pos}: ...{snippet}...",
+                file=sys.stderr, flush=True,
+            )
+            raise first_err
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected JSON object, got {type(obj).__name__}")
+    return obj
+
+
+def _repair_json_text(text: str) -> str:
+    """Best-effort repair of common Claude-emitted JSON breakage.
+
+    Handles:
+      • trailing commas before } or ]
+      • CR/LF inside string values (replaced with single spaces)
+      • lone backslashes that aren't starting a valid escape sequence
+    Not a complete JSON5/json-repair; just covers the cases we've actually
+    seen Haiku/Sonnet emit when the design_direction paragraph gets long.
+    """
+    import re as _re
+    # 1. Strip trailing commas before } or ].
+    out = _re.sub(r",(\s*[}\]])", r"\1", text)
+    # 2. Normalize newlines inside string values: replace any \n that lives
+    #    between an opening " and the next " on a different line with a space.
+    #    Conservative — only triggers when we see a newline directly inside
+    #    a string-typed value.
+    def _collapse_newlines_in_strings(s: str) -> str:
+        result = []
+        i = 0
+        in_string = False
+        escape = False
+        while i < len(s):
+            c = s[i]
+            if in_string:
+                if escape:
+                    result.append(c)
+                    escape = False
+                elif c == "\\":
+                    result.append(c)
+                    escape = True
+                elif c == '"':
+                    result.append(c)
+                    in_string = False
+                elif c in ("\n", "\r"):
+                    result.append(" ")  # collapse newline inside string
+                else:
+                    result.append(c)
+            else:
+                result.append(c)
+                if c == '"':
+                    in_string = True
+            i += 1
+        return "".join(result)
+    out = _collapse_newlines_in_strings(out)
+    # 3. Fix lone backslashes that aren't starting a valid escape.
+    out = _re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", out)
+    return out
 
 
 def _append_outcome(outcome: dict) -> None:
@@ -111,7 +261,7 @@ def _call_buyer_panel(
             "model": MODEL,
             "max_tokens": MAX_TOKENS,
             "system": system,
-            "messages": [{"role": "user", "content": user}],
+                        "messages": _messages_for_json_call(user),
         }).encode("utf-8")
         req = urllib.request.Request(
             f"{ANTHROPIC_BASE_URL}/v1/messages",
@@ -125,11 +275,14 @@ def _call_buyer_panel(
         )
         raw = _retry_request(req, timeout=30)
         response = json.loads(raw)
-        text = response["content"][0]["text"].strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-        result = json.loads(text)
+        text = response["content"][0]["text"]
+        # Restore the prefilled "{" assistant.content so the JSON parser
+        # sees a complete object. We only prepend when the response
+        # contains no "{" at all — fenced or wrapped mock responses
+        # already carry their own brace and pass through untouched.
+        if "{" not in text:
+            text = "{" + text
+        result = _parse_loose_json_object(text)
         sales = int(result.get("sales", 0))
         sales = max(0, min(10, sales))  # clamp 0-10
         rationale = str(result.get("rationale", ""))[:200]

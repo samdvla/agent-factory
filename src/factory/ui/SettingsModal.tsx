@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type EtsyStatus } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 
@@ -249,6 +249,142 @@ function BridgeUrlRow() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  ThemeSection — picker for app-wide color theme                       */
+/* ------------------------------------------------------------------ */
+
+type ThemeId = "claude" | "espresso" | "pine" | "plum" | "midnight" | "linen";
+
+interface ThemeDef {
+  id: ThemeId;
+  name: string;
+  blurb: string;
+  swatch: { bg: string; panel: string; accent: string; ink: string };
+}
+
+const THEMES: ThemeDef[] = [
+  {
+    id: "claude",
+    name: "Claude",
+    blurb: "Parchment + clay",
+    swatch: { bg: "#14110d", panel: "#25201b", accent: "#d97757", ink: "#f4ecd8" },
+  },
+  {
+    id: "espresso",
+    name: "Espresso",
+    blurb: "Coffee + caramel",
+    swatch: { bg: "#12100c", panel: "#221c17", accent: "#c79768", ink: "#efe5d0" },
+  },
+  {
+    id: "pine",
+    name: "Pine & Brass",
+    blurb: "Forest + brass",
+    swatch: { bg: "#0e120e", panel: "#1f261f", accent: "#c5a572", ink: "#ecede4" },
+  },
+  {
+    id: "plum",
+    name: "Plum & Honey",
+    blurb: "Aubergine + honey",
+    swatch: { bg: "#14101a", panel: "#26212f", accent: "#d4a574", ink: "#f1ebe1" },
+  },
+  {
+    id: "linen",
+    name: "Linen",
+    blurb: "Cream + brown ink",
+    swatch: { bg: "#f1e9d8", panel: "#ddd2b9", accent: "#b85d3c", ink: "#2b1f12" },
+  },
+  {
+    id: "midnight",
+    name: "Midnight",
+    blurb: "Cool blue (original)",
+    swatch: { bg: "#07090c", panel: "#131a23", accent: "#5fd4f0", ink: "#e6edf3" },
+  },
+];
+
+const THEME_STORAGE_KEY = "agentFactory.theme";
+
+function getCurrentTheme(): ThemeId {
+  try {
+    const t = localStorage.getItem(THEME_STORAGE_KEY) as ThemeId | null;
+    if (t && THEMES.some((th) => th.id === t)) return t;
+  } catch {}
+  return "claude";
+}
+
+function ThemeSection() {
+  const [active, setActive] = useState<ThemeId>(getCurrentTheme);
+
+  const apply = (id: ThemeId) => {
+    setActive(id);
+    try {
+      document.documentElement.setAttribute("data-theme", id);
+      localStorage.setItem(THEME_STORAGE_KEY, id);
+    } catch {}
+    api.setSecret("ui_theme", id).catch(() => {});
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Appearance</div>
+      <div className="settings-helper" style={{ marginBottom: 12 }}>
+        Theme applies instantly across the whole app and persists across launches.
+      </div>
+      <div className="theme-grid">
+        {THEMES.map((t) => {
+          const isActive = active === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              className={`theme-card${isActive ? " is-active" : ""}`}
+              onClick={() => apply(t.id)}
+              aria-pressed={isActive}
+            >
+              <div
+                className="theme-preview"
+                style={{ background: t.swatch.bg, borderColor: t.swatch.panel }}
+              >
+                <div
+                  className="theme-preview-panel"
+                  style={{ background: t.swatch.panel }}
+                >
+                  <span
+                    className="theme-preview-bar"
+                    style={{ background: t.swatch.accent }}
+                  />
+                  <span
+                    className="theme-preview-line"
+                    style={{ background: t.swatch.ink, opacity: 0.85 }}
+                  />
+                  <span
+                    className="theme-preview-line is-short"
+                    style={{ background: t.swatch.ink, opacity: 0.45 }}
+                  />
+                </div>
+                <span
+                  className="theme-preview-dot"
+                  style={{ background: t.swatch.accent }}
+                />
+              </div>
+              <div className="theme-meta">
+                <span className="theme-name">{t.name}</span>
+                <span className="theme-blurb">{t.blurb}</span>
+              </div>
+              {isActive && (
+                <span className="theme-active-tick" aria-hidden="true">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  BudgetRow                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -465,6 +601,1610 @@ function PrintifySection() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  ShopFocusSection: 3D-only / 2D-only / Mixed                         */
+/* ------------------------------------------------------------------ */
+
+function ShopFocusSection() {
+  const [focus, setFocus] = useState<string>("3d_only");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .getShopFocus()
+      .then((r) => setFocus(r.value))
+      .catch(() => {});
+  }, []);
+
+  const handleSet = async (next: string) => {
+    if (next === focus) return;
+    setSaving(true);
+    try {
+      await api.setShopFocus(next);
+      setFocus(next);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const options: Array<{ value: string; label: string; sub: string }> = [
+    {
+      value: "3d_only",
+      label: "3D only",
+      sub: "STL + GLB downloads (Etsy + Cults3D). Pivoted here after 58 unsold 2D drafts.",
+    },
+    {
+      value: "mixed",
+      label: "Mixed",
+      sub: "2D + 3D. Useful while testing both markets.",
+    },
+    {
+      value: "2d_only",
+      label: "2D only",
+      sub: "Stickers, prints, mugs, tees, posters. Original mode.",
+    },
+  ];
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Shop focus</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Drives what kinds of products the orchestrator + research + designer
+        pursue. Restart the supervisor after changing so workers pick up the
+        new SHOP_FOCUS env value.
+      </div>
+      <div className="shop-focus-row">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={`shop-focus-btn${focus === o.value ? " is-active" : ""}`}
+            onClick={() => handleSet(o.value)}
+            disabled={saving}
+          >
+            <span className="shop-focus-btn-label">{o.label}</span>
+            <span className="shop-focus-btn-sub">{o.sub}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  CharacterPoolSection: which archetype tiers the pipeline mines       */
+/* ------------------------------------------------------------------ */
+
+function CharacterPoolSection() {
+  const [pool, setPool] = useState<string>("all");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .getCharacterPool()
+      .then((r) => setPool(r.value))
+      .catch(() => {});
+  }, []);
+
+  const handleSet = async (next: string) => {
+    if (next === pool) return;
+    setSaving(true);
+    try {
+      await api.setCharacterPool(next);
+      setPool(next);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const options: Array<{ value: string; label: string; sub: string }> = [
+    {
+      value: "safe",
+      label: "Safe (recommended)",
+      sub: "Rotates across original anime + mythology + own-universe. Zero IP risk on every draft. Use this until the manual-approval IP gate ships.",
+    },
+    {
+      value: "original_anime",
+      label: "Original anime only",
+      sub: "Generic anime archetypes (shonen swordsman, mecha pilot). Zero IP risk.",
+    },
+    {
+      value: "mythology",
+      label: "Mythology + public-domain",
+      sub: "Greek/Norse gods, yokai, Cthulhu, Arthurian, fairy tales. No IP risk.",
+    },
+    {
+      value: "own_universe",
+      label: "Own universe only",
+      sub: "Original IP we coin from scratch. Best long-term franchise value.",
+    },
+    {
+      value: "all",
+      label: "All four ⚠️",
+      sub: "Includes popular-IP fan art (Naruto/Marvel/Star Wars). Will auto-publish those to Etsy until the IP gate ships. DMCA risk.",
+    },
+    {
+      value: "popular_ip",
+      label: "Popular IP only ⚠️",
+      sub: "Naruto, Marvel, Star Wars, etc. Same DMCA risk as 'All four' until the IP gate ships. Pick deliberately.",
+    },
+  ];
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Character pool</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Controls which archetype tiers the orchestrator + research pull from
+        when picking a 3D niche. Popular-IP drafts are flagged ip_risk=high
+        and held for your approval before publish — no auto-leak. Restart
+        the supervisor after changing.
+      </div>
+      <div className="shop-focus-row">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={`shop-focus-btn${pool === o.value ? " is-active" : ""}`}
+            onClick={() => handleSet(o.value)}
+            disabled={saving}
+          >
+            <span className="shop-focus-btn-label">{o.label}</span>
+            <span className="shop-focus-btn-sub">{o.sub}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  ImageTo3dProviderSection: tripo vs meshy for image→3D                */
+/* ------------------------------------------------------------------ */
+
+function ImageTo3dProviderSection() {
+  const [provider, setProvider] = useState<string>("tripo");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .getImageTo3dProvider()
+      .then((r) => setProvider(r.value))
+      .catch(() => {});
+  }, []);
+
+  const handleSet = async (next: string) => {
+    if (next === provider) return;
+    setSaving(true);
+    try {
+      await api.setImageTo3dProvider(next);
+      setProvider(next);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const options: Array<{ value: string; label: string; sub: string }> = [
+    {
+      value: "tripo",
+      label: "Tripo (default)",
+      sub: "User's preferred provider. Needs TRIPO_API_KEY. If the key is missing the designer falls back to Meshy so the job still completes.",
+    },
+    {
+      value: "meshy",
+      label: "Meshy",
+      sub: "Needs MESHY_API_KEY. Falls back to Tripo if the key is missing.",
+    },
+  ];
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">3D generation provider</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Which provider the designer prefers for both text-to-3D (no reference
+        image) and image-to-3D (nanobanana → 3D). The other provider is the
+        auto-fallback when the preferred key isn't set.
+      </div>
+      <div className="shop-focus-row">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={`shop-focus-btn${provider === o.value ? " is-active" : ""}`}
+            onClick={() => handleSet(o.value)}
+            disabled={saving}
+          >
+            <span className="shop-focus-btn-label">{o.label}</span>
+            <span className="shop-focus-btn-sub">{o.sub}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  GitHubAssetHostSection: configure repo+token for public asset hosting */
+/* ------------------------------------------------------------------ */
+
+function GitHubAssetHostSection() {
+  const [repoDraft, setRepoDraft] = useState("");
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ repo: string | null; tokenPresent: boolean }>({
+    repo: null,
+    tokenPresent: false,
+  });
+
+  useEffect(() => {
+    Promise.all([
+      api.getSecret("github_asset_repo"),
+      api.getSecret("github_asset_token"),
+    ]).then(([r, t]) => {
+      setStatus({
+        repo: r && r.length ? r : null,
+        tokenPresent: !!(t && t.length),
+      });
+    }).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!repoDraft.trim() || !tokenDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      const r = await api.githubAssetHostVerify(repoDraft.trim(), tokenDraft.trim());
+      setVerifyState("ok");
+      setStatus({ repo: r.repo, tokenPresent: true });
+      setTokenDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Asset hosting (GitHub Releases)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Cults3D pulls assets from public HTTPS URLs (no multipart upload).
+        Point us at a PUBLIC repo you own; each 3D asset becomes a release
+        artifact with an immutable download URL. Generate a PAT with{" "}
+        <code>contents:write</code> scope at github.com → Settings →
+        Developer settings → Personal access tokens.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Repo (owner/name)</span>
+          <span className="settings-helper">
+            {status.repo ? `Saved: ${status.repo}` : "e.g. samdavila/agent-factory-assets"}
+          </span>
+        </div>
+        <input
+          type="text"
+          className="settings-cred-input"
+          placeholder={status.repo ?? "owner/name"}
+          value={repoDraft}
+          onChange={(e) => setRepoDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Personal access token</span>
+          <span className="settings-helper">
+            {status.tokenPresent
+              ? "Token saved (hidden). Paste a new one + Verify to replace."
+              : "Fine-grained PAT, contents:write on the asset repo."}
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.tokenPresent ? "•••••• (saved)" : "ghp_…"}
+          value={tokenDraft}
+          onChange={(e) => setTokenDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !repoDraft.trim() || !tokenDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — repo is public and writeable.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Cults3DSection: API creds + Enable toggle + daily cap                */
+/* ------------------------------------------------------------------ */
+
+function Cults3DSection() {
+  const [userDraft, setUserDraft] = useState("");
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    credsPresent: boolean;
+    hostConfigured: boolean;
+    enabled: boolean;
+    dailyCap: number;
+    todayCount: number;
+  }>({
+    credsPresent: false,
+    hostConfigured: false,
+    enabled: false,
+    dailyCap: 5,
+    todayCount: 0,
+  });
+  const [capDraft, setCapDraft] = useState<string>("");
+
+  const reload = async () => {
+    try {
+      const s = await api.cults3dStatus();
+      setStatus({
+        credsPresent: s.creds_present,
+        hostConfigured: s.asset_host_configured,
+        enabled: s.enabled,
+        dailyCap: s.daily_cap,
+        todayCount: s.today_count,
+      });
+      setCapDraft(String(s.daily_cap));
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleVerify = async () => {
+    if (!userDraft.trim() || !keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      await api.cults3dVerify(userDraft.trim(), keyDraft.trim());
+      setVerifyState("ok");
+      setUserDraft("");
+      setKeyDraft("");
+      reload();
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.cults3dSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+
+  const handleSaveCap = async () => {
+    const n = parseInt(capDraft, 10);
+    if (!Number.isFinite(n) || n < 0) return;
+    await api.cults3dSetDailyCap(n);
+    setStatus((s) => ({ ...s, dailyCap: n }));
+  };
+
+  const canEnable = status.credsPresent && status.hostConfigured;
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Cults3D publishing</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Cross-list every 3D asset (STL / GLB) to Cults3D in parallel with
+        Etsy. Requires the GitHub asset host above (Cults3D pulls assets from
+        public HTTPS URLs). AI-disclosure is mandatory and set automatically
+        via the <code>madeWithAi: true</code> field.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Status</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? "Creds saved"
+              : "No creds — verify below"}
+            {" · "}
+            {status.hostConfigured ? "Asset host ready" : "Asset host missing"}
+            {" · "}
+            {status.todayCount}/{status.dailyCap} published today
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Cults3D username</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? "Saved (verify again to replace)."
+              : "Your Cults3D account username."}
+          </span>
+        </div>
+        <input
+          type="text"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "username"}
+          value={userDraft}
+          onChange={(e) => setUserDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API key</span>
+          <span className="settings-helper">
+            Generate at cults3d.com/en/api/keys. Verifying saves both.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "Cults3D API key"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !userDraft.trim() || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — credentials saved.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enable Cults3D fan-out</span>
+          <span className="settings-helper">
+            {canEnable
+              ? "On = every 3D publisher job also gets cross-listed to Cults3D."
+              : "Off — needs Cults3D creds + GitHub asset host configured first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!canEnable}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Daily cap</span>
+          <span className="settings-helper">
+            Max Cults3D publishes per UTC day. Default 5 — velocity ceiling to
+            avoid spam-flagging.
+          </span>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={50}
+          className="settings-cred-input settings-input-number"
+          value={capDraft}
+          onChange={(e) => setCapDraft(e.target.value)}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleSaveCap}
+          disabled={!capDraft.trim()}
+        >
+          Save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  HiggsfieldSection: enable toggle + CLI/auth status                  */
+/* ------------------------------------------------------------------ */
+
+function HiggsfieldSection() {
+  const [status, setStatus] = useState<{
+    cliInstalled: boolean;
+    cliAuthed: boolean;
+    enabled: boolean;
+  }>({ cliInstalled: false, cliAuthed: false, enabled: false });
+
+  const reload = async () => {
+    try {
+      const s = await api.higgsfieldStatus();
+      setStatus({
+        cliInstalled: s.cli_installed,
+        cliAuthed: s.cli_authed,
+        enabled: s.enabled,
+      });
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.higgsfieldSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+
+  const canEnable = status.cliInstalled && status.cliAuthed;
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Higgsfield product-photoshoot</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        After the designer renders a 3D preview, optionally upgrade it with a
+        Higgsfield product-photoshoot pass (gpt_image_2 backend) for
+        brand-quality listing thumbnails. Cost ≈ a few Higgsfield credits per
+        listing. Falls back silently to the original render if the CLI isn't
+        installed, isn't authenticated, or the job fails.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">CLI</span>
+          <span className="settings-helper">
+            {status.cliInstalled
+              ? "Installed (higgsfield on $PATH)."
+              : "Not installed. Run in a terminal: curl -fsSL https://raw.githubusercontent.com/higgsfield-ai/cli/main/install.sh | sh"}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={reload}
+        >
+          Re-check
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Auth</span>
+          <span className="settings-helper">
+            {status.cliAuthed
+              ? "Authenticated. Higgsfield CLI is signed in."
+              : "Not authenticated. Run in a terminal: higgsfield auth login (interactive)."}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enhance listing thumbnails</span>
+          <span className="settings-helper">
+            {canEnable
+              ? "On = every 3D job's preview render gets enhanced via Higgsfield product-photoshoot before publishing."
+              : "Off — needs CLI installed and authenticated first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!canEnable}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  TrendSignalsSection: research-agent trend sources + YouTube key     */
+/* ------------------------------------------------------------------ */
+
+function TrendSignalsSection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [sampleTitle, setSampleTitle] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ keyPresent: boolean }>({ keyPresent: false });
+
+  useEffect(() => {
+    api.youtubeStatus().then((s) => setStatus({ keyPresent: s.key_present })).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      const r = await api.youtubeVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setSampleTitle(r.sample_video_title);
+      setStatus({ keyPresent: true });
+      setKeyDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Trend signals (research agent)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Before every research run, the agent pulls live trending topics from
+        Reddit + Google Trends + YouTube and mines them for niche categories
+        (filtering out IP and current events). Reddit + Google Trends require
+        no setup. YouTube needs a free Google Cloud API key with the YouTube
+        Data API v3 enabled.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Reddit</span>
+          <span className="settings-helper">
+            Active — pulling hot posts from r/3Dprinting, r/PrintedMinis,
+            r/Etsy, r/DnD, r/Warhammer40k, r/halloween, r/christmas. No key
+            required.
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Google Trends</span>
+          <span className="settings-helper">
+            Active — pulling daily trending searches (US). No key required.
+            Install <code>pytrends</code> in the research worker for richer
+            data; the RSS fallback works without it.
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">YouTube Data API key</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? "Key saved. Paste a new one + Verify to replace."
+              : "Generate at console.cloud.google.com → Enable YouTube Data API v3 → Create credentials (API key). Free tier = 10k units/day, plenty for trend polling."}
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.keyPresent ? "•••••• (saved)" : "AIza…"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : status.keyPresent ? "Replace" : "Verify"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — top trending video: "{sampleTitle}". Restart the
+          supervisor for workers to pick up the key.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MmfSection: API key + Enable + sell-paid + cap                       */
+/* ------------------------------------------------------------------ */
+
+function MmfSection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [verifiedAccount, setVerifiedAccount] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    credsPresent: boolean;
+    enabled: boolean;
+    sellPaid: boolean;
+    dailyCap: number;
+    todayCount: number;
+  }>({
+    credsPresent: false,
+    enabled: false,
+    sellPaid: false,
+    dailyCap: 5,
+    todayCount: 0,
+  });
+  const [capDraft, setCapDraft] = useState<string>("");
+
+  const reload = async () => {
+    try {
+      const s = await api.mmfStatus();
+      setStatus({
+        credsPresent: s.creds_present,
+        enabled: s.enabled,
+        sellPaid: s.sell_paid,
+        dailyCap: s.daily_cap,
+        todayCount: s.today_count,
+      });
+      setCapDraft(String(s.daily_cap));
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      const r = await api.mmfVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setVerifiedAccount(r.account);
+      setKeyDraft("");
+      reload();
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.mmfSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+  const handleTogglePaid = async () => {
+    const next = !status.sellPaid;
+    await api.mmfSetSellPaid(next);
+    setStatus((s) => ({ ...s, sellPaid: next }));
+  };
+  const handleSaveCap = async () => {
+    const n = parseInt(capDraft, 10);
+    if (!Number.isFinite(n) || n < 0) return;
+    await api.mmfSetDailyCap(n);
+    setStatus((s) => ({ ...s, dailyCap: n }));
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">MyMiniFactory publishing</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Cross-list every 3D asset to MyMiniFactory. Heads up: MMF's API write
+        access can require developer approval on some accounts — if uploads
+        get rejected, the error shows up in the publishes list and you can
+        switch to manual upload or request OAuth approval. AI disclosure added
+        automatically.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Status</span>
+          <span className="settings-helper">
+            {status.credsPresent ? "Key saved" : "No key — verify below"}
+            {" · "}
+            {status.todayCount}/{status.dailyCap} published today
+            {" · "}
+            {status.sellPaid ? "Paid listings" : "Free listings"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API key</span>
+          <span className="settings-helper">
+            Generate at myminifactory.com → Settings → Developer. Verifying
+            saves the key.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "MMF API key"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified as {verifiedAccount} — key saved.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enable MMF fan-out</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? "On = every 3D publisher job also uploads to MyMiniFactory."
+              : "Off — needs MMF API key configured first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!status.credsPresent}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Charge for downloads</span>
+          <span className="settings-helper">
+            On = upload at the publisher's price. Off = free listing (builds
+            audience while MMF Store payouts/approval get sorted).
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.sellPaid ? " is-on" : ""}`}
+          onClick={handleTogglePaid}
+          disabled={!status.credsPresent}
+        >
+          {status.sellPaid ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Daily cap</span>
+          <span className="settings-helper">
+            Max MMF publishes per UTC day. Default 5.
+          </span>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={50}
+          className="settings-cred-input settings-input-number"
+          value={capDraft}
+          onChange={(e) => setCapDraft(e.target.value)}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleSaveCap}
+          disabled={!capDraft.trim()}
+        >
+          Save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  GumroadSection: access token + Enable toggle + cap                   */
+/* ------------------------------------------------------------------ */
+
+function GumroadSection() {
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [verifiedAccount, setVerifiedAccount] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    credsPresent: boolean;
+    enabled: boolean;
+    dailyCap: number;
+    todayCount: number;
+  }>({
+    credsPresent: false,
+    enabled: false,
+    dailyCap: 5,
+    todayCount: 0,
+  });
+  const [capDraft, setCapDraft] = useState<string>("");
+
+  const reload = async () => {
+    try {
+      const s = await api.gumroadStatus();
+      setStatus({
+        credsPresent: s.creds_present,
+        enabled: s.enabled,
+        dailyCap: s.daily_cap,
+        todayCount: s.today_count,
+      });
+      setCapDraft(String(s.daily_cap));
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleVerify = async () => {
+    if (!tokenDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      const r = await api.gumroadVerify(tokenDraft.trim());
+      setVerifyState("ok");
+      setVerifiedAccount(r.account);
+      setTokenDraft("");
+      reload();
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.gumroadSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+
+  const handleSaveCap = async () => {
+    const n = parseInt(capDraft, 10);
+    if (!Number.isFinite(n) || n < 0) return;
+    await api.gumroadSetDailyCap(n);
+    setStatus((s) => ({ ...s, dailyCap: n }));
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Gumroad publishing</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Cross-list every 3D asset to Gumroad as a paid digital product. Heads
+        up: Gumroad's file-attach API is restricted — if it rejects the upload,
+        we still create the product (state shows as{" "}
+        <code>published_no_file</code>) and you upload the file once via their
+        dashboard. AI disclosure added automatically.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Status</span>
+          <span className="settings-helper">
+            {status.credsPresent ? "Token saved" : "No token — verify below"}
+            {" · "}
+            {status.todayCount}/{status.dailyCap} published today
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Access token</span>
+          <span className="settings-helper">
+            Generate at gumroad.com → Settings → Advanced → "Create access
+            token". Verifying saves the token.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "Gumroad access token"}
+          value={tokenDraft}
+          onChange={(e) => setTokenDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !tokenDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified as {verifiedAccount} — token saved.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enable Gumroad fan-out</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? "On = every 3D publisher job also creates a Gumroad product."
+              : "Off — needs Gumroad access token configured first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!status.credsPresent}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Daily cap</span>
+          <span className="settings-helper">
+            Max Gumroad publishes per UTC day. Default 5.
+          </span>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={50}
+          className="settings-cred-input settings-input-number"
+          value={capDraft}
+          onChange={(e) => setCapDraft(e.target.value)}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleSaveCap}
+          disabled={!capDraft.trim()}
+        >
+          Save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SketchfabSection: API token + Enable toggle + Sell-on-Store + cap    */
+/* ------------------------------------------------------------------ */
+
+function SketchfabSection() {
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [verifiedUsername, setVerifiedUsername] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    credsPresent: boolean;
+    enabled: boolean;
+    sellOnStore: boolean;
+    dailyCap: number;
+    todayCount: number;
+  }>({
+    credsPresent: false,
+    enabled: false,
+    sellOnStore: false,
+    dailyCap: 5,
+    todayCount: 0,
+  });
+  const [capDraft, setCapDraft] = useState<string>("");
+
+  const reload = async () => {
+    try {
+      const s = await api.sketchfabStatus();
+      setStatus({
+        credsPresent: s.creds_present,
+        enabled: s.enabled,
+        sellOnStore: s.sell_on_store,
+        dailyCap: s.daily_cap,
+        todayCount: s.today_count,
+      });
+      setCapDraft(String(s.daily_cap));
+    } catch {
+      /* boot */
+    }
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const handleVerify = async () => {
+    if (!tokenDraft.trim()) return;
+    setVerifyState("verifying");
+    setErr(null);
+    try {
+      const r = await api.sketchfabVerify(tokenDraft.trim());
+      setVerifyState("ok");
+      setVerifiedUsername(r.username);
+      setTokenDraft("");
+      reload();
+    } catch (e) {
+      setVerifyState("error");
+      setErr(String(e));
+    }
+  };
+
+  const handleToggle = async () => {
+    const next = !status.enabled;
+    await api.sketchfabSetEnabled(next);
+    setStatus((s) => ({ ...s, enabled: next }));
+  };
+
+  const handleToggleSell = async () => {
+    const next = !status.sellOnStore;
+    await api.sketchfabSetSellOnStore(next);
+    setStatus((s) => ({ ...s, sellOnStore: next }));
+  };
+
+  const handleSaveCap = async () => {
+    const n = parseInt(capDraft, 10);
+    if (!Number.isFinite(n) || n < 0) return;
+    await api.sketchfabSetDailyCap(n);
+    setStatus((s) => ({ ...s, dailyCap: n }));
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Sketchfab publishing</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Cross-list every 3D asset (STL / GLB) to Sketchfab in parallel with
+        Etsy and Cults3D. No asset host required — Sketchfab accepts direct
+        multipart uploads and renders its own thumbnails. AI disclosure is
+        added automatically via the <code>ai-generated</code> tag.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Status</span>
+          <span className="settings-helper">
+            {status.credsPresent ? "Token saved" : "No token — verify below"}
+            {" · "}
+            {status.todayCount}/{status.dailyCap} published today
+            {" · "}
+            {status.sellOnStore ? "Selling on Store" : "Free downloads (CC BY)"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API token</span>
+          <span className="settings-helper">
+            Generate at sketchfab.com → Settings → Password → API. Verifying
+            saves the token.
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.credsPresent ? "•••••• (saved)" : "Sketchfab API token"}
+          value={tokenDraft}
+          onChange={(e) => setTokenDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !tokenDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : "Verify + save"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified as {verifiedUsername} — token saved.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {err}
+        </div>
+      )}
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Enable Sketchfab fan-out</span>
+          <span className="settings-helper">
+            {status.credsPresent
+              ? "On = every 3D publisher job also gets cross-listed to Sketchfab."
+              : "Off — needs Sketchfab token configured first."}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.enabled ? " is-on" : ""}`}
+          onClick={handleToggle}
+          disabled={!status.credsPresent}
+        >
+          {status.enabled ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Sell on Sketchfab Store</span>
+          <span className="settings-helper">
+            On = upload as paid Store listing (requires Pro+ subscription). Off
+            = free download under CC BY 4.0 (works on any account).
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${status.sellOnStore ? " is-on" : ""}`}
+          onClick={handleToggleSell}
+          disabled={!status.credsPresent}
+        >
+          {status.sellOnStore ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Daily cap</span>
+          <span className="settings-helper">
+            Max Sketchfab publishes per UTC day. Default 5.
+          </span>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={50}
+          className="settings-cred-input settings-input-number"
+          value={capDraft}
+          onChange={(e) => setCapDraft(e.target.value)}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleSaveCap}
+          disabled={!capDraft.trim()}
+        >
+          Save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MeshySection: enter key, verify, show remaining credit balance       */
+/* ------------------------------------------------------------------ */
+
+function MeshySection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    keyPresent: boolean;
+    balance: number | null;
+  }>({ keyPresent: false, balance: null });
+
+  useEffect(() => {
+    api.meshyStatus().then((s) => {
+      setStatus({ keyPresent: s.key_present, balance: s.balance });
+    }).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setVerifyError(null);
+    try {
+      const result = await api.meshyVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setStatus({ keyPresent: true, balance: result.balance });
+      setKeyDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setVerifyError(String(e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">3D generation (Meshy — preferred)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Text-to-3D via Meshy. When connected, orchestrator rotates STL /
+        3D-model product types into the mix and designer routes 3D briefs to
+        Meshy's preview pass (~30s, ~5 credits). Yields GLB + STL pair plus a
+        listing thumbnail. Etsy AI-disclosure added automatically. Restart the
+        supervisor after verifying so workers pick up the key.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Meshy status</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? `Connected${status.balance != null ? ` · ${status.balance} credits` : ""}`
+              : "Not connected"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API key</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? "Key already saved (hidden). Paste a new one + Verify to replace."
+              : "Generate at meshy.ai → Settings → API → keys. Verifying saves the key and reads your credit balance."}
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.keyPresent ? "•••••• (saved)" : "Meshy API key"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : status.keyPresent ? "Replace" : "Verify"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — key saved. Stop + Start the supervisor for workers to pick it up.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {verifyError}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  GoogleAiSection: Gemini 2.5 Flash Image ("nanobanana") API key       */
+/* ------------------------------------------------------------------ */
+
+function GoogleAiSection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ keyPresent: boolean }>({ keyPresent: false });
+
+  useEffect(() => {
+    api.googleStatus().then((s) => {
+      setStatus({ keyPresent: s.key_present });
+    }).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setVerifyError(null);
+    try {
+      await api.googleVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setStatus({ keyPresent: true });
+      setKeyDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setVerifyError(String(e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Reference renders (Google AI — nanobanana)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        Gemini 2.5 Flash Image generates a 2K vertical character reference
+        render that the image-to-3D provider (Tripo by default) turns into a
+        printable mesh. Without this key, designer falls back to text-to-3D
+        directly — fine for objects, weaker for characters. Restart the
+        supervisor after verifying.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Google AI status</span>
+          <span className="settings-helper">
+            {status.keyPresent ? "Connected" : "Not connected"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API key</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? "Key already saved (hidden). Paste a new one + Verify to replace."
+              : "Generate at aistudio.google.com → Get API key. Verifying makes one test image-gen call to confirm billing + access."}
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.keyPresent ? "•••••• (saved)" : "Google API key"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : status.keyPresent ? "Replace" : "Verify"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — key saved. Stop + Start the supervisor for workers to pick it up.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {verifyError}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  TripoSection: enter key, verify, show remaining credit balance       */
+/* ------------------------------------------------------------------ */
+
+function TripoSection() {
+  const [keyDraft, setKeyDraft] = useState("");
+  const [verifyState, setVerifyState] = useState<"idle" | "verifying" | "ok" | "error">("idle");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{
+    keyPresent: boolean;
+    balance: number | null;
+  }>({ keyPresent: false, balance: null });
+
+  useEffect(() => {
+    api.tripoStatus().then((s) => {
+      setStatus({ keyPresent: s.key_present, balance: s.balance });
+    }).catch(() => {});
+  }, []);
+
+  const handleVerify = async () => {
+    if (!keyDraft.trim()) return;
+    setVerifyState("verifying");
+    setVerifyError(null);
+    try {
+      const result = await api.tripoVerify(keyDraft.trim());
+      setVerifyState("ok");
+      setStatus({ keyPresent: true, balance: result.balance });
+      setKeyDraft("");
+    } catch (e) {
+      setVerifyState("error");
+      setVerifyError(String(e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">3D generation (Tripo)</div>
+      <div className="settings-helper" style={{ marginBottom: 8 }}>
+        When connected, the orchestrator rotates STL / 3D-model product types
+        into the mix alongside stickers and digital prints. Designer routes 3D
+        briefs to Tripo's text-to-model API, producing GLB + STL pairs. Etsy
+        AI-disclosure is added automatically. Restart the supervisor after
+        verifying so workers pick up the key.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Tripo status</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? `Connected${status.balance != null ? ` · ${status.balance} credits` : ""}`
+              : "Not connected"}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">API key</span>
+          <span className="settings-helper">
+            {status.keyPresent
+              ? "Key already saved (hidden). Paste a new one + Verify to replace."
+              : "Generate at platform.tripo3d.ai → API → keys. Verifying saves the key and reads your credit balance."}
+          </span>
+        </div>
+        <input
+          type="password"
+          className="settings-cred-input"
+          placeholder={status.keyPresent ? "•••••• (saved)" : "Tripo API key"}
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleVerify}
+          disabled={verifyState === "verifying" || !keyDraft.trim()}
+        >
+          {verifyState === "verifying" ? "Verifying…" : status.keyPresent ? "Replace" : "Verify"}
+        </button>
+      </div>
+      {verifyState === "ok" && (
+        <div className="settings-helper" style={{ color: "var(--accent-ok)" }}>
+          Verified — key saved. Stop + Start the supervisor for workers to pick it up.
+        </div>
+      )}
+      {verifyState === "error" && (
+        <div className="settings-helper" style={{ color: "var(--accent-bad)" }}>
+          {verifyError}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PodDailyCapRow() {
   const [draft, setDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
@@ -514,6 +2254,74 @@ function PodDailyCapRow() {
 /*  Main SettingsModal                                                    */
 /* ------------------------------------------------------------------ */
 
+type SettingsTabId = "account" | "pipeline" | "generation" | "etsy" | "cross";
+
+interface SettingsTabDef {
+  id: SettingsTabId;
+  label: string;
+  sublabel: string;
+  icon: ReactNode;
+}
+
+const SETTINGS_TABS: SettingsTabDef[] = [
+  {
+    id: "account",
+    label: "Account",
+    sublabel: "Keys · budgets · bridge",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+      </svg>
+    ),
+  },
+  {
+    id: "pipeline",
+    label: "Pipeline",
+    sublabel: "Behavior · strategy",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="6" cy="6" r="2.5" />
+        <circle cx="18" cy="18" r="2.5" />
+        <path d="M6 8.5V14a4 4 0 0 0 4 4h5.5" />
+      </svg>
+    ),
+  },
+  {
+    id: "generation",
+    label: "Generation",
+    sublabel: "AI providers",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 2l1.8 4.6L18.5 8l-3.5 3.4.9 4.6L12 13.8 8.1 16l.9-4.6L5.5 8l4.7-1.4L12 2z" />
+      </svg>
+    ),
+  },
+  {
+    id: "etsy",
+    label: "Etsy",
+    sublabel: "Shop · Printify",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 7l9-4 9 4-9 4-9-4z" />
+        <path d="M3 12l9 4 9-4" />
+        <path d="M3 17l9 4 9-4" />
+      </svg>
+    ),
+  },
+  {
+    id: "cross",
+    label: "Cross-listing",
+    sublabel: "3D marketplaces",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 12h10" />
+        <path d="M10 6l6 6-6 6" />
+        <path d="M20 4v16" />
+      </svg>
+    ),
+  },
+];
+
 export default function SettingsModal({
   open,
   onClose,
@@ -521,6 +2329,7 @@ export default function SettingsModal({
   open: boolean;
   onClose: () => void;
 }) {
+  const [activeTab, setActiveTab] = useState<SettingsTabId>("account");
   const [etsyStatus, setEtsyStatus] = useState<EtsyStatus | null>(null);
   const [etsyEnabled, setEtsyEnabled] = useState(false);
   const [etsyEnabledSaving, setEtsyEnabledSaving] = useState(false);
@@ -703,7 +2512,7 @@ export default function SettingsModal({
       aria-label="Settings"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="settings-modal">
+      <div className="settings-modal settings-modal--tabbed">
         {/* Header */}
         <div className="settings-modal-head">
           <div className="settings-modal-head-left">
@@ -723,8 +2532,34 @@ export default function SettingsModal({
           </button>
         </div>
 
-        {/* Scrollable body */}
-        <div className="settings-modal-body">
+        {/* Shell: left rail + right pane */}
+        <div className="settings-shell">
+          <nav className="settings-rail" aria-label="Settings sections">
+            {SETTINGS_TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`settings-tab-btn${isActive ? " is-active" : ""}`}
+                  onClick={() => setActiveTab(tab.id)}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  <span className="settings-tab-icon" aria-hidden="true">{tab.icon}</span>
+                  <span className="settings-tab-text">
+                    <span className="settings-tab-label">{tab.label}</span>
+                    <span className="settings-tab-sublabel">{tab.sublabel}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Scrollable pane */}
+          <div className="settings-pane" key={activeTab}>
+
+          {activeTab === "account" && <>
+          <ThemeSection />
 
           {/* ---- Section 1: Credentials ---- */}
           <section className="settings-section">
@@ -774,7 +2609,9 @@ export default function SettingsModal({
               helper="Default 20.00 — total spend ceiling for the current UTC month"
             />
           </section>
+          </>}
 
+          {activeTab === "etsy" && <>
           {/* ---- Section 3: Etsy publishing ---- */}
           <section className="settings-section">
             <div className="settings-section-title">Etsy publishing</div>
@@ -885,7 +2722,11 @@ export default function SettingsModal({
             )}
           </section>
 
-          {/* ---- Section 4: Anthropic bridge ---- */}
+          <PrintifySection />
+          </>}
+
+          {activeTab === "account" && <>
+          {/* ---- Anthropic bridge ---- */}
           <section className="settings-section">
             <div className="settings-section-title">Anthropic bridge</div>
             <div className="settings-helper" style={{ marginBottom: 8 }}>
@@ -905,7 +2746,22 @@ export default function SettingsModal({
             </div>
           </section>
 
-          {/* ---- Section 5: Autonomous behavior ---- */}
+          {/* ---- Diagnostics ---- */}
+          <section className="settings-section settings-section-diagnostics">
+            <div className="settings-section-title">Diagnostics</div>
+            <div className="settings-diag-row">
+              <span className="settings-diag-label">Secrets file</span>
+              <code className="settings-diag-value">~/.agent-factory/secrets.dev.json</code>
+            </div>
+            <div className="settings-diag-row">
+              <span className="settings-diag-label">Build</span>
+              <code className="settings-diag-value">{appVersion}</code>
+            </div>
+          </section>
+          </>}
+
+          {activeTab === "pipeline" && <>
+          {/* ---- Autonomous behavior ---- */}
           <section className="settings-section">
             <div className="settings-section-title">Autonomous behavior</div>
 
@@ -968,22 +2824,28 @@ export default function SettingsModal({
             </div>
           </section>
 
-          {/* ---- Section: Print-on-demand (Printify) ---- */}
-          <PrintifySection />
+          <ShopFocusSection />
+          <CharacterPoolSection />
+          <TrendSignalsSection />
+          </>}
 
-          {/* ---- Section 6: Diagnostics ---- */}
-          <section className="settings-section settings-section-diagnostics">
-            <div className="settings-section-title">Diagnostics</div>
-            <div className="settings-diag-row">
-              <span className="settings-diag-label">Secrets file</span>
-              <code className="settings-diag-value">~/.agent-factory/secrets.dev.json</code>
-            </div>
-            <div className="settings-diag-row">
-              <span className="settings-diag-label">Build</span>
-              <code className="settings-diag-value">{appVersion}</code>
-            </div>
-          </section>
+          {activeTab === "generation" && <>
+          <GoogleAiSection />
+          <MeshySection />
+          <TripoSection />
+          <ImageTo3dProviderSection />
+          <HiggsfieldSection />
+          </>}
 
+          {activeTab === "cross" && <>
+          <GitHubAssetHostSection />
+          <Cults3DSection />
+          <SketchfabSection />
+          <MmfSection />
+          <GumroadSection />
+          </>}
+
+          </div>
         </div>
       </div>
     </div>

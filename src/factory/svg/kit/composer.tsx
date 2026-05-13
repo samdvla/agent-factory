@@ -65,7 +65,7 @@ function renderStations(kit: RoomKit, ox: number, oy: number): React.ReactNode {
   return stations.map((s, i) => (
     <g key={`s${i}`}>
       <Workstation x={ox + s.x - 0.65} y={oy + s.y - 0.4} w={1.3} d={1.0} accent={kit.accent} />
-      <OfficeChair x={ox + s.x - 0.3} y={oy + s.y + 1.1} accent="#243140" />
+      <OfficeChair x={ox + s.x - 0.3} y={oy + s.y + 1.1} accent="var(--bg-3)" />
     </g>
   ));
 }
@@ -99,13 +99,13 @@ function renderAncillary(kit: RoomKit, ox: number, oy: number): React.ReactNode 
   const items: React.ReactNode[] = [];
   if (kit.features.includes("bookshelf")) {
     items.push(<Bookshelf key="bs" x={ox + 5.0} y={oy + 2.6} w={0.55} depth={1.6} h={11}
-      spineColors={[kit.accent, "#cdd5df", "#243140"]} />);
+      spineColors={[kit.accent, "var(--ink-1)", "var(--bg-3)"]} />);
   }
   if (kit.features.includes("law-shelf")) {
     items.push(<LawBookshelf key="ls" x={ox + 5.0} y={oy + 2.6} h={11} />);
   }
   if (kit.features.includes("binder-stack")) {
-    items.push(<BinderStack key="bn" x={ox + 0.6} y={oy + 4.55} w={0.55} d={0.6} colors={[kit.accent, "#cdd5df"]} />);
+    items.push(<BinderStack key="bn" x={ox + 0.6} y={oy + 4.55} w={0.55} d={0.6} colors={[kit.accent, "var(--ink-1)"]} />);
   }
   if (kit.features.includes("color-rack")) {
     items.push(<ColorRack key="cr" x={ox + 5.0} y={oy + 2.8} />);
@@ -138,8 +138,8 @@ function renderAncillary(kit: RoomKit, ox: number, oy: number): React.ReactNode 
     items.push(<ArchiveWall key="aw" x={ox + 0.5} y={oy + 1.5} w={4} h={11} />);
   }
   if (kit.stationLayout === "perimeter" && kit.features.includes("phone-bank")) {
-    items.push(<LongCounter key="lc" x={ox + 1.4} y={oy + 4.0} w={3.4} d={1.0} accent="#2a3849" />);
-    items.push(<OpenDeskRow key="od" x={ox + 1.4} y={oy + 4.0} count={4} accent="#2a3849" />);
+    items.push(<LongCounter key="lc" x={ox + 1.4} y={oy + 4.0} w={3.4} d={1.0} accent="var(--bg-3)" />);
+    items.push(<OpenDeskRow key="od" x={ox + 1.4} y={oy + 4.0} count={4} accent="var(--bg-3)" />);
   }
   if (kit.features.includes("kpi-panel")) {
     items.push(<KpiPanel key="kp" x={ox + 1.5} y={oy + 0.7} w={1.4} accent={kit.accent} />);
@@ -166,7 +166,9 @@ export function composeRoom(kit: RoomKit, ox: number, oy: number): React.ReactNo
     <g className={`composed-room tag-${kit.primaryTag}`}>
       <FloorRug x0={ox + 1.4} y0={oy + 2.8} x1={ox + 4.6} y1={oy + 4.8}
         color={`${kit.accent}10`} border={`${kit.accent}40`} />
-      <Wall ox={ox} oy={oy} accent={kit.accent} />
+      <g className="composed-wall-feature">
+        <Wall ox={ox} oy={oy} accent={kit.accent} />
+      </g>
       {renderCentralFeature(kit, ox, oy)}
       {renderStations(kit, ox, oy)}
       {renderAncillary(kit, ox, oy)}

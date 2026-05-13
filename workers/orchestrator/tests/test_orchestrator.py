@@ -156,6 +156,38 @@ def test_cycle_id_threaded(tmp_path, monkeypatch):
     assert result["handoff"]["payload"]["cycle_id"] == cid
 
 
+def test_3d_prompt_enumerates_all_character_pools_by_default(monkeypatch):
+    """Default character_pool=all → 3D system prompt must enumerate every
+    archetype tier so the orchestrator rotates across them instead of
+    over-picking one."""
+    monkeypatch.setenv("SHOP_FOCUS", "3d_only")
+    monkeypatch.delenv("CHARACTER_POOL", raising=False)
+    system, _ = build_orchestrator_prompt(target_product_type="stl_file")
+    assert "ORIGINAL ANIME" in system
+    assert "MYTHOLOGY" in system
+    assert "OWN-UNIVERSE" in system
+    assert "POPULAR-IP" in system
+    assert "HIGH IP RISK" in system
+
+
+def test_3d_prompt_restricts_to_single_pool(monkeypatch):
+    """Setting CHARACTER_POOL=mythology should drop the other pool sections."""
+    monkeypatch.setenv("SHOP_FOCUS", "3d_only")
+    monkeypatch.setenv("CHARACTER_POOL", "mythology")
+    system, _ = build_orchestrator_prompt(target_product_type="stl_file")
+    assert "MYTHOLOGY" in system
+    assert "ORIGINAL ANIME" not in system
+    assert "POPULAR-IP" not in system
+
+
+def test_3d_prompt_omits_popular_ip_when_excluded(monkeypatch):
+    monkeypatch.setenv("SHOP_FOCUS", "3d_only")
+    monkeypatch.setenv("CHARACTER_POOL", "original_anime")
+    system, _ = build_orchestrator_prompt(target_product_type="stl_file")
+    assert "ORIGINAL ANIME" in system
+    assert "POPULAR-IP" not in system
+
+
 def test_falls_back_when_too_few_outcomes(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")

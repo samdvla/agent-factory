@@ -2,6 +2,10 @@
 name = "designer-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
+# trimesh handles GLB→STL conversion so a single Tripo generation yields
+# both a game-ready GLB and a 3D-printable STL. numpy is a hard dep of
+# trimesh. Pure-Python wheels, no native build step.
+dependencies = ["trimesh>=4.0", "numpy>=1.26", "Pillow>=10.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

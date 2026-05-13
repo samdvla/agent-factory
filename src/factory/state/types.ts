@@ -61,7 +61,12 @@ export type AgentEntry = {
   state: AgentVisualState;
   task: string;
   model: "Haiku" | "Sonnet" | "Opus";
+  /** Sum of input + output tokens charged to this agent since app start. */
   tokensToday: number;
+  /** Count of job_completed events for this agent since app start. */
+  completedToday: number;
+  /** Count of job_failed events for this agent since app start. */
+  failedToday: number;
   currentJobId: number | null;
   restartIn?: number;
   walkTarget?: string;
@@ -195,6 +200,9 @@ export type FactoryStore = {
   setAgentState: (role: string, state: AgentVisualState) => void;
   setAgentJob: (role: string, jobId: number | null) => void;
   setAgentTask: (role: string, task: string) => void;
+  addAgentTokens: (role: string, tokens: number) => void;
+  incrementAgentCompleted: (role: string) => void;
+  incrementAgentFailed: (role: string) => void;
   walkAgent: (role: string, target: string | null) => void;
   pushTicker: (entry: TickerEntry) => void;
   pushAlert: (a: AlertItem) => void;

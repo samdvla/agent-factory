@@ -5,12 +5,24 @@ import type { JobRow } from "../../../api";
 const listRecentJobs = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const rateJob = vi.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined);
 const readJobSvg = vi.fn<(...args: unknown[]) => Promise<string | null>>().mockResolvedValue(null);
+// JobAssetPreview now hits readJobAsset first to detect SVG vs GLB vs STL.
+// Default to "svg" so the SVG-specific test branches behave unchanged.
+const readJobAsset = vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({
+  kind: "svg",
+  path: "/tmp/x.svg",
+  glb_path: null,
+  bytes: 1,
+  data_base64: "",
+  glb_data_base64: null,
+  png_data_base64: null,
+});
 
 vi.mock("../../../api", () => ({
   api: {
     listRecentJobs: (...a: unknown[]) => listRecentJobs(...a),
     rateJob: (...a: unknown[]) => rateJob(...a),
     readJobSvg: (...a: unknown[]) => readJobSvg(...a),
+    readJobAsset: (...a: unknown[]) => readJobAsset(...a),
   },
 }));
 

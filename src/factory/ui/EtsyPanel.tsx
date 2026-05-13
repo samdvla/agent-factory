@@ -27,6 +27,12 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
   const [showReceipts, setShowReceipts] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [reviewing, setReviewing] = useState<EtsyPublishRow | null>(null);
+  // Hide pre-pivot drafts (and other long-stale rows) by default — the user
+  // got tired of seeing the ADHD-planner 2D drafts in the panel. The toggle
+  // flips on demand for cleanup / archaeology. 24h is a sensible default
+  // since the orchestrator fires every ~20s when autonomous loops are on.
+  const [recentOnly, setRecentOnly] = useState(true);
+  const RECENT_HOURS = 24;
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [smokeSteps, setSmokeSteps] = useState({
     research: false, asset: false, listing: false, draft: false,
@@ -416,11 +422,55 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
               </div>
             )}
           </div>
-          <div className="etsy-panel-list">
-            {publishes.length === 0 ? (
-              <div className="etsy-panel-empty">no publishes yet</div>
-            ) : (
-              publishes.slice(0, 8).map((p) => (
+          {(() => {
+            const nowSec = Math.floor(Date.now() / 1000);
+            const cutoff = nowSec - RECENT_HOURS * 3600;
+            const visible = recentOnly
+              ? publishes.filter((p) => (p.published_at ?? 0) >= cutoff)
+              : publishes;
+            const olderCount = publishes.length - visible.length;
+            return (
+              <>
+                <div
+                  className="etsy-panel-row"
+                  style={{ paddingTop: 2, paddingBottom: 2 }}
+                >
+                  <span className="etsy-panel-label">
+                    Drafts
+                    {recentOnly
+                      ? ` (last ${RECENT_HOURS}h)`
+                      : ` (all ${publishes.length})`}
+                  </span>
+                  <button
+                    type="button"
+                    className={`etsy-toggle${recentOnly ? " is-on" : ""}`}
+                    onClick={() => setRecentOnly((v) => !v)}
+                    title={
+                      recentOnly
+                        ? `Show all ${publishes.length} including older drafts`
+                        : `Hide drafts older than ${RECENT_HOURS}h`
+                    }
+                  >
+                    {recentOnly ? "RECENT" : "ALL"}
+                  </button>
+                </div>
+                {recentOnly && olderCount > 0 && (
+                  <div
+                    className="etsy-panel-empty"
+                    style={{ fontSize: 10, padding: "2px 6px" }}
+                  >
+                    {olderCount} older draft{olderCount === 1 ? "" : "s"} hidden
+                  </div>
+                )}
+                <div className="etsy-panel-list">
+                  {visible.length === 0 ? (
+                    <div className="etsy-panel-empty">
+                      {recentOnly && publishes.length > 0
+                        ? `no drafts in the last ${RECENT_HOURS}h`
+                        : "no publishes yet"}
+                    </div>
+                  ) : (
+                    visible.slice(0, 8).map((p) => (
                 <div key={p.id} className="etsy-publish-row">
                   <span
                     className={`etsy-state-badge state-${p.state}`}
@@ -457,7 +507,10 @@ export default function EtsyPanel({ alwaysOpen = false }: { alwaysOpen?: boolean
                 </div>
               ))
             )}
-          </div>
+                </div>
+              </>
+            );
+          })()}
           <div className="smoke-test">
             <button
               className="modal-btn approve"

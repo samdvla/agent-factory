@@ -33,27 +33,27 @@ export { IsoBox };
 
 // Stylistic palette. Keep tight so different rooms share visual language.
 export const SURFACE = {
-  metalTop:    "#2a3849",
-  metalRight:  "#15202b",
-  metalLeft:   "#1a2532",
-  darkTop:     "#1a2532",
-  darkRight:   "#10171f",
-  darkLeft:    "#15202b",
+  metalTop:    "var(--bg-3)",
+  metalRight:  "var(--bg-1)",
+  metalLeft:   "var(--bg-2)",
+  darkTop:     "var(--bg-2)",
+  darkRight:   "var(--bg-0)",
+  darkLeft:    "var(--bg-1)",
   woodTop:     "#5a3a22",
   woodRight:   "#1a1208",
   woodLeft:    "#2a1d10",
   woodLight:   "#7a5232",
-  fabricTop:   "#1f2a37",
-  fabricRight: "#15202b",
-  fabricLeft:  "#1a2532",
-  screen:      "#101820",
-  screenSide:  "#0c141b",
+  fabricTop:   "var(--bg-2)",
+  fabricRight: "var(--bg-1)",
+  fabricLeft:  "var(--bg-2)",
+  screen:      "var(--bg-0)",
+  screenSide:  "var(--bg-0)",
 };
 
 // ---------- Office chair (high-back, leather) ----------
 
 function OfficeChair__base({
-  x, y, accent = "#2a3849",
+  x, y, accent = "var(--bg-3)",
 }: { x: number; y: number; accent?: string }) {
   // Chair faces south (toward the viewer). Back is at smaller y so it
   // renders behind the seat in iso depth.
@@ -70,7 +70,7 @@ function OfficeChair__base({
 // ---------- Meeting / visitor chair (lower back) ----------
 
 function MeetingChair__base({
-  x, y, accent = "#2a3849",
+  x, y, accent = "var(--bg-3)",
 }: { x: number; y: number; accent?: string }) {
   return (
     <>
@@ -106,10 +106,10 @@ function ExecutiveDesk__base({
         fillTop={accent} fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
       {/* Keyboard */}
       <IsoBox x={x + 0.3} y={y + 0.55} w={w - 0.7} d={0.22} h={6.4}
-        fillTop="#2a3849" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Mug */}
       <IsoBox x={x + w - 0.25} y={y + 0.5} w={0.16} d={0.16} h={6.9}
-        fillTop="#cdd5df" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--ink-1)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Nameplate */}
       {withNameplate && (
         <IsoBox x={x + 0.2} y={y + d - 0.18} w={w - 0.4} d={0.08} h={6.0}
@@ -136,13 +136,13 @@ function Sofa__base({
     <>
       {/* Back panel */}
       <IsoBox x={x} y={backY} w={w} d={0.18} h={7.5}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Left arm */}
       <IsoBox x={x} y={armY} w={0.18} d={seatD - 0.05} h={4.5}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Right arm */}
       <IsoBox x={x + w - 0.18} y={armY} w={0.18} d={seatD - 0.05} h={4.5}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Seat base */}
       <IsoBox x={x + 0.18} y={seatY} w={w - 0.36} d={seatD} h={2.7}
         fillTop={SURFACE.fabricTop} fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
@@ -178,7 +178,7 @@ function FilingCabinet__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.7} d={1.0} h={11}
-        fillTop={SURFACE.darkTop} fillRight={SURFACE.darkRight} fillLeft="#28344a" />
+        fillTop={SURFACE.darkTop} fillRight={SURFACE.darkRight} fillLeft="var(--bg-3)" />
       {/* Drawer accent strips on the south face — three thin handles */}
       <IsoBox x={x + 0.18} y={y + 0.95} w={0.34} d={0.06} h={3}
         fillTop={accent} fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
@@ -265,13 +265,13 @@ function ConferenceTable__base({
     <>
       {/* Heavy slab base */}
       <IsoBox x={x} y={y} w={w} d={d} h={3.0}
-        fillTop="#2c3a4d" fillRight={SURFACE.fabricRight} fillLeft="#1f2a37" />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft="var(--bg-2)" />
       {/* Inset glow tabletop */}
       <IsoBox x={x + 0.1} y={y + 0.1} w={w - 0.2} d={d - 0.2} h={3.2}
-        fillTop={glowColor} fillRight={SURFACE.fabricRight} fillLeft="#1f2a37" />
+        fillTop={glowColor} fillRight={SURFACE.fabricRight} fillLeft="var(--bg-2)" />
       {/* A small holo display rises from the centre of the table */}
       <IsoBox x={x + w / 2 - 0.32} y={y + d / 2 - 0.04} w={0.64} d={0.08} h={6.5}
-        fillTop="#101820" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
+        fillTop="var(--bg-0)" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
       <IsoBox x={x + w / 2 - 0.32} y={y + d / 2 - 0.04} w={0.64} d={0.025} h={9.4}
         fillTop={glowColor} fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
     </>
@@ -287,11 +287,11 @@ function HoloTable__base({
   return (
     <>
       <IsoBox x={x} y={y} w={2} d={2} h={6}
-        fillTop="#1a2330" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       <IsoBox x={x - 0.15} y={y - 0.15} w={2.3} d={2.3} h={2.5}
-        fillTop="#243140" fillRight={SURFACE.darkRight} fillLeft="#1f2a37" />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft="var(--bg-2)" />
       <IsoBox x={x + 0.4} y={y + 0.4} w={1.2} d={1.2} h={12}
-        fillTop="#2c3a4d" fillRight={SURFACE.darkRight} fillLeft="#243140" />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft="var(--bg-3)" />
       <ellipse cx={ce.x} cy={ce.y - 26} rx={22} ry={6}   fill={accent} opacity={0.35} />
       <ellipse cx={ce.x} cy={ce.y - 32} rx={14} ry={3.5} fill={accent} opacity={0.6} />
       <ellipse cx={ce.x} cy={ce.y - 36} rx={6}  ry={1.4} fill={accent} />
@@ -307,15 +307,15 @@ function Workstation__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={d} h={5.2}
-        fillTop="#2a3849" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.06} y={y + 0.06} w={w - 0.12} d={d - 0.12} h={5.4}
-        fillTop="#1f2a37" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-2)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.18} y={y + 0.15} w={w - 0.36} d={0.18} h={6.4}
-        fillTop="#101820" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
+        fillTop="var(--bg-0)" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
       <IsoBox x={x + 0.18} y={y + 0.15} w={w - 0.36} d={0.05} h={11}
         fillTop={accent} fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
       <IsoBox x={x + 0.18} y={y + 0.45} w={w - 0.36} d={0.22} h={6.0}
-        fillTop="#2a3849" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
     </>
   );
 }
@@ -329,13 +329,13 @@ function ServerRack__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={d} h={h}
-        fillTop="#1a2532" fillRight="#0c141b" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       {/* Row LEDs cascading down the front face */}
       {Array.from({ length: 6 }).map((_, i) => (
         <IsoBox key={`r-${i}`}
           x={x + 0.08} y={y + 0.04 + i * 0.16}
           w={w - 0.16} d={0.08} h={h - 1.2 + Math.sin(i * 1.4) * 1.5}
-          fillTop={accent} fillRight="#0c141b" fillLeft="#15202b" />
+          fillTop={accent} fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       ))}
     </>
   );
@@ -353,20 +353,20 @@ function LabBench__base({
     <>
       {/* Bench surface */}
       <IsoBox x={x} y={y} w={w} d={d} h={3.5}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.05} y={y + 0.05} w={w - 0.1} d={d - 0.1} h={3.7}
-        fillTop="#2a3849" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Flask */}
       <IsoBox x={x + 0.2} y={y + 0.18} w={0.22} d={0.22} h={6.0}
         fillTop={flaskColor} fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Microscope */}
       <IsoBox x={x + 0.55} y={y + 0.18} w={0.25} d={0.25} h={4.5}
-        fillTop="#cdd5df" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--ink-1)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.6} y={y + 0.22} w={0.18} d={0.05} h={7.5}
         fillTop={scopeColor} fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Scope readout */}
       <IsoBox x={x + 0.95} y={y + 0.18} w={0.4} d={0.18} h={5.5}
-        fillTop="#101820" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
+        fillTop="var(--bg-0)" fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
       <IsoBox x={x + 0.95} y={y + 0.18} w={0.4} d={0.04} h={8.0}
         fillTop={scopeColor} fillRight={SURFACE.screenSide} fillLeft={SURFACE.screenSide} />
     </>
@@ -376,7 +376,7 @@ function LabBench__base({
 // ---------- Drafting table ----------
 
 function DraftingTable__base({
-  x, y, w = 1.0, d = 0.7, paperColor = "#e6edf3",
+  x, y, w = 1.0, d = 0.7, paperColor = "var(--ink-0)",
   doodleColor = "rgba(255, 107, 157, 0.7)",
 }: { x: number; y: number; w?: number; d?: number;
      paperColor?: string; doodleColor?: string }) {
@@ -384,9 +384,9 @@ function DraftingTable__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={d} h={3.5}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.05} y={y + 0.05} w={w - 0.1} d={d - 0.1} h={4.0}
-        fillTop={paperColor} fillRight="#aab4c0" fillLeft="#cdd5df" />
+        fillTop={paperColor} fillRight="var(--ink-2)" fillLeft="var(--ink-1)" />
       <ellipse cx={center.x} cy={center.y - 4.6} rx={4} ry={1.2} fill={doodleColor} />
       <ellipse cx={center.x + 1} cy={center.y - 4.4} rx={2} ry={0.6} fill="rgba(245, 166, 35, 0.7)" />
     </>
@@ -401,12 +401,12 @@ function Printer__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.7} d={0.55} h={3.5}
-        fillTop="#1f2a37" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-2)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       <IsoBox x={x + 0.05} y={y + 0.05} w={0.6} d={0.45} h={4.2}
-        fillTop="#2a3849" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {/* Paper output tray */}
       <IsoBox x={x + 0.08} y={y + 0.42} w={0.55} d={0.12} h={3.6}
-        fillTop="#e6edf3" fillRight="#aab4c0" fillLeft="#cdd5df" />
+        fillTop="var(--ink-0)" fillRight="var(--ink-2)" fillLeft="var(--ink-1)" />
       {/* Status LED */}
       <IsoBox x={x + 0.55} y={y + 0.08} w={0.08} d={0.08} h={4.6}
         fillTop={accent} fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
@@ -428,7 +428,7 @@ function Whiteboard__base({
         fillTop={SURFACE.darkTop} fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Board face */}
       <IsoBox x={x} y={y + 0.4} w={w} d={0.06} h={9}
-        fillTop="#cdd5df" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--ink-1)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Diagram strokes */}
       <IsoBox x={x + 0.15} y={y + 0.42} w={w * 0.6} d={0.02} h={8.4}
         fillTop={accent} fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
@@ -449,10 +449,10 @@ function PaperStack__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={d} h={h}
-        fillTop="#e6edf3" fillRight="#aab4c0" fillLeft="#cdd5df" />
+        fillTop="var(--ink-0)" fillRight="var(--ink-2)" fillLeft="var(--ink-1)" />
       {/* Tinted top sheet (a colored cover/folder) */}
       <IsoBox x={x + 0.02} y={y + 0.02} w={w - 0.04} d={d - 0.04} h={h + 0.05}
-        fillTop={topAccent} fillRight="#aab4c0" fillLeft="#cdd5df" />
+        fillTop={topAccent} fillRight="var(--ink-2)" fillLeft="var(--ink-1)" />
     </>
   );
 }
@@ -489,8 +489,8 @@ function Globe__base({
       <IsoBox x={x + 0.1} y={y + 0.1} w={0.2} d={0.2} h={2.2}
         fillTop="#3a2a1a" fillRight={SURFACE.woodRight} fillLeft="#251810" />
       {/* Globe sphere (approximated with circles) */}
-      <ellipse cx={c.x} cy={c.y - 5} r={2.6} fill="#1a2532" />
-      <circle cx={c.x} cy={c.y - 5} r={2.6} fill="#1a2532" stroke={accent} strokeWidth={0.4} />
+      <ellipse cx={c.x} cy={c.y - 5} r={2.6} fill="var(--bg-2)" />
+      <circle cx={c.x} cy={c.y - 5} r={2.6} fill="var(--bg-2)" stroke={accent} strokeWidth={0.4} />
       {/* Equator + meridian lines */}
       <ellipse cx={c.x} cy={c.y - 5} rx={2.6} ry={0.9} fill="none" stroke={accent} strokeWidth={0.25} />
       <ellipse cx={c.x} cy={c.y - 5} rx={1.3} ry={2.6} fill="none" stroke={accent} strokeWidth={0.25} />
@@ -509,12 +509,12 @@ function Telephone__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.4} d={0.3} h={1.0}
-        fillTop="#1a2532" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-2)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       <IsoBox x={x + 0.04} y={y + 0.04} w={0.32} d={0.22} h={1.2}
         fillTop={accent} fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Handset cradle */}
       <IsoBox x={x - 0.05} y={y + 0.2} w={0.5} d={0.1} h={1.6}
-        fillTop="#2a3849" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
     </>
   );
 }
@@ -554,7 +554,7 @@ function TestTubes__base({
     <>
       {/* Rack base */}
       <IsoBox x={x} y={y} w={0.55} d={0.18} h={1.0}
-        fillTop="#243140" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {colors.map((color, i) => (
         <IsoBox key={i}
           x={x + 0.05 + i * 0.11} y={y + 0.04}
@@ -576,9 +576,9 @@ function ControlPanel__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={d} h={h}
-        fillTop="#1a2532" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-2)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       <IsoBox x={x + 0.04} y={y + 0.04} w={w - 0.08} d={d - 0.08} h={h + 0.2}
-        fillTop="#243140" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Indicator lights */}
       {[0, 1, 2].map((i) => (
         <IsoBox key={i}
@@ -599,7 +599,7 @@ function PenJar__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.2} d={0.2} h={1.4}
-        fillTop="#243140" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
       {/* Three pens sticking up */}
       <IsoBox x={x + 0.04} y={y + 0.04} w={0.04} d={0.04} h={3.2}
         fillTop={accent} fillRight={SURFACE.darkRight} fillLeft={SURFACE.darkLeft} />
@@ -621,7 +621,7 @@ function WallClock__base({
   return (
     <>
       <ellipse cx={center.x} cy={center.y - 38} rx={2.2} ry={2.2}
-        fill="#0a0e15" stroke={accent} strokeWidth={0.4} />
+        fill="var(--bg-0)" stroke={accent} strokeWidth={0.4} />
       {/* Hands */}
       <line x1={center.x} y1={center.y - 38} x2={center.x + 0.2} y2={center.y - 39.4}
         stroke={accent} strokeWidth={0.35} />
@@ -639,7 +639,7 @@ function ColorRack__base({
   return (
     <>
       <IsoBox x={x} y={y} w={1.0} d={1.0} h={14}
-        fillTop="#243140" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
+        fillTop="var(--bg-3)" fillRight={SURFACE.fabricRight} fillLeft={SURFACE.fabricLeft} />
       {palette.map((col, i) => (
         <IsoBox key={i}
           x={x + 0.1 + i * 0.16} y={y + 0.15}
@@ -655,7 +655,7 @@ function ColorRack__base({
 // Long counter: one continuous worktop spanning N grid units. Used for
 // call-center / triage rooms where many agents share a desk.
 function LongCounter__base({
-  x, y, w = 5, d = 1.2, accent = "#2a3849",
+  x, y, w = 5, d = 1.2, accent = "var(--bg-3)",
 }: { x: number; y: number; w?: number; d?: number; accent?: string }) {
   return (
     <>
@@ -669,7 +669,7 @@ function LongCounter__base({
 
 // Open desk row: N workstations placed end-to-end at a single y.
 function OpenDeskRow__base({
-  x, y, count = 4, gap = 0.05, accent = "#2a3849",
+  x, y, count = 4, gap = 0.05, accent = "var(--bg-3)",
 }: { x: number; y: number; count?: number; gap?: number; accent?: string }) {
   const each = 1.0;
   const items: React.ReactNode[] = [];
@@ -693,10 +693,10 @@ function PhoneBank__base({
     items.push(
       <IsoBox key={`p${i}`}
         x={x + i * 0.5} y={y} w={0.4} d={0.18} h={3.4}
-        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />,
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />,
       <IsoBox key={`h${i}`}
         x={x + 0.05 + i * 0.5} y={y + 0.04} w={0.3} d={0.08} h={3.8}
-        fillTop={accent} fillRight="#1a2532" fillLeft="#15202b" />,
+        fillTop={accent} fillRight="var(--bg-2)" fillLeft="var(--bg-1)" />,
     );
   }
   return <>{items}</>;
@@ -708,11 +708,11 @@ function Headset__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.32} d={0.18} h={2.2}
-        fillTop={accent} fillRight="#1a2532" fillLeft="#15202b" />
+        fillTop={accent} fillRight="var(--bg-2)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.04} y={y + 0.02} w={0.06} d={0.14} h={3.2}
-        fillTop="#cdd5df" fillRight="#1a2532" fillLeft="#15202b" />
+        fillTop="var(--ink-1)" fillRight="var(--bg-2)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.22} y={y + 0.02} w={0.06} d={0.14} h={3.2}
-        fillTop="#cdd5df" fillRight="#1a2532" fillLeft="#15202b" />
+        fillTop="var(--ink-1)" fillRight="var(--bg-2)" fillLeft="var(--bg-1)" />
     </>
   );
 }
@@ -723,9 +723,9 @@ function CallQueueBoard__base({
   return (
     <>
       <IsoBox x={x} y={y} w={1.4} d={0.06} h={4.6}
-        fillTop="#101820" fillRight="#0c141b" fillLeft="#10171f" />
+        fillTop="var(--bg-0)" fillRight="var(--bg-0)" fillLeft="var(--bg-0)" />
       <IsoBox x={x + 0.08} y={y + 0.01} w={1.24} d={0.04} h={5.0}
-        fillTop={accent} fillRight="#0c141b" fillLeft="#10171f" />
+        fillTop={accent} fillRight="var(--bg-0)" fillLeft="var(--bg-0)" />
     </>
   );
 }
@@ -738,9 +738,9 @@ function TerminalRack__base({
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={0.18} h={11}
-        fillTop="#101820" fillRight="#0c141b" fillLeft="#10171f" />
+        fillTop="var(--bg-0)" fillRight="var(--bg-0)" fillLeft="var(--bg-0)" />
       <IsoBox x={x + 0.05} y={y + 0.02} w={w - 0.1} d={0.14} h={11.5}
-        fillTop={accent} fillRight="#0c141b" fillLeft="#10171f" />
+        fillTop={accent} fillRight="var(--bg-0)" fillLeft="var(--bg-0)" />
     </>
   );
 }
@@ -750,7 +750,7 @@ function CableTray__base({
 }: { x: number; y: number; w?: number }) {
   return (
     <IsoBox x={x} y={y} w={w} d={0.15} h={0.6}
-      fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+      fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
   );
 }
 
@@ -775,11 +775,11 @@ function FileSafe__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.7} d={0.7} h={6}
-        fillTop="#1a2532" fillRight="#0e161e" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="#0e161e" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.05} y={y + 0.05} w={0.6} d={0.6} h={6.2}
-        fillTop="#243140" fillRight="#0e161e" fillLeft="#15202b" />
+        fillTop="var(--bg-3)" fillRight="#0e161e" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.3} y={y + 0.05} w={0.1} d={0.1} h={6.5}
-        fillTop={accent} fillRight="#0e161e" fillLeft="#15202b" />
+        fillTop={accent} fillRight="#0e161e" fillLeft="var(--bg-1)" />
     </>
   );
 }
@@ -792,9 +792,9 @@ function DocStamp__base({
       <IsoBox x={x} y={y} w={0.3} d={0.3} h={1.5}
         fillTop={SURFACE.woodTop} fillRight={SURFACE.woodRight} fillLeft={SURFACE.woodLeft} />
       <IsoBox x={x + 0.05} y={y + 0.05} w={0.2} d={0.2} h={2.4}
-        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.05} y={y + 0.05} w={0.2} d={0.2} h={2.7}
-        fillTop={accent} fillRight="#10171f" fillLeft="#15202b" />
+        fillTop={accent} fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
     </>
   );
 }
@@ -817,21 +817,21 @@ function ArchiveWall__base({
         <IsoBox key={`a${c}-${r}`}
           x={x + c * 0.5} y={y + 0.1} w={0.45} d={0.2}
           h={(r + 1) * shelfH - 0.4}
-          fillTop="#243140" fillRight="#15202b" fillLeft="#1a2532" />,
+          fillTop="var(--bg-3)" fillRight="var(--bg-1)" fillLeft="var(--bg-2)" />,
       );
       // Thin shelf divider at the top of each band
       cells.push(
         <IsoBox key={`shelf-${c}-${r}`}
           x={x + c * 0.5} y={y + 0.05} w={0.45} d={0.3}
           h={(r + 1) * shelfH}
-          fillTop="#10171f" fillRight="#0c141b" fillLeft="#0e161e" />,
+          fillTop="var(--bg-0)" fillRight="var(--bg-0)" fillLeft="#0e161e" />,
       );
     }
   }
   return (
     <>
       <IsoBox x={x} y={y} w={w} d={0.4} h={h}
-        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       {cells}
     </>
   );
@@ -843,11 +843,11 @@ function Carousel__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.9} d={0.9} h={4.5}
-        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.1} y={y + 0.1} w={0.7} d={0.7} h={5}
-        fillTop="#243140" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-3)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.4} y={y + 0.1} w={0.04} d={0.04} h={6}
-        fillTop="#cdd5df" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--ink-1)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
     </>
   );
 }
@@ -873,9 +873,9 @@ function TokenMeter__base({
   return (
     <>
       <IsoBox x={x} y={y} w={0.9} d={0.1} h={3.6}
-        fillTop="#1a2532" fillRight="#10171f" fillLeft="#15202b" />
+        fillTop="var(--bg-2)" fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
       <IsoBox x={x + 0.05} y={y + 0.02} w={0.6} d={0.06} h={3.9}
-        fillTop={accent} fillRight="#10171f" fillLeft="#15202b" />
+        fillTop={accent} fillRight="var(--bg-0)" fillLeft="var(--bg-1)" />
     </>
   );
 }

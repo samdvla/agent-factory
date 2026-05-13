@@ -20,6 +20,18 @@ def handle(method: str, params: dict) -> dict:
 
     listing_id = int(hashlib.sha256(title.encode()).hexdigest()[:12], 16) % 10_000_000
     asset_path = asset.get("asset_path") if isinstance(asset, dict) else None
+    # Multi-angle PNGs from the designer (None for 2D briefs). When set,
+    # the Rust supervisor uploads each one as a separate listing image so
+    # the buyer sees the model from every side. Single-thumbnail mode is
+    # the fallback when this list is empty / missing.
+    preview_pngs: list[str] = []
+    if isinstance(asset, dict):
+        raw = asset.get("preview_pngs")
+        if isinstance(raw, list):
+            preview_pngs = [p for p in raw if isinstance(p, str) and p]
+    record_product_type = (
+        brief.get("product_type", "digital_print") if isinstance(brief, dict) else "digital_print"
+    )
     record = {
         "listing_id": listing_id,
         "title": title,
@@ -27,6 +39,7 @@ def handle(method: str, params: dict) -> dict:
         "price_usd": listing.get("price_usd"),
         "tags": listing.get("tags"),
         "niche": niche,
+        "product_type": record_product_type,
         "published_at": datetime.now(timezone.utc).isoformat(),
         "status": "live",
         "asset_path": asset_path,
@@ -77,6 +90,7 @@ def handle(method: str, params: dict) -> dict:
         "price_usd": record["price_usd"],
         "niche": niche,
         "asset_path": asset_path,
+        "preview_pngs": preview_pngs,
         "product_type": product_type,  # supervisor uses this to route to POD or direct-Etsy
         "job_id": job_id,
         "handoff": {

@@ -28,7 +28,11 @@ pub struct ListingDraft {
     pub tags: Vec<String>,
     pub price_usd: f64,
     pub taxonomy_id: i64,
+    /// Primary listing image — always uploaded as rank 1.
     pub png_path: PathBuf,
+    /// Extra preview images (multi-angle 3D renders). Uploaded as rank
+    /// 2..N. Empty for 2D / single-thumbnail listings.
+    pub extra_png_paths: Vec<PathBuf>,
     pub svg_path: PathBuf,
     pub job_id: i64,
 }
@@ -46,27 +50,50 @@ pub struct CreateListingResponse {
 /// listing response on success.
 pub async fn publish_draft(
     client: &reqwest::Client,
-    keystring: &str,
     shop_id: i64,
     draft: &ListingDraft,
 ) -> Result<CreateListingResponse> {
     let access_token = etsy::ensure_fresh_token(client).await?;
-    let create_resp = create_draft(client, keystring, &access_token, shop_id, draft)
+    let create_resp = create_draft(client, &access_token, shop_id, draft)
         .await
         .context("create draft listing")?;
     upload_image(
         client,
-        keystring,
         &access_token,
         shop_id,
         create_resp.listing_id,
         &draft.png_path,
+        1,
     )
     .await
     .context("upload listing image")?;
+    // Extra angle renders — rank 2..N. Etsy caps a listing at 10 images;
+    // we trust the caller to have pre-trimmed but cap defensively here so
+    // a runaway designer can't fail the whole publish.
+    for (idx, extra) in draft.extra_png_paths.iter().take(9).enumerate() {
+        let rank = (idx + 2) as i64;
+        if let Err(e) = upload_image(
+            client,
+            &access_token,
+            shop_id,
+            create_resp.listing_id,
+            extra,
+            rank,
+        )
+        .await
+        {
+            // Don't fail the whole publish if one extra image upload fails.
+            // The primary thumbnail is already up — partial gallery beats
+            // dropping the listing entirely.
+            tracing::warn!(
+                "extra image rank {} upload failed for listing {}: {e}",
+                rank,
+                create_resp.listing_id
+            );
+        }
+    }
     upload_file(
         client,
-        keystring,
         &access_token,
         shop_id,
         create_resp.listing_id,
@@ -80,7 +107,6 @@ pub async fn publish_draft(
 
 async fn create_draft(
     client: &reqwest::Client,
-    keystring: &str,
     access_token: &str,
     shop_id: i64,
     draft: &ListingDraft,
@@ -123,11 +149,11 @@ async fn create_draft(
 
 async fn upload_image(
     client: &reqwest::Client,
-    keystring: &str,
     access_token: &str,
     shop_id: i64,
     listing_id: i64,
     png_path: &Path,
+    rank: i64,
 ) -> Result<()> {
     let url = format!(
         "{}/shops/{}/listings/{}/images",
@@ -145,7 +171,7 @@ async fn upload_image(
         .file_name(file_name)
         .mime_str("image/png")
         .context("image mime")?;
-    let form = Form::new().part("image", part).text("rank", "1");
+    let form = Form::new().part("image", part).text("rank", rank.to_string());
     let resp = client
         .post(&url)
         .bearer_auth(access_token)
@@ -162,13 +188,38 @@ async fn upload_image(
     Ok(())
 }
 
+/// Map a file extension to the MIME type Etsy expects. Anything we don't
+/// recognize falls back to `application/octet-stream`, which Etsy accepts
+/// for arbitrary digital downloads.
+fn mime_for(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match ext.as_str() {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        // 3D formats — Etsy doesn't have official MIME mappings for these,
+        // model/* is the IETF-registered form for STL/GLB/OBJ.
+        "stl" => "model/stl",
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "obj" => "model/obj",
+        "fbx" => "application/octet-stream",
+        _ => "application/octet-stream",
+    }
+}
+
 async fn upload_file(
     client: &reqwest::Client,
-    keystring: &str,
     access_token: &str,
     shop_id: i64,
     listing_id: i64,
-    svg_path: &Path,
+    asset_path: &Path,
     job_id: i64,
 ) -> Result<()> {
     let url = format!(
@@ -177,12 +228,18 @@ async fn upload_file(
         shop_id,
         listing_id
     );
-    let bytes = std::fs::read(svg_path).with_context(|| format!("read svg {}", svg_path.display()))?;
-    let file_name = format!("agent-factory-asset-{job_id}.svg");
+    let bytes = std::fs::read(asset_path)
+        .with_context(|| format!("read asset {}", asset_path.display()))?;
+    let ext = asset_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let file_name = format!("agent-factory-asset-{job_id}.{ext}");
+    let mime = mime_for(asset_path);
     let part = Part::bytes(bytes)
         .file_name(file_name.clone())
-        .mime_str("image/svg+xml")
-        .context("svg mime")?;
+        .mime_str(mime)
+        .with_context(|| format!("asset mime ({mime})"))?;
     let form = Form::new()
         .part("file", part)
         .text("name", file_name)
@@ -206,7 +263,6 @@ async fn upload_file(
 /// Activate a listing (state: draft → active). User-initiated only.
 pub async fn activate_listing(
     client: &reqwest::Client,
-    keystring: &str,
     shop_id: i64,
     etsy_listing_id: i64,
 ) -> Result<()> {
@@ -355,16 +411,21 @@ pub async fn handle_publisher_complete(
         }
     };
 
-    let keystring = match crate::secrets::get("etsy_api_keystring") {
-        Ok(Some(k)) => k,
-        _ => {
-            bus.send(SupervisorEvent::EtsyListingPublishFailed {
-                local_listing_id,
-                reason: "etsy_api_keystring not in keychain".into(),
-            });
-            return;
-        }
-    };
+    // Surface a missing keystring early — api_key_header() would otherwise
+    // fail mid-request. We don't capture the value; etsy::api_key_header()
+    // pulls keystring + shared_secret from the keychain on every call.
+    let keystring_present = crate::secrets::get("etsy_api_keystring")
+        .ok()
+        .flatten()
+        .map(|k| !k.is_empty())
+        .unwrap_or(false);
+    if !keystring_present {
+        bus.send(SupervisorEvent::EtsyListingPublishFailed {
+            local_listing_id,
+            reason: "etsy_api_keystring not in keychain".into(),
+        });
+        return;
+    }
 
     // Daily cap: count today's etsy_publishes rows for this project.
     let cap: i64 = crate::secrets::get("daily_listing_cap")
@@ -405,6 +466,22 @@ pub async fn handle_publisher_complete(
         return;
     }
 
+    // Multi-angle preview renders from the designer (3D briefs only).
+    // Filter to entries that actually exist on disk + dedupe against the
+    // primary png to avoid uploading the same image twice when the
+    // designer included the thumbnail in preview_pngs.
+    let extra_png_paths: Vec<PathBuf> = result
+        .get("preview_pngs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && *p != png_path)
+                .collect()
+        })
+        .unwrap_or_default();
+
     let draft = ListingDraft {
         title: title.clone(),
         description,
@@ -412,12 +489,13 @@ pub async fn handle_publisher_complete(
         price_usd,
         taxonomy_id: DEFAULT_TAXONOMY_ID,
         png_path,
+        extra_png_paths,
         svg_path,
         job_id,
     };
 
     let client = reqwest::Client::new();
-    let publish_res = publish_draft(&client, &keystring, shop_id, &draft).await;
+    let publish_res = publish_draft(&client, shop_id, &draft).await;
     match publish_res {
         Ok(resp) => {
             let now = chrono::Utc::now().timestamp();
@@ -626,6 +704,7 @@ mod tests {
             price_usd: 9.99,
             taxonomy_id: 68887,
             png_path: PathBuf::from("/tmp/nope.png"),
+            extra_png_paths: vec![],
             svg_path: PathBuf::from("/tmp/nope.svg"),
             job_id: 1,
         };

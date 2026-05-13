@@ -195,6 +195,147 @@ pub fn set_override(role: &str, system: &str) -> Result<()> {
     Ok(())
 }
 
+/// Maximum length of a single operator steering instruction. The PromptsPanel
+/// allows up to 4000 chars for a full override; a steer is a single-instruction
+/// nudge layered on top, so a tighter cap is appropriate.
+pub const STEER_MAX_LEN: usize = 2000;
+
+/// Maximum number of operator steers per role. Beyond this, the oldest steer
+/// is dropped (FIFO) — prevents unbounded prompt growth.
+pub const STEER_MAX_COUNT: usize = 10;
+
+/// Read every operator steer recorded for `role` in insertion order. Returns
+/// an empty vec if the role has no steers or the field is malformed.
+///
+/// Called both from the UI (to populate the steer badge) and from
+/// `effective_system_prompt` (which composes steers into the worker's system
+/// prompt at job-time). Unknown roles return an empty vec rather than erroring
+/// — the chat panel hides the Steer button for non-LLM agents, but a caller
+/// asking about an unknown role just gets nothing back.
+pub fn list_operator_steers(role: &str) -> Vec<String> {
+    let data = read_prompts_file();
+    data.get(role)
+        .and_then(|v| v.get("operator_steers"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// Append `text` to the role's `operator_steers` list. Validates length and
+/// drops the oldest entry when the list exceeds STEER_MAX_COUNT. Also writes
+/// a `_history` audit entry so the operator can see what they steered when.
+///
+/// Restricted to ROLES (the 4 LLM-driven roles) — other roles don't have an
+/// `_load_system_override` call, so their steers would be silently ignored.
+pub fn add_operator_steer(role: &str, text: &str) -> Result<()> {
+    if !ROLES.contains(&role) {
+        return Err(anyhow!("unknown role: {role}"));
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("steer text is empty"));
+    }
+    if trimmed.len() > STEER_MAX_LEN {
+        return Err(anyhow!(
+            "steer too long ({} > {} chars)",
+            trimmed.len(),
+            STEER_MAX_LEN
+        ));
+    }
+
+    let mut data = read_prompts_file();
+    if !data.is_object() {
+        data = serde_json::json!({});
+    }
+
+    {
+        let obj = data.as_object_mut().expect("data is object");
+        let role_entry = obj
+            .entry(role.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !role_entry.is_object() {
+            *role_entry = serde_json::json!({});
+        }
+        let role_obj = role_entry.as_object_mut().unwrap();
+        let steers = role_obj
+            .entry("operator_steers".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if !steers.is_array() {
+            *steers = serde_json::json!([]);
+        }
+        let arr = steers.as_array_mut().unwrap();
+        arr.push(serde_json::Value::String(trimmed.to_string()));
+        while arr.len() > STEER_MAX_COUNT {
+            arr.remove(0);
+        }
+    }
+
+    let entry = serde_json::json!({
+        "ts": now_ts(),
+        "role_tweaked": role,
+        "rationale": format!("operator steer: {}", trimmed.chars().take(120).collect::<String>()),
+        "source": "user_steer"
+    });
+    {
+        let obj = data.as_object_mut().expect("data is object");
+        let history = obj
+            .entry("_history".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if !history.is_array() {
+            *history = serde_json::json!([]);
+        }
+        let arr = history.as_array_mut().unwrap();
+        arr.push(entry);
+        while arr.len() > 30 {
+            arr.remove(0);
+        }
+    }
+
+    write_prompts_file(&data)?;
+    Ok(())
+}
+
+/// Wipe every operator steer for `role`. Strategist's `system_override` is
+/// untouched — clearing steers only undoes operator-driven nudges.
+pub fn clear_operator_steers(role: &str) -> Result<()> {
+    if !ROLES.contains(&role) {
+        return Err(anyhow!("unknown role: {role}"));
+    }
+    let mut data = read_prompts_file();
+    if !data.is_object() {
+        data = serde_json::json!({});
+    }
+    if let Some(obj) = data.get_mut(role).and_then(|v| v.as_object_mut()) {
+        obj.remove("operator_steers");
+    }
+    let entry = serde_json::json!({
+        "ts": now_ts(),
+        "role_tweaked": role,
+        "rationale": "operator steers cleared",
+        "source": "user_steer"
+    });
+    {
+        let obj = data.as_object_mut().expect("data is object");
+        let history = obj
+            .entry("_history".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if !history.is_array() {
+            *history = serde_json::json!([]);
+        }
+        let arr = history.as_array_mut().unwrap();
+        arr.push(entry);
+        while arr.len() > 30 {
+            arr.remove(0);
+        }
+    }
+    write_prompts_file(&data)?;
+    Ok(())
+}
+
 pub fn clear_override(role: &str) -> Result<()> {
     if !ROLES.contains(&role) {
         return Err(anyhow!("unknown role: {role}"));
@@ -332,5 +473,77 @@ mod tests {
             let d = default_prompt(r).expect("default present");
             assert!(d.len() > 50, "default too short for {r}");
         }
+    }
+
+    #[test]
+    fn test_add_operator_steer_appends_and_lists() {
+        let _g = use_tmp_home();
+        add_operator_steer("designer", "be more aggressive with pricing").unwrap();
+        add_operator_steer("designer", "favor halloween themes this week").unwrap();
+        let steers = list_operator_steers("designer");
+        assert_eq!(steers.len(), 2);
+        assert_eq!(steers[0], "be more aggressive with pricing");
+        assert_eq!(steers[1], "favor halloween themes this week");
+    }
+
+    #[test]
+    fn test_add_operator_steer_rejects_unknown_role() {
+        let _g = use_tmp_home();
+        let r = add_operator_steer("orchestrator", "hello");
+        assert!(r.is_err(), "non-LLM roles must be rejected");
+    }
+
+    #[test]
+    fn test_add_operator_steer_rejects_empty_and_oversized() {
+        let _g = use_tmp_home();
+        assert!(add_operator_steer("research", "").is_err());
+        assert!(add_operator_steer("research", "   ").is_err());
+        let too_long = "a".repeat(STEER_MAX_LEN + 1);
+        assert!(add_operator_steer("research", &too_long).is_err());
+        let just_right = "a".repeat(STEER_MAX_LEN);
+        assert!(add_operator_steer("research", &just_right).is_ok());
+    }
+
+    #[test]
+    fn test_operator_steer_count_capped() {
+        let _g = use_tmp_home();
+        for i in 0..(STEER_MAX_COUNT + 5) {
+            add_operator_steer("listing", &format!("steer-{i}")).unwrap();
+        }
+        let steers = list_operator_steers("listing");
+        assert_eq!(steers.len(), STEER_MAX_COUNT);
+        // FIFO: oldest (steer-0..steer-4) should be dropped.
+        assert_eq!(steers[0], "steer-5");
+        assert_eq!(steers[STEER_MAX_COUNT - 1], format!("steer-{}", STEER_MAX_COUNT + 4));
+    }
+
+    #[test]
+    fn test_clear_operator_steers_wipes_and_leaves_override_alone() {
+        let _g = use_tmp_home();
+        // Strategist sets an override.
+        set_override("cs", &"a".repeat(80)).unwrap();
+        // Operator adds a steer.
+        add_operator_steer("cs", "be terse").unwrap();
+        assert_eq!(list_operator_steers("cs").len(), 1);
+        clear_operator_steers("cs").unwrap();
+        assert_eq!(list_operator_steers("cs").len(), 0);
+        // Strategist's override must survive the clear.
+        let rows = list_prompts();
+        assert!(rows.get("cs").unwrap().override_.is_some());
+    }
+
+    #[test]
+    fn test_steer_does_not_clobber_override() {
+        let _g = use_tmp_home();
+        let prompt = "a".repeat(80);
+        set_override("listing", &prompt).unwrap();
+        add_operator_steer("listing", "operator note").unwrap();
+        let rows = list_prompts();
+        assert_eq!(
+            rows.get("listing").unwrap().override_.as_deref(),
+            Some(prompt.as_str()),
+            "operator steer must not modify strategist's override",
+        );
+        assert_eq!(list_operator_steers("listing"), vec!["operator note"]);
     }
 }

@@ -32,14 +32,14 @@ export default function Corridors({ strips }: { strips: Strip[] }) {
         return (
           <g key={i} className="corridor">
             <polygon points={floorPoly(c.x0, c.y0, c.x1, c.y1)}
-              fill="#070b11" stroke="rgba(95, 212, 240, 0.12)" strokeWidth={0.4} />
+              fill="var(--corridor)" stroke="rgba(var(--accent-rgb), 0.12)" strokeWidth={0.4} />
             <line x1={stripA.x} y1={stripA.y} x2={stripB.x} y2={stripB.y}
-              stroke="rgba(95, 212, 240, 0.45)" strokeWidth={0.45}
+              stroke="rgba(var(--accent-rgb), 0.45)" strokeWidth={0.45}
               strokeDasharray="3,2.4" strokeLinecap="round" />
             {lights.map((L, li) => (
               <g key={li}>
-                <circle cx={L.x} cy={L.y} r={1.6} fill="rgba(95, 212, 240, 0.22)" />
-                <circle cx={L.x} cy={L.y} r={0.7} fill="rgba(95, 212, 240, 0.85)" />
+                <circle cx={L.x} cy={L.y} r={1.6} fill="rgba(var(--accent-rgb), 0.22)" />
+                <circle cx={L.x} cy={L.y} r={0.7} fill="rgba(var(--accent-rgb), 0.85)" />
               </g>
             ))}
           </g>

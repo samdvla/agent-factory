@@ -6,15 +6,30 @@ import urllib.error
 from .protocol import Protocol
 
 MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 600
+# The brief now carries a paragraph-long design_direction PLUS the new
+# ip_risk field. 1200 was getting tight — Haiku occasionally emitted multi-
+# line strings or newline-in-string breakage that tripped the JSON parser
+# ("Expecting ',' delimiter"). 2000 gives breathing room AND the loose
+# parser now has a repair pass for the rest. Cost is negligible.
+MAX_TOKENS = 2000
 
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
 
 
-def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 3) -> str:
+def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts: int = 5) -> str:
     """POST with exponential backoff. Retries on 5xx and URLError. Does NOT retry on 4xx.
-    Returns the response body as utf-8 string. Raises on final failure."""
+    Returns the response body as utf-8 string. Raises on final failure.
+
+    HTTP 529 is Anthropic's load-shedding signal — typical overload events
+    last 30s-2min, so the legacy 1s/2s/4s schedule (~7s total) blew right
+    through them and failed real jobs. 529 gets its own longer schedule
+    (8s/15s/30s/60s/60s). Other 5xx + URLError keep the fast schedule.
+
+    _retry_request: see workers/research/tests/test_research.py for behavior coverage.
+    """
     import time as _time
+    overload_delays = (8, 15, 30, 60, 60)
+    fast_delays = (1, 2, 4, 8, 16)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -22,9 +37,26 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             last_exc = e
-            # Retry only 5xx; 4xx is persistent.
+            # Capture the response body once; HTTPError\'s default
+            # str() is just "HTTP Error N: Reason" and the actual
+            # diagnostic lives in the body that Anthropic returns.
+            try:
+                _body = e.read().decode("utf-8", errors="replace")
+                if _body:
+                    e.msg = f"{e.msg}: {_body[:600]}"
+            except Exception:
+                pass
+            if e.code == 529 and attempt < max_attempts - 1:
+                delay = overload_delays[min(attempt, len(overload_delays) - 1)]
+                print(
+                    f"[retry] HTTP 529 (Anthropic overloaded) attempt "
+                    f"{attempt+1}/{max_attempts}; sleeping {delay}s",
+                    file=sys.stderr, flush=True,
+                )
+                _time.sleep(delay)
+                continue
             if 500 <= e.code < 600 and attempt < max_attempts - 1:
-                delay = (2 ** attempt)  # 1s, 2s, 4s
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] HTTP {e.code} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -32,7 +64,7 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
         except urllib.error.URLError as e:
             last_exc = e
             if attempt < max_attempts - 1:
-                delay = (2 ** attempt)
+                delay = fast_delays[min(attempt, len(fast_delays) - 1)]
                 print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
@@ -40,6 +72,131 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
     if last_exc:
         raise last_exc
     raise RuntimeError("retry: unreachable")
+
+def _use_json_prefill() -> bool:
+    """Anthropic's Messages API supports assistant prefill (seeding the
+    assistant turn with "{" to force structured JSON output). Some bridge
+    proxies normalize / strip the trailing assistant message and reject the
+    request with HTTP 400. Default ON; flip OFF when ANTHROPIC_BASE_URL
+    points at anything other than Anthropic's direct host."""
+    import os as _os
+    url = _os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if not url:
+        return True
+    return "api.anthropic.com" in url
+
+
+def _messages_for_json_call(user_content: str) -> list[dict]:
+    """Build the messages array for a JSON-emitting Anthropic call. Adds the
+    assistant prefill only when the API supports it (direct Anthropic, not
+    a bridge proxy)."""
+    msgs: list[dict] = [{"role": "user", "content": user_content}]
+    if _use_json_prefill():
+        msgs.append({"role": "assistant", "content": "{"})
+    return msgs
+
+
+
+def _parse_loose_json_object(text: str) -> dict:
+    """Parse the first JSON object out of `text`, tolerating fences, trailing
+    prose, and the most common Claude-emitted JSON breakage. Three layers:
+
+      1. Strip leading markdown fences.
+      2. raw_decode from the first '{' — handles trailing prose for free.
+      3. On JSONDecodeError inside the JSON, attempt a small set of repairs
+         (trailing-comma strip, newline-in-string normalization) and retry.
+
+    Raises ValueError with a 240-char preview when no JSON exists at all, or
+    when repair attempts still fail. Both the preview AND the failing
+    parser-error location are logged to stderr so they show up in LiveLog.
+    """
+    s = text.strip()
+    if s.startswith("```"):
+        nl = s.find("\n")
+        s = s[nl + 1 :] if nl != -1 else s
+    start = s.find("{")
+    if start == -1:
+        preview = text.strip().replace("\n", " ")[:240]
+        print(
+            f"[parse] no JSON object found; first 240 chars of response: {preview!r}",
+            file=sys.stderr, flush=True,
+        )
+        raise ValueError(
+            f"no JSON object found in response (got prose). first 240 chars: {preview!r}"
+        )
+    body = s[start:]
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError as first_err:
+        repaired = _repair_json_text(body)
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(repaired)
+            print(
+                f"[parse] repaired JSON after initial error: {first_err}",
+                file=sys.stderr, flush=True,
+            )
+        except json.JSONDecodeError as second_err:
+            point = max(0, first_err.pos - 60)
+            snippet = body[point : first_err.pos + 60].replace("\n", " ")
+            print(
+                f"[parse] JSON repair failed. first={first_err} second={second_err}; "
+                f"body near pos {first_err.pos}: ...{snippet}...",
+                file=sys.stderr, flush=True,
+            )
+            raise first_err
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected JSON object, got {type(obj).__name__}")
+    return obj
+
+
+def _repair_json_text(text: str) -> str:
+    """Best-effort repair of common Claude-emitted JSON breakage.
+
+    Handles:
+      • trailing commas before } or ]
+      • CR/LF inside string values (replaced with single spaces)
+      • lone backslashes that aren't starting a valid escape sequence
+    Not a complete JSON5/json-repair; just covers the cases we've actually
+    seen Haiku/Sonnet emit when the design_direction paragraph gets long.
+    """
+    import re as _re
+    # 1. Strip trailing commas before } or ].
+    out = _re.sub(r",(\s*[}\]])", r"\1", text)
+    # 2. Normalize newlines inside string values: replace any \n that lives
+    #    between an opening " and the next " on a different line with a space.
+    #    Conservative — only triggers when we see a newline directly inside
+    #    a string-typed value.
+    def _collapse_newlines_in_strings(s: str) -> str:
+        result = []
+        i = 0
+        in_string = False
+        escape = False
+        while i < len(s):
+            c = s[i]
+            if in_string:
+                if escape:
+                    result.append(c)
+                    escape = False
+                elif c == "\\":
+                    result.append(c)
+                    escape = True
+                elif c == '"':
+                    result.append(c)
+                    in_string = False
+                elif c in ("\n", "\r"):
+                    result.append(" ")  # collapse newline inside string
+                else:
+                    result.append(c)
+            else:
+                result.append(c)
+                if c == '"':
+                    in_string = True
+            i += 1
+        return "".join(result)
+    out = _collapse_newlines_in_strings(out)
+    # 3. Fix lone backslashes that aren't starting a valid escape.
+    out = _re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", out)
+    return out
 
 
 def _load_system_override(role: str) -> str | None:
@@ -56,27 +213,131 @@ def _load_system_override(role: str) -> str | None:
     return None
 
 
+def _load_operator_steers(role: str) -> list[str]:
+    """Read operator standing instructions written from the ChatPanel Steer
+    action. Returns [] when missing or malformed."""
+    path = os.path.expanduser("~/.agent-factory/prompts.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        arr = data.get(role, {}).get("operator_steers")
+        if isinstance(arr, list):
+            return [s for s in arr if isinstance(s, str) and s.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _append_operator_steers(system_prompt: str, role: str) -> str:
+    """Append operator standing instructions as the final block. Operator
+    steers compose with and take precedence over the strategist-tuned
+    override, because the last block in the system prompt gets the model's
+    strongest attention."""
+    steers = _load_operator_steers(role)
+    if not steers:
+        return system_prompt
+    block = (
+        "OPERATOR STANDING INSTRUCTIONS (operator-set, highest priority — "
+        "apply to this job):\n"
+        + "\n".join(f"- {s}" for s in steers)
+    )
+    return system_prompt.rstrip() + "\n\n" + block
+
+
 JSON_SHAPE = (
     "{\n"
-    '  "niche": "<short specific niche, e.g. \'minimalist line art prints\'>",\n'
+    '  "niche": "<short specific niche, e.g. \'minimalist line art prints\' '
+    "or 'D&D goblin warrior mini'>\",\n"
     '  "keywords": ["<10-15 SEO keywords>"],\n'
     '  "price_band_usd": [<low>, <high>],\n'
-    '  "product_type": "<sticker|digital_print|mug|tee|poster>",\n'
-    '  "design_direction": "<one-paragraph aesthetic playbook: style anchors '
-    '(flat-vector / risograph / line-art / Y2K / cottagecore), palette '
-    'recommendation, typography hint if any, and 2-3 specific composition '
-    "ideas. Treat this as a Midjourney-style prompt the Designer will lean "
-    'on.>",\n'
+    '  "product_type": "<sticker|digital_print|mug|tee|poster|stl_file|3d_model>",\n'
+    '  "design_direction": "<one-paragraph aesthetic / form playbook. For 2D: '
+    'style anchors (flat-vector / risograph / line-art / Y2K / cottagecore), '
+    'palette, typography, composition. For 3D: silhouette + form language '
+    "(stylized vs. realistic, organic vs. geometric), key shapes, printability "
+    'notes (no thin overhangs, supports-friendly), scale hints. Treat this as '
+    "the prompt the Designer feeds to Tripo/Meshy verbatim.>\",\n"
+    '  "ip_risk": "<none|mythology|original|high — set high ONLY when the '
+    "niche references a copyrighted franchise (Naruto, Marvel, Star Wars, "
+    "Pokemon, Disney, Genshin, etc.); mythology for public-domain gods/myths/"
+    'folklore; original for our own coined characters; none otherwise>",\n'
     '  "competition": "<low|medium|high>",\n'
     '  "rationale": "<one sentence reasoning>"\n'
     "}"
 )
 
+# Trademark / franchise keywords that should force ip_risk=high if the model
+# misclassifies. NOT a legal opinion — just a safety net for the publish gate.
+# Keep these lowercase, whitespace-stripped tokens that we substring-match.
+HIGH_IP_KEYWORDS = (
+    "naruto", "sasuke", "goku", "vegeta", "luffy", "zoro", "ichigo",
+    "demon slayer", "tanjiro", "nezuko", "jujutsu", "gojo", "yuji",
+    "pokemon", "pikachu", "charizard", "eevee", "mewtwo",
+    "marvel", "spider-man", "spiderman", "ironman", "iron man", "thor",
+    "hulk", "captain america", "thanos", "deadpool", "wolverine",
+    "x-men", "wanda", "loki", "doctor strange",
+    "dc comics", "batman", "superman", "wonder woman", "joker", "harley quinn",
+    "star wars", "yoda", "darth vader", "mandalorian", "grogu", "baby yoda",
+    "stormtrooper", "kylo ren", "rey",
+    "game of thrones", "daenerys", "jon snow", "tyrion", "targaryen",
+    "house of the dragon",
+    "harry potter", "hogwarts", "voldemort", "dumbledore", "hermione",
+    "lord of the rings", "gandalf", "frodo", "aragorn",
+    "disney", "mickey", "minnie", "elsa", "anna", "moana", "ariel",
+    "stitch", "lilo", "winnie the pooh",
+    "pixar", "buzz lightyear", "woody",
+    "nintendo", "mario", "luigi", "zelda", "link", "kirby",
+    "genshin", "honkai", "hoyoverse",
+    "minecraft", "fortnite", "valorant", "league of legends",
+    "warhammer", "games workshop", "space marine",  # GW is aggressive on STL DMCA
+    "rick and morty", "spongebob", "simpsons", "family guy",
+    "stranger things", "hawkins", "eleven",
+    "breaking bad", "walter white",
+)
+
+MYTHOLOGY_KEYWORDS = (
+    "greek god", "norse god", "egyptian god", "hindu god", "japanese god",
+    "zeus", "thor god", "odin", "loki god", "anubis", "ra ", "horus",
+    "athena", "aphrodite", "ares", "hades", "poseidon", "apollo", "artemis",
+    "dionysus", "hermes god", "hercules", "achilles", "medusa", "minotaur",
+    "kraken", "centaur", "pegasus", "phoenix",
+    "yokai", "kitsune", "tengu", "oni ", "kappa", "tanuki",
+    "cthulhu", "lovecraft", "yog-sothoth", "azathoth", "nyarlathotep",
+    "arthurian", "king arthur", "excalibur", "merlin", "lancelot",
+    "alice in wonderland", "cheshire cat", "mad hatter",
+    "brothers grimm", "fairy tale",
+    "aesop", "fable",
+    "celtic", "druid", "viking",
+    "anubis", "bastet", "sphinx",
+)
+
+
+def _infer_ip_risk(niche: str | None) -> str:
+    """Heuristic backstop in case the model picks an obvious franchise but
+    declares ip_risk='none'. Returns 'high' / 'mythology' / 'none' — 'original'
+    can only be set by the model (we can't tell from text alone)."""
+    if not isinstance(niche, str) or not niche.strip():
+        return "none"
+    n = niche.lower()
+    for kw in HIGH_IP_KEYWORDS:
+        if kw in n:
+            return "high"
+    for kw in MYTHOLOGY_KEYWORDS:
+        if kw in n:
+            return "mythology"
+    return "none"
+
 # Default product when the model omits product_type (older briefs, etc.).
 # Stickers are the only POD product with positive margin at our $12 retail
 # cap — see project-pod-integration memory for the economics.
 DEFAULT_PRODUCT_TYPE = "sticker"
-VALID_PRODUCT_TYPES = {"sticker", "digital_print", "mug", "tee", "poster"}
+# stl_file = 3D-printable STL (Etsy digital download buyers, 3D printer crowd).
+# 3d_model = GLB asset (game devs / web/AR, eventually CGTrader / Fab).
+# Both routes are generated via the Tripo text-to-3D pipeline in the designer.
+VALID_PRODUCT_TYPES = {
+    "sticker", "digital_print", "mug", "tee", "poster",
+    "stl_file", "3d_model",
+}
 
 
 def _normalize_product_type(brief: dict) -> None:
@@ -86,51 +347,191 @@ def _normalize_product_type(brief: dict) -> None:
         brief["product_type"] = DEFAULT_PRODUCT_TYPE
 
 
-def build_demand_brief_prompt(niche_seed: str | None = None, rationale: str | None = None) -> tuple[str, str]:
-    system = (
-        "You are a Market Research Analyst at an AI-run digital products Etsy shop. "
-        "Your job is to identify a profitable niche AND lay down the design direction "
-        "the Designer agent will inherit. Return a structured JSON Demand Brief. "
-        "Be concise and specific. Only return valid JSON, no prose, no markdown.\n\n"
+def _normalize_brief(brief: dict) -> None:
+    """Backfill required brief fields so downstream code never KeyErrors when
+    Claude truncates the JSON. We had a recurring 'competition' KeyError when
+    MAX_TOKENS clipped the tail of the response — this guarantees a usable
+    brief even if the model misbehaves."""
+    if not isinstance(brief.get("niche"), str) or not brief["niche"].strip():
+        brief["niche"] = "general printables"
+    if not isinstance(brief.get("competition"), str):
+        brief["competition"] = "medium"
+    pb = brief.get("price_band_usd")
+    if not (isinstance(pb, list) and len(pb) == 2 and all(isinstance(x, (int, float)) for x in pb)):
+        brief["price_band_usd"] = [4, 12]
+    if not isinstance(brief.get("keywords"), list):
+        brief["keywords"] = []
+    if not isinstance(brief.get("design_direction"), str):
+        brief["design_direction"] = ""
+    if not isinstance(brief.get("rationale"), str):
+        brief["rationale"] = ""
+    _normalize_product_type(brief)
+    # IP-risk classification. The model self-declares, but we ALWAYS overlay
+    # the keyword backstop afterwards — that way a forgotten classification
+    # or an explicit 'none' on an obvious franchise still trips the publish
+    # gate. We only let the model's claim through when our backstop says
+    # 'none' (i.e. we have no evidence to override it).
+    declared = brief.get("ip_risk")
+    inferred = _infer_ip_risk(brief.get("niche"))
+    valid = {"none", "mythology", "original", "high"}
+    if isinstance(declared, str) and declared in valid:
+        if inferred == "high" and declared != "high":
+            brief["ip_risk"] = "high"
+        else:
+            brief["ip_risk"] = declared
+    else:
+        brief["ip_risk"] = inferred
 
-        "For product_type, pick the physical format that fits the niche best — "
-        "default to 'sticker' for cheap impulse-buy designs (best margin on a new shop), "
-        "'digital_print' for downloadable wall art, 'mug'/'tee'/'poster' for everything else.\n\n"
 
-        "For design_direction, lean on what you already know about the prompt-engineering "
-        "patterns that work in the AI-art world (Midjourney style anchors, Stable Diffusion "
-        "modifier stacks, Etsy bestseller aesthetics for this niche). Steal mercilessly — "
-        "if 'flat vector, pastel risograph, soft grain' is the proven pattern for boho "
-        "stickers, say so. The Designer reads this verbatim and uses it to shape the SVG, "
-        "so be opinionated and concrete: name the style, the palette, the composition idea."
-    )
+def build_demand_brief_prompt(
+    niche_seed: str | None = None,
+    rationale: str | None = None,
+    product_type_preference: str | None = None,
+    trend_signals_text: str | None = None,
+) -> tuple[str, str]:
+    focus = os.environ.get("SHOP_FOCUS", "3d_only").strip().lower()
+    is_3d = focus == "3d_only" or product_type_preference in {"stl_file", "3d_model"}
+
+    if is_3d:
+        system = (
+            "You are a Market Research Analyst at an AI-run 3D-asset shop "
+            "selling STL + GLB digital downloads on Etsy and Cults3D. Your "
+            "job: identify a niche the shop can win AND lay down the form "
+            "playbook the Designer feeds to Tripo/Meshy verbatim. Return a "
+            "structured JSON Demand Brief. Concise, specific, no markdown.\n\n"
+
+            "PRODUCT_TYPE: always use 'stl_file' for 3D-printable buyer "
+            "audiences (tabletop minis, jewelry, decor, cosplay, keychains) "
+            "and '3d_model' only for game-asset / AR audiences. Default to "
+            "stl_file unless the niche is explicitly game-dev or AR.\n\n"
+
+            "PRICE_BAND_USD: typical Etsy 3D digital downloads run $3-$15 "
+            "for single models, $8-$25 for bundles. Cults3D runs $2-$12. "
+            "Pick a band that fits the niche — minis $5-$10, jewelry $4-$8, "
+            "decor $6-$15, cosplay $10-$25.\n\n"
+
+            "DESIGN_DIRECTION (this is the most important field): write a "
+            "Tripo-style prompt the Designer copies verbatim. Be specific "
+            "about:\n"
+            "  · subject + pose (e.g. 'goblin warrior, standing, sword "
+            "raised', 'botanical leaf with veining, flat profile')\n"
+            "  · stylization (stylized cartoon / semi-realistic / "
+            "low-poly / organic flowing / hard-surface geometric)\n"
+            "  · printability constraints (no thin overhangs, base shape, "
+            "support-friendly silhouette, hollow vs solid hints)\n"
+            "  · scale (28mm tabletop / 8cm desk / wearable jewelry size)\n"
+            "  · what NOT to include (no PBR textures, no rigging, no "
+            "moving parts — single static mesh).\n\n"
+
+            "KEYWORDS: focus on Etsy + Cults3D search behavior. Mix tags "
+            "like 'STL file', '3D print', specific niche terms, and "
+            "audience terms ('dnd', 'tabletop', 'cosplay', 'gift').\n\n"
+
+            "IP_RISK: classify the niche honestly. Use 'high' if it "
+            "references a copyrighted franchise (Naruto, Marvel, Star Wars, "
+            "Pokemon, Disney, Genshin, Warhammer, etc.) — even fan-art "
+            "interpretations are HIGH risk because Etsy + Cults3D + GitHub "
+            "all enforce DMCA. Use 'mythology' for public-domain gods, "
+            "myths, folklore, fairy tales (Greek, Norse, yokai, Cthulhu, "
+            "Arthurian, Alice in Wonderland). Use 'original' if we're "
+            "coining a brand-new character. Use 'none' for generic "
+            "objects/props that aren't tied to any character."
+        )
+    else:
+        system = (
+            "You are a Market Research Analyst at an AI-run digital products Etsy shop. "
+            "Your job is to identify a profitable niche AND lay down the design direction "
+            "the Designer agent will inherit. Return a structured JSON Demand Brief. "
+            "Be concise and specific. Only return valid JSON, no prose, no markdown.\n\n"
+
+            "For product_type, pick the physical format that fits the niche best — "
+            "default to 'sticker' for cheap impulse-buy designs (best margin on a new shop), "
+            "'digital_print' for downloadable wall art, 'mug'/'tee'/'poster' for everything else.\n\n"
+
+            "For design_direction, lean on what you already know about the prompt-engineering "
+            "patterns that work in the AI-art world (Midjourney style anchors, Stable Diffusion "
+            "modifier stacks, Etsy bestseller aesthetics for this niche). Steal mercilessly — "
+            "if 'flat vector, pastel risograph, soft grain' is the proven pattern for boho "
+            "stickers, say so. The Designer reads this verbatim and uses it to shape the SVG, "
+            "so be opinionated and concrete: name the style, the palette, the composition idea."
+        )
+    pt_clause = ""
+    if product_type_preference and product_type_preference in VALID_PRODUCT_TYPES:
+        pt_clause = (
+            f"\n\nIMPORTANT: The Strategy Lead has chosen product_type='{product_type_preference}' "
+            "for this cycle (market-coverage rotation). Use exactly that value "
+            "in the brief and pick a niche that fits that format naturally."
+        )
+    trend_block = ""
+    if trend_signals_text and trend_signals_text.strip():
+        trend_block = (
+            "\n\nLIVE TREND SIGNALS (Reddit hot posts, Google Trends, YouTube — "
+            "raw scrape, score is normalized 0-100 within source):\n"
+            f"{trend_signals_text}\n\n"
+            "Mine these for niche ideas the average Etsy seller hasn't reacted "
+            "to yet — but filter ruthlessly: skip celebrity gossip, current "
+            "events, brand/IP names (HIGH legal risk), and anything that "
+            "doesn't translate to a printable/displayable 3D object. The signal "
+            "is in the underlying CATEGORIES (e.g. if mythology, dinosaurs, "
+            "Halloween, dnd, a TV-show genre, or a hobby keeps appearing — "
+            "that's the lane). DO NOT just regurgitate a trending term as the "
+            "niche.\n"
+        )
+
     if niche_seed:
         seed_text = niche_seed
         rat_text = rationale or "no rationale provided"
         user = (
             f'The strategy lead picked this niche to pursue: "{seed_text}" — rationale: "{rat_text}". '
-            f"Build a Demand Brief for it. Return JSON only with the shape {JSON_SHAPE}"
+            f"Build a Demand Brief for it.{pt_clause}{trend_block} "
+            f"Return JSON only with the shape {JSON_SHAPE}"
         )
     else:
         user = (
-            "Generate a Demand Brief for a digital-product Etsy shop. "
-            "Pick a niche that's currently in demand for printables, SVGs, or digital templates. "
+            "Generate a Demand Brief for an Etsy shop."
+            f"{pt_clause}{trend_block} "
+            "Pick a niche that's currently in demand. "
             f"Return JSON only with this exact shape:\n{JSON_SHAPE}"
         )
     return system, user
 
 
-def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str | None = None) -> dict:
-    system_prompt, user_prompt = build_demand_brief_prompt(niche_seed=niche_seed, rationale=rationale)
+def _fetch_trend_signals_text() -> str:
+    """Best-effort: pull live trend signals and format them for the prompt.
+    Never raises — if every source fails we return '' and the brief just
+    runs without external signal."""
+    try:
+        from .trends import fetch_all_signals, format_for_prompt
+        signals = fetch_all_signals(top_n=25)
+        return format_for_prompt(signals) if signals else ""
+    except Exception as e:
+        print(f"[trends] composite fetch failed: {e}", file=sys.stderr, flush=True)
+        return ""
+
+
+def call_anthropic(
+    api_key: str,
+    niche_seed: str | None = None,
+    rationale: str | None = None,
+    product_type_preference: str | None = None,
+) -> dict:
+    trend_signals_text = _fetch_trend_signals_text()
+    system_prompt, user_prompt = build_demand_brief_prompt(
+        niche_seed=niche_seed,
+        rationale=rationale,
+        product_type_preference=product_type_preference,
+        trend_signals_text=trend_signals_text,
+    )
     override = _load_system_override("research")
     if override:
         system_prompt = override
+    system_prompt = _append_operator_steers(system_prompt, "research")
 
     body = json.dumps({
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
+                "messages": _messages_for_json_call(user_prompt),
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -148,18 +549,18 @@ def call_anthropic(api_key: str, niche_seed: str | None = None, rationale: str |
 
     response = json.loads(raw)
     text = response["content"][0]["text"]
+    # Restore the prefilled "{" assistant.content so the JSON parser
+    # sees a complete object. We only prepend when the response
+    # contains no "{" at all — fenced or wrapped mock responses
+    # already carry their own brace and pass through untouched.
+    if "{" not in text:
+        text = "{" + text
     usage = response.get("usage", {})
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
 
-    # Strip markdown code fences if present
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-
-    brief = json.loads(text)
-    _normalize_product_type(brief)
+    brief = _parse_loose_json_object(text)
+    _normalize_brief(brief)
     return brief, tokens_in, tokens_out
 
 
@@ -185,6 +586,7 @@ def process_job(job_id: int, payload: dict) -> dict:
 
     niche_seed: str | None = payload.get("niche_seed") or None
     rationale: str | None = payload.get("rationale") or None
+    product_type_preference: str | None = payload.get("product_type_preference") or None
     # cycle_id is the chain identifier the orchestrator generated at the head
     # of this pipeline run. We propagate it but never invent one — a missing
     # cycle_id means this job was kicked off outside the pipeline, and we want
@@ -195,15 +597,61 @@ def process_job(job_id: int, payload: dict) -> dict:
     else:
         print(f"[research] job_id={job_id} calling Anthropic model={MODEL} (no seed)", file=sys.stderr, flush=True)
     try:
-        brief, tokens_in, tokens_out = call_anthropic(api_key, niche_seed=niche_seed, rationale=rationale)
+        brief, tokens_in, tokens_out = call_anthropic(
+            api_key,
+            niche_seed=niche_seed,
+            rationale=rationale,
+            product_type_preference=product_type_preference,
+        )
+        # If orchestrator dictated a product_type, force it onto the brief
+        # so the model can't quietly override the rotation pick.
+        if product_type_preference in VALID_PRODUCT_TYPES:
+            brief["product_type"] = product_type_preference
+        # Defensive .get() — _normalize_brief filled these but be explicit.
+        comp = brief.get("competition", "medium")
+        pb = brief.get("price_band_usd") or [4, 12]
         ticker_text = (
-            f"niche: {brief['niche']} · {brief['competition']} comp "
-            f"· ${brief['price_band_usd'][0]}-{brief['price_band_usd'][1]}"
+            f"niche: {brief.get('niche', '?')} · {comp} comp "
+            f"· ${pb[0]}-{pb[1]} · {brief.get('product_type', '?')}"
         )
         print(f"[research] job_id={job_id} done in={tokens_in} out={tokens_out}", file=sys.stderr, flush=True)
         handoff_payload: dict = {"brief": brief}
         if cycle_id:
             handoff_payload["cycle_id"] = cycle_id
+        # Conversation log: hand the designer a short, opinionated brief and
+        # broadcast the same headline so listing / strategist can react.
+        design_direction = brief.get("design_direction") or ""
+        keywords = brief.get("keywords") or []
+        kw_line = ", ".join(keywords[:8]) if isinstance(keywords, list) else ""
+        ip_risk = brief.get("ip_risk", "none")
+        risk_tag = f" [ip_risk={ip_risk}]" if ip_risk != "none" else ""
+        designer_msg = (
+            f"New brief: niche='{brief['niche']}' · product={brief['product_type']}"
+            f"{risk_tag}.\n"
+            f"Design direction: {design_direction.strip()[:600]}\n"
+            f"Keywords to bake into the visual: {kw_line}"
+        )
+        floor_msg = (
+            f"Picked niche '{brief.get('niche', '?')}'{risk_tag} ({comp} comp, "
+            f"${pb[0]}-{pb[1]}, {brief.get('product_type', '?')}). "
+            f"Direction: {design_direction.strip()[:160]}"
+        )
+        messages = [
+            {
+                "from": "research",
+                "to": "designer",
+                "topic": "design_brief",
+                "importance": "heads_up",
+                "content": designer_msg,
+            },
+            {
+                "from": "research",
+                "to": "*",
+                "topic": "design_brief",
+                "importance": "info",
+                "content": floor_msg,
+            },
+        ]
         result: dict = {
             "ok": True,
             "brief": brief,
@@ -215,6 +663,7 @@ def process_job(job_id: int, payload: dict) -> dict:
                 "to_role": "designer",
                 "payload": handoff_payload,
             },
+            "messages": messages,
         }
         if cycle_id:
             result["cycle_id"] = cycle_id

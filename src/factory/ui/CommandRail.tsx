@@ -5,6 +5,8 @@ import AnalyticsPanel from "./AnalyticsPanel";
 import PromptsPanel from "./PromptsPanel";
 import WealthLeaderboard from "./WealthLeaderboard";
 import ActivityModal from "./ActivityModal";
+import ConversationsModal from "./ConversationsModal";
+import ListingStatsPanel from "./ListingStatsPanel";
 import { useFactoryStore } from "../state/factoryStore";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -199,7 +201,15 @@ function PanelRow({
 
 /* ─── Collapsed icon strip ───────────────────────────────────────────── */
 
-type FocusTarget = "budget" | "etsy" | "activity" | "cycles" | "prompts" | "wealth" | null;
+type FocusTarget =
+  | "budget"
+  | "etsy"
+  | "activity"
+  | "conversations"
+  | "cycles"
+  | "prompts"
+  | "wealth"
+  | null;
 
 interface CollapsedStripProps {
   onFocusExpand: (target: FocusTarget) => void;
@@ -209,6 +219,7 @@ interface CollapsedStripProps {
   promptOverrideCount: number;
   wealthCount: number;
   unratedCount: number;
+  conversationsUnread: number;
 }
 
 function CollapsedStrip({
@@ -219,6 +230,7 @@ function CollapsedStrip({
   promptOverrideCount,
   wealthCount,
   unratedCount,
+  conversationsUnread,
 }: CollapsedStripProps) {
   const budgetTone = budget ? tone(budget.today_usd, budget.daily_cap_usd) : "ok";
   const budgetPct = budget ? pct(budget.today_usd, budget.daily_cap_usd) : 0;
@@ -336,6 +348,39 @@ function CollapsedStrip({
           {unratedCount > 0
             ? `${unratedCount} output${unratedCount === 1 ? "" : "s"} waiting for review`
             : "No new outputs to review"}
+        </span>
+      </button>
+
+      {/* Conversations — agent-to-agent messages */}
+      <button
+        type="button"
+        className="rail-strip-btn"
+        onClick={() => onFocusExpand("conversations")}
+        aria-label="Conversations"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          aria-hidden="true"
+        >
+          <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+        </svg>
+        {conversationsUnread > 0 && (
+          <span
+            className="rail-strip-badge"
+            aria-label={`${conversationsUnread} new`}
+          >
+            {conversationsUnread > 99 ? "99+" : conversationsUnread}
+          </span>
+        )}
+        <span className="rail-tip">
+          {conversationsUnread > 0
+            ? `${conversationsUnread} new message${conversationsUnread === 1 ? "" : "s"} between agents`
+            : "Agent conversation log"}
         </span>
       </button>
 
@@ -466,6 +511,11 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
 
   // ActivityModal open state
   const [activityOpen, setActivityOpen] = useState(false);
+  // ConversationsModal open state + unread badge
+  const [conversationsOpen, setConversationsOpen] = useState(false);
+  const [conversationsUnread, setConversationsUnread] = useState(0);
+  // Timestamp of last "open" — anything newer counts as unread.
+  const lastConvSeenRef = useRef<number>(Math.floor(Date.now() / 1000));
 
   // Which card to scroll to after expanding
   const [pendingFocus, setPendingFocus] = useState<FocusTarget>(null);
@@ -544,6 +594,41 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     };
   }, [refreshUnratedCount]);
 
+  // Conversations unread count — poll periodically AND react instantly when a
+  // worker emits an agent_message notification.
+  const refreshConvUnread = useCallback(async () => {
+    try {
+      const n = await api.agentMessagesSince(lastConvSeenRef.current);
+      setConversationsUnread(n);
+    } catch {
+      // Silent during boot / non-Tauri
+    }
+  }, []);
+  useEffect(() => {
+    refreshConvUnread();
+    const id = setInterval(refreshConvUnread, 12000);
+    let unlisten: UnlistenFn | undefined;
+    listen<{ method?: string }>("supervisor:event", (e) => {
+      const p = e.payload as { method?: string };
+      if (p.method === "agent_message") {
+        refreshConvUnread();
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      clearInterval(id);
+      unlisten?.();
+    };
+  }, [refreshConvUnread]);
+
+  // When the modal opens, treat everything currently in the log as "seen".
+  const openConversations = useCallback(() => {
+    lastConvSeenRef.current = Math.floor(Date.now() / 1000);
+    setConversationsUnread(0);
+    setConversationsOpen(true);
+  }, []);
+
   // When pendingFocus is set and rail is expanded, scroll + flash the target
   useEffect(() => {
     if (!pendingFocus || collapsed) return;
@@ -570,9 +655,14 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   }, [pendingFocus, collapsed]);
 
   const handleFocusExpand = (target: FocusTarget) => {
-    // Activity is a modal, not a rail row — open it directly regardless of collapsed state.
+    // Activity + Conversations are modals, not rail rows — open them directly
+    // regardless of collapsed state.
     if (target === "activity") {
       setActivityOpen(true);
+      return;
+    }
+    if (target === "conversations") {
+      openConversations();
       return;
     }
     onToggle(false);
@@ -592,8 +682,13 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
           promptOverrideCount={promptOverrideCount}
           wealthCount={wealthCount}
           unratedCount={unratedCount}
+          conversationsUnread={conversationsUnread}
         />
         <ActivityModal open={activityOpen} onClose={() => setActivityOpen(false)} />
+        <ConversationsModal
+          open={conversationsOpen}
+          onClose={() => setConversationsOpen(false)}
+        />
       </>
     );
   }
@@ -628,6 +723,37 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       {/* Etsy card */}
       <EtsyCard />
 
+      {/* Conversations row — opens a modal showing the agent message log */}
+      <div id="rail-conversations" className="rail-panel-row-wrap">
+        <button
+          type="button"
+          className="rail-panel-row"
+          onClick={openConversations}
+          title="Open the conversation log between agents"
+        >
+          <span className="rail-card-accent" style={{ background: "#9be0b3" }} />
+          <span className="rail-panel-row-label">Conversations</span>
+          <span
+            className={`rail-panel-row-count${conversationsUnread > 0 ? " is-live" : " is-zero"}`}
+          >
+            {conversationsUnread > 99 ? "99+" : conversationsUnread}
+          </span>
+          <svg
+            className="rail-panel-row-caret"
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            aria-hidden="true"
+          >
+            <polyline points="7 17 17 7" />
+            <polyline points="7 7 17 7 17 17" />
+          </svg>
+        </button>
+      </div>
+
       {/* Activity row — opens a full modal so cards have room to breathe */}
       <div id="rail-activity" className="rail-panel-row-wrap">
         <button
@@ -658,6 +784,18 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
           </svg>
         </button>
       </div>
+
+      {/* Impressions row — listing-stats feedback loop */}
+      <PanelRow
+        id="rail-impressions"
+        label="Impressions"
+        count={0}
+        accentColor="#f5a623"
+        emptyMessage="No drafts polled yet — publish a listing to start."
+        alwaysRenderChildren
+      >
+        <ListingStatsPanel alwaysOpen />
+      </PanelRow>
 
       {/* Cycles row */}
       <PanelRow
@@ -693,6 +831,10 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
       </PanelRow>
 
       <ActivityModal open={activityOpen} onClose={() => setActivityOpen(false)} />
+      <ConversationsModal
+        open={conversationsOpen}
+        onClose={() => setConversationsOpen(false)}
+      />
     </aside>
   );
 }

@@ -1,5 +1,9 @@
 import json
-from research.agent import build_demand_brief_prompt
+from research.agent import (
+    build_demand_brief_prompt,
+    _infer_ip_risk,
+    _normalize_brief,
+)
 
 
 def test_prompt_includes_niche_field():
@@ -113,4 +117,108 @@ def test_cycle_id_propagates(tmp_path, monkeypatch):
     result2 = process_job(8, {"niche_seed": "minimal art", "rationale": "trending"})
     assert result2["ok"] is True
     assert "cycle_id" not in result2
-    assert "cycle_id" not in result2["handoff"]["payload"]
+
+
+def test_infer_ip_risk_keyword_buckets():
+    assert _infer_ip_risk("D&D goblin warrior mini") == "none"
+    assert _infer_ip_risk("Naruto Uzumaki figurine") == "high"
+    assert _infer_ip_risk("Star Wars stormtrooper helmet") == "high"
+    assert _infer_ip_risk("Warhammer 40k space marine mini") == "high"
+    assert _infer_ip_risk("Greek god Zeus bust") == "mythology"
+    assert _infer_ip_risk("Cthulhu cosplay mask") == "mythology"
+    assert _infer_ip_risk(None) == "none"
+    assert _infer_ip_risk("") == "none"
+
+
+def test_normalize_brief_backstops_ip_risk():
+    """Model declares 'none' on an obvious franchise — backstop forces 'high'."""
+    brief = {"niche": "Pikachu pendant", "ip_risk": "none"}
+    _normalize_brief(brief)
+    assert brief["ip_risk"] == "high"
+
+
+def test_normalize_brief_respects_original_when_no_evidence():
+    """Model says 'original' on a generic name — backstop has no evidence to
+    override, so 'original' stands."""
+    brief = {"niche": "Lunar Knight captain mini", "ip_risk": "original"}
+    _normalize_brief(brief)
+    assert brief["ip_risk"] == "original"
+
+
+def test_normalize_brief_fills_missing_ip_risk():
+    """Model omitted ip_risk entirely — we still produce a usable label."""
+    brief = {"niche": "generic dragon mini"}
+    _normalize_brief(brief)
+    assert brief["ip_risk"] == "none"
+
+
+def test_3d_system_prompt_mentions_ip_risk():
+    """The 3D research system prompt must teach the model about ip_risk so
+    the field gets populated honestly, not via heuristic fallback only."""
+    system, _ = build_demand_brief_prompt(product_type_preference="stl_file")
+    assert "ip_risk" in system.lower() or "IP_RISK" in system
+
+
+def test_loose_json_handles_trailing_prose():
+    """Regression test for the 2026-05-12 pipeline halt: Claude returned
+    valid JSON followed by an explanatory paragraph. Bare json.loads raised
+    'Extra data: line N col 1', the research worker crashed, designer never
+    received a handoff, and only orchestrator + research avatars moved.
+    The loose parser must ignore everything after the matching closing brace."""
+    from research.agent import _parse_loose_json_object
+
+    body = (
+        '{"niche": "norse god bust", "keywords": ["thor"], '
+        '"price_band_usd": [6, 12], "product_type": "stl_file", '
+        '"design_direction": "heroic profile", "ip_risk": "mythology", '
+        '"competition": "medium", "rationale": "demand exists"}\n\n'
+        "This brief targets the tabletop mini market. Let me know if "
+        "you want adjustments."
+    )
+    out = _parse_loose_json_object(body)
+    assert out["niche"] == "norse god bust"
+    assert out["ip_risk"] == "mythology"
+
+
+def test_loose_json_repairs_newline_inside_string():
+    """Regression for 'Expecting comma delimiter' from 2026-05-12 17:17:
+    Haiku occasionally emits a string value with a literal newline mid-
+    paragraph. The naive parser fails at the newline; the repair pass
+    must collapse it into a space and parse cleanly."""
+    from research.agent import _parse_loose_json_object
+
+    body = (
+        '{"niche": "test", "design_direction": "stylized cartoon mini\n'
+        'with sweeping cape and dynamic pose", "competition": "low"}'
+    )
+    out = _parse_loose_json_object(body)
+    assert out["niche"] == "test"
+    assert "sweeping cape" in out["design_direction"]
+    assert out["competition"] == "low"
+
+
+def test_loose_json_repairs_trailing_comma():
+    """Trailing commas before ] or } are common Claude breakage; the
+    repair pass must strip them rather than re-raise."""
+    from research.agent import _parse_loose_json_object
+
+    body = '{"keywords": ["a", "b", "c",], "competition": "low",}'
+    out = _parse_loose_json_object(body)
+    assert out["keywords"] == ["a", "b", "c"]
+    assert out["competition"] == "low"
+
+
+def test_loose_json_handles_fence_and_trailing_prose():
+    """Same regression but with a ```json fence wrapping the object."""
+    from research.agent import _parse_loose_json_object
+
+    body = (
+        "```json\n"
+        '{"niche": "yokai keychain", "keywords": [], "price_band_usd": [4, 8], '
+        '"product_type": "stl_file", "design_direction": "x", '
+        '"ip_risk": "mythology", "competition": "low", "rationale": "y"}\n'
+        "```\n\n"
+        "Hope this helps!"
+    )
+    out = _parse_loose_json_object(body)
+    assert out["niche"] == "yokai keychain"

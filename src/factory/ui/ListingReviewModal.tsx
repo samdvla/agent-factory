@@ -1,5 +1,5 @@
-import { memo, useEffect, useState } from "react";
-import { api, type ListingReviewInfo } from "../../api";
+import { memo, useEffect, useMemo, useState } from "react";
+import { api, type ListingReviewInfo, type JobAssetInfo } from "../../api";
 
 /**
  * Pre-launch review modal — gates the Activate button for the first N
@@ -26,6 +26,7 @@ function ListingReviewModalImpl({
   onActivate,
 }: Props) {
   const [info, setInfo] = useState<ListingReviewInfo | null>(null);
+  const [asset, setAsset] = useState<JobAssetInfo | null>(null);
   const [svg, setSvg] = useState<string | null>(null);
   const [working, setWorking] = useState<"activate" | "discard" | null>(null);
 
@@ -39,10 +40,21 @@ function ListingReviewModalImpl({
         console.warn("review-info failed", e);
       }
       try {
-        const s = await api.readAssetSvg(localListingId);
-        if (!cancelled) setSvg(s);
+        const a = await api.readListingAsset(localListingId);
+        if (!cancelled) {
+          setAsset(a);
+          if (a.kind === "svg") {
+            // Legacy path: only SVGs need raw markup for the inline render.
+            try {
+              const s = await api.readAssetSvg(localListingId);
+              if (!cancelled) setSvg(s);
+            } catch (e) {
+              console.warn("read-asset-svg failed", e);
+            }
+          }
+        }
       } catch (e) {
-        console.warn("read-asset-svg failed", e);
+        console.warn("read-listing-asset failed", e);
       }
     })();
     return () => {
@@ -88,6 +100,21 @@ function ListingReviewModalImpl({
   const svgSrc = svg
     ? `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
     : null;
+  const is3d = asset?.kind === "glb" || asset?.kind === "stl";
+  const glbDataUrl = useMemo(() => {
+    if (!asset) return null;
+    const b = asset.kind === "glb" ? asset.data_base64 : asset.glb_data_base64;
+    return b ? `data:model/gltf-binary;base64,${b}` : null;
+  }, [asset]);
+  const pngDataUrl = useMemo(() => {
+    if (!asset?.png_data_base64) return null;
+    return `data:image/png;base64,${asset.png_data_base64}`;
+  }, [asset]);
+  const stlDataUrl = useMemo(() => {
+    if (asset?.kind === "stl" && asset.data_base64)
+      return `data:model/stl;base64,${asset.data_base64}`;
+    return null;
+  }, [asset]);
 
   return (
     <div className="review-modal-overlay" role="dialog" aria-modal="true">
@@ -110,7 +137,35 @@ function ListingReviewModalImpl({
 
         <div className="review-modal-body">
           <div className="review-modal-left">
-            {svgSrc ? (
+            {is3d ? (
+              glbDataUrl ? (
+                // @ts-expect-error custom-element JSX
+                <model-viewer
+                  src={glbDataUrl}
+                  alt="3D listing asset preview"
+                  camera-controls
+                  auto-rotate
+                  shadow-intensity="1"
+                  className="review-modal-asset"
+                  style={{
+                    width: 320,
+                    height: 320,
+                    background: "#1a1d23",
+                    borderRadius: 8,
+                  }}
+                />
+              ) : pngDataUrl ? (
+                <img
+                  src={pngDataUrl}
+                  alt="3D listing thumbnail"
+                  className="review-modal-asset"
+                  width={320}
+                  height={320}
+                />
+              ) : (
+                <div className="review-modal-asset-empty">3D asset (no preview)</div>
+              )
+            ) : svgSrc ? (
               <img
                 src={svgSrc}
                 alt="Listing asset preview"
@@ -120,6 +175,28 @@ function ListingReviewModalImpl({
               />
             ) : (
               <div className="review-modal-asset-empty">no asset</div>
+            )}
+            {is3d && (
+              <div className="review-modal-3d-downloads">
+                {stlDataUrl && (
+                  <a
+                    href={stlDataUrl}
+                    download={`listing-${localListingId}.stl`}
+                    className="asset-viewer-dl"
+                  >
+                    ↓ STL
+                  </a>
+                )}
+                {glbDataUrl && (
+                  <a
+                    href={glbDataUrl}
+                    download={`listing-${localListingId}.glb`}
+                    className="asset-viewer-dl"
+                  >
+                    ↓ GLB
+                  </a>
+                )}
+              </div>
             )}
             <div className="review-modal-meta">
               <div className="review-meta-row">

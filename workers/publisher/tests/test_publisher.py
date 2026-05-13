@@ -128,7 +128,7 @@ def test_mock_etsy_record_includes_asset_path():
         })
         assert result["ok"] is True
 
-        with open(os.path.join(tmpdir, "mock_etsy.json")) as f:
+        with open(os.path.join(tmpdir, "publisher_output.json")) as f:
             records = json.load(f)
         assert len(records) == 1
         assert records[0]["asset_path"] == "/tmp/.agent-factory/assets/12.svg"
@@ -146,7 +146,7 @@ def test_mock_etsy_record_includes_asset_path():
             },
         })
         assert result2["ok"] is True
-        with open(os.path.join(tmpdir, "mock_etsy.json")) as f:
+        with open(os.path.join(tmpdir, "publisher_output.json")) as f:
             records = json.load(f)
         assert len(records) == 2
         # Find the new record by title

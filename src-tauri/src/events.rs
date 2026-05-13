@@ -67,6 +67,66 @@ pub enum SupervisorEvent {
     EtsyReplyPosted {
         conversation_id: i64,
     },
+    EtsyListingStats {
+        etsy_listing_id: i64,
+        views: i64,
+        favorites: i64,
+        delta_views: i64,
+        delta_favorites: i64,
+    },
+    Cults3dPublished {
+        local_listing_id: i64,
+        creation_id: String,
+        url: String,
+    },
+    Cults3dPublishFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    Cults3dCapped {
+        count: i64,
+        cap: i64,
+    },
+    SketchfabPublished {
+        local_listing_id: i64,
+        uid: String,
+        url: String,
+    },
+    SketchfabPublishFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    SketchfabCapped {
+        count: i64,
+        cap: i64,
+    },
+    GumroadPublished {
+        local_listing_id: i64,
+        product_id: String,
+        short_url: Option<String>,
+        file_attached: bool,
+    },
+    GumroadPublishFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    GumroadCapped {
+        count: i64,
+        cap: i64,
+    },
+    MmfPublished {
+        local_listing_id: i64,
+        object_id: String,
+        url: Option<String>,
+    },
+    MmfPublishFailed {
+        local_listing_id: i64,
+        reason: String,
+    },
+    MmfCapped {
+        count: i64,
+        cap: i64,
+    },
     EtsyKillSwitchTriggered,
     PnlCycleClosed {
         cycle_id: String,

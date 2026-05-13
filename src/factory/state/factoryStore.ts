@@ -64,6 +64,36 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   setAgentTask: (role, task) => set((s) => ({
     agents: { ...s.agents, [role]: { ...s.agents[role], task } },
   })),
+  addAgentTokens: (role, tokens) => set((s) => {
+    const cur = s.agents[role];
+    if (!cur || !Number.isFinite(tokens) || tokens <= 0) return {};
+    return {
+      agents: {
+        ...s.agents,
+        [role]: { ...cur, tokensToday: cur.tokensToday + tokens },
+      },
+    };
+  }),
+  incrementAgentCompleted: (role) => set((s) => {
+    const cur = s.agents[role];
+    if (!cur) return {};
+    return {
+      agents: {
+        ...s.agents,
+        [role]: { ...cur, completedToday: cur.completedToday + 1 },
+      },
+    };
+  }),
+  incrementAgentFailed: (role) => set((s) => {
+    const cur = s.agents[role];
+    if (!cur) return {};
+    return {
+      agents: {
+        ...s.agents,
+        [role]: { ...cur, failedToday: cur.failedToday + 1 },
+      },
+    };
+  }),
   walkAgent: (role, target) => set((s) => ({
     agents: { ...s.agents, [role]: {
       ...s.agents[role],

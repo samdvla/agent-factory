@@ -1,0 +1,427 @@
+"""Tripo 3D text-to-model client.
+
+Stdlib only: urllib for HTTP, json for bodies. Mirrors the retry pattern
+used in the rest of the worker codebase. Two-step flow:
+  1. POST /v2/openapi/task with {"type": "text_to_model", "prompt": ...}
+     → returns a task_id.
+  2. GET /v2/openapi/task/<task_id> until status == "success".
+     → response contains output URLs (pbr_model, model, base_model).
+
+The model URL points to a GLB file. We download it, then optionally call
+`glb_to_stl()` (uses trimesh) so a single generation yields both formats —
+GLB for game devs / web viewers, STL for 3D-printer buyers.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from typing import Optional, Tuple
+
+# Tripo API surface area. Override the base via env for sandbox/staging.
+TRIPO_API_BASE = os.environ.get("TRIPO_API_BASE", "https://api.tripo3d.ai").rstrip("/")
+# Latest stable model version as of 2026-05. Override via env if Tripo
+# ships a newer one we want to opt into without a code change.
+DEFAULT_MODEL_VERSION = os.environ.get("TRIPO_MODEL_VERSION", "v2.5-20250123")
+
+# Poll cadence + ceiling. Tripo text→3D typically completes in 30–90s; we
+# cap at 6 minutes so a stuck task can't tie up the worker forever.
+POLL_INTERVAL_SEC = 5
+POLL_TIMEOUT_SEC = 360
+
+
+class TripoError(Exception):
+    """Raised for any non-recoverable Tripo failure (bad request, task failed,
+    download failed). Callers should treat this the same as a generation
+    failure: fail the design job, fall through to text-only output."""
+
+
+def _post(url: str, body: dict, api_key: str, timeout: int = 60) -> dict:
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        raise TripoError(f"Tripo POST {url} HTTP {e.code}: {raw}") from e
+    except urllib.error.URLError as e:
+        raise TripoError(f"Tripo POST {url} network error: {e}") from e
+
+
+def _get(url: str, api_key: str, timeout: int = 60) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        raise TripoError(f"Tripo GET {url} HTTP {e.code}: {raw}") from e
+    except urllib.error.URLError as e:
+        raise TripoError(f"Tripo GET {url} network error: {e}") from e
+
+
+def _ext_from_path(path: str) -> str:
+    """Tripo's task body wants a bare extension like 'jpg' / 'png' / 'webp'."""
+    ext = os.path.splitext(path)[1].lstrip(".").lower()
+    if ext == "jpeg":
+        return "jpg"
+    if ext not in {"jpg", "png", "webp"}:
+        # Tripo's spec rejects anything else; default to png so the request
+        # gets back a clear error rather than silently corrupting the upload.
+        return "png"
+    return ext
+
+
+def upload_image(api_key: str, image_path: str, timeout: int = 120) -> str:
+    """POST an image to Tripo's upload endpoint via multipart/form-data.
+
+    Returns the image_token Tripo issues, which the task-create call passes
+    back as `file.file_token`. Stdlib-only multipart: build the body by hand
+    so we don't drag in `requests` just for one upload.
+    """
+    import secrets as _secrets
+    import mimetypes
+
+    with open(image_path, "rb") as f:
+        data = f.read()
+    filename = os.path.basename(image_path)
+    mime = mimetypes.guess_type(filename)[0] or "image/png"
+    boundary = "----tripo-" + _secrets.token_hex(16)
+    crlf = b"\r\n"
+    body = (
+        f"--{boundary}{crlf.decode()}"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"{crlf.decode()}'
+        f"Content-Type: {mime}{crlf.decode()}{crlf.decode()}"
+    ).encode("utf-8") + data + (
+        f"{crlf.decode()}--{boundary}--{crlf.decode()}"
+    ).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{TRIPO_API_BASE}/v2/openapi/upload",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        raise TripoError(f"Tripo upload HTTP {e.code}: {raw}") from e
+    except urllib.error.URLError as e:
+        raise TripoError(f"Tripo upload network error: {e}") from e
+
+    if payload.get("code") != 0:
+        raise TripoError(f"Tripo upload returned code={payload.get('code')}: {payload}")
+    data_block = payload.get("data") or {}
+    # Tripo has shipped both `image_token` and `file_token` historically —
+    # accept whichever the running deployment returns.
+    token = data_block.get("image_token") or data_block.get("file_token")
+    if not isinstance(token, str) or not token:
+        raise TripoError(f"Tripo upload response missing image_token: {payload}")
+    return token
+
+
+def submit_image_to_model(
+    api_key: str,
+    image_path: str,
+    *,
+    model_version: str = DEFAULT_MODEL_VERSION,
+    style: Optional[str] = None,
+) -> str:
+    """Create an image-to-3D task from a local PNG/JPG/WEBP. Returns task_id."""
+    file_token = upload_image(api_key, image_path)
+    body: dict = {
+        "type": "image_to_model",
+        "model_version": model_version,
+        "file": {
+            "type": _ext_from_path(image_path),
+            "file_token": file_token,
+        },
+    }
+    if style:
+        body["style"] = style
+    resp = _post(f"{TRIPO_API_BASE}/v2/openapi/task", body, api_key)
+    code = resp.get("code")
+    if code != 0:
+        raise TripoError(f"Tripo image task create returned code={code}: {resp}")
+    task_id = resp.get("data", {}).get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise TripoError(f"Tripo image task create missing task_id: {resp}")
+    return task_id
+
+
+def submit_text_to_model(
+    api_key: str,
+    prompt: str,
+    *,
+    model_version: str = DEFAULT_MODEL_VERSION,
+    style: Optional[str] = None,
+) -> str:
+    """Create a text-to-3D task. Returns task_id on success."""
+    body: dict = {
+        "type": "text_to_model",
+        "prompt": prompt,
+        "model_version": model_version,
+    }
+    if style:
+        body["style"] = style
+    resp = _post(f"{TRIPO_API_BASE}/v2/openapi/task", body, api_key)
+    code = resp.get("code")
+    if code != 0:
+        raise TripoError(f"Tripo task create returned code={code}: {resp}")
+    task_id = resp.get("data", {}).get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise TripoError(f"Tripo task create missing task_id: {resp}")
+    return task_id
+
+
+def poll_until_done(api_key: str, task_id: str) -> dict:
+    """Poll the task until it succeeds, fails, or we hit POLL_TIMEOUT_SEC.
+    Returns the final `data` block on success."""
+    deadline = time.time() + POLL_TIMEOUT_SEC
+    while True:
+        if time.time() > deadline:
+            raise TripoError(f"Tripo task {task_id} timed out after {POLL_TIMEOUT_SEC}s")
+        resp = _get(f"{TRIPO_API_BASE}/v2/openapi/task/{task_id}", api_key)
+        if resp.get("code") != 0:
+            raise TripoError(f"Tripo task query failed: {resp}")
+        data = resp.get("data", {})
+        status = data.get("status")
+        if status == "success":
+            return data
+        if status in ("failed", "cancelled", "banned", "expired"):
+            raise TripoError(f"Tripo task {task_id} ended with status={status}: {data}")
+        # Anything else (queued, running, etc.) → wait and poll again.
+        time.sleep(POLL_INTERVAL_SEC)
+
+
+def _extract_url(val) -> Optional[str]:
+    if isinstance(val, str) and val.startswith("http"):
+        return val
+    if isinstance(val, dict):
+        inner = val.get("url")
+        if isinstance(inner, str) and inner.startswith("http"):
+            return inner
+    return None
+
+
+def pick_model_url(data: dict) -> str:
+    """Tripo's response shape has shifted across versions. Prefer pbr_model
+    (textured) and fall back to model / base_model. Raises if none are
+    present."""
+    output = data.get("output") or {}
+    for key in ("pbr_model", "model", "base_model"):
+        url = _extract_url(output.get(key))
+        if url:
+            return url
+    raise TripoError(f"Tripo task output has no recognized model URL: {output}")
+
+
+def pick_preview_url(data: dict) -> Optional[str]:
+    """Tripo usually returns a rendered preview alongside the model. Used as
+    the Etsy listing thumbnail. Returns None when missing — caller should
+    fall back to a placeholder."""
+    output = data.get("output") or {}
+    for key in ("rendered_image", "thumbnail", "preview_image"):
+        url = _extract_url(output.get(key))
+        if url:
+            return url
+    return None
+
+
+def download_to_path(url: str, dest_path: str, timeout: int = 120) -> None:
+    """Stream a binary file from a presigned URL into dest_path."""
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+        raise TripoError(f"Tripo download {url} failed: {e}") from e
+
+
+def glb_to_stl(glb_path: str, stl_path: str) -> None:
+    """Convert a downloaded GLB to STL via trimesh. STL is the de-facto
+    standard for desktop 3D printers — almost no Etsy STL buyer wants GLB.
+    We ship both so game devs are covered too."""
+    try:
+        import trimesh  # type: ignore
+    except ImportError as e:
+        raise TripoError(
+            "trimesh not installed — run `pip install -e .` in workers/designer "
+            "or skip 3D output by clearing TRIPO_API_KEY."
+        ) from e
+    scene_or_mesh = trimesh.load(glb_path, force="mesh")
+    # trimesh sometimes returns a Scene; .dump(concatenate=True) collapses it.
+    if hasattr(scene_or_mesh, "dump"):
+        scene_or_mesh = scene_or_mesh.dump(concatenate=True)
+    scene_or_mesh.export(stl_path, file_type="stl")
+
+
+def _placeholder_preview(png_path: str, prompt: str) -> None:
+    """Create a simple branded PNG when Tripo doesn't return a preview.
+    Etsy requires at least one listing image — without this the publisher
+    would fail. Uses Pillow if available; falls back to a tiny solid-color
+    PNG written by hand so the pipeline never gets blocked on imports."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except ImportError:
+        # Stdlib-only fallback: write a minimal 64x64 solid PNG.
+        import struct, zlib
+        w = h = 64
+        raw = b"".join(b"\x00" + b"\x2d\x2d\x33" * w for _ in range(h))
+        compressor = zlib.compressobj()
+        compressed = compressor.compress(raw) + compressor.flush()
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(
+                ">I", zlib.crc32(tag + data) & 0xffffffff
+            )
+        png = b"\x89PNG\r\n\x1a\n"
+        png += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+        png += chunk(b"IDAT", compressed)
+        png += chunk(b"IEND", b"")
+        with open(png_path, "wb") as f:
+            f.write(png)
+        return
+    img = Image.new("RGB", (1024, 1024), color=(45, 45, 51))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("Helvetica.ttc", 40)
+        font_sm = ImageFont.truetype("Helvetica.ttc", 24)
+    except Exception:
+        font = ImageFont.load_default()
+        font_sm = ImageFont.load_default()
+    draw.text((64, 64), "3D printable file", fill=(245, 166, 35), font=font)
+    snippet = (prompt or "").strip()[:280]
+    # Word-wrap roughly at 50 chars/line.
+    line_start = 0
+    y = 160
+    while line_start < len(snippet):
+        line = snippet[line_start : line_start + 50]
+        draw.text((64, y), line, fill=(212, 216, 222), font=font_sm)
+        y += 34
+        line_start += 50
+        if y > 900:
+            break
+    img.save(png_path, "PNG")
+
+
+def generate_3d_from_image(
+    api_key: str,
+    image_path: str,
+    *,
+    job_id: int,
+    assets_dir: str,
+    style: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    """One-shot image→3D via Tripo. Returns (glb_path, stl_path, preview_png).
+
+    The prompt path is replaced by an uploaded reference image (typically a
+    nanobanana / Gemini-Flash-Image render). Tripo's image-to-3D is the
+    user's preferred provider for character work — Meshy is available as a
+    swap via the image_to_3d_provider setting.
+    """
+    os.makedirs(assets_dir, exist_ok=True)
+    print(
+        f"[tripo] job_id={job_id} image-to-3d submitting {image_path}",
+        file=sys.stderr, flush=True,
+    )
+    task_id = submit_image_to_model(api_key, image_path, style=style)
+    print(f"[tripo] job_id={job_id} task_id={task_id} polling", file=sys.stderr, flush=True)
+    data = poll_until_done(api_key, task_id)
+    model_url = pick_model_url(data)
+    glb_path = os.path.join(assets_dir, f"{job_id}.glb")
+    stl_path = os.path.join(assets_dir, f"{job_id}.stl")
+    png_path = os.path.join(assets_dir, f"{job_id}.png")
+    download_to_path(model_url, glb_path)
+    glb_to_stl(glb_path, stl_path)
+    preview_url = pick_preview_url(data)
+    if preview_url:
+        try:
+            download_to_path(preview_url, png_path)
+        except TripoError as e:
+            print(
+                f"[tripo] job_id={job_id} preview download failed: {e} — "
+                "reusing reference image as listing thumbnail",
+                file=sys.stderr, flush=True,
+            )
+            # Reference image is already a high-quality character render;
+            # using it as the listing thumbnail is strictly better than a
+            # placeholder when Tripo's render isn't available.
+            try:
+                with open(image_path, "rb") as src, open(png_path, "wb") as dst:
+                    dst.write(src.read())
+            except OSError:
+                _placeholder_preview(png_path, "image-to-3d output")
+    else:
+        try:
+            with open(image_path, "rb") as src, open(png_path, "wb") as dst:
+                dst.write(src.read())
+        except OSError:
+            _placeholder_preview(png_path, "image-to-3d output")
+    return glb_path, stl_path, png_path
+
+
+def generate_3d(
+    api_key: str,
+    prompt: str,
+    *,
+    job_id: int,
+    assets_dir: str,
+    style: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    """One-shot text→3D: submit, poll, download. Returns
+    (glb_path, stl_path, preview_png_path).
+
+    `assets_dir` is created if it does not exist. File names are derived
+    from `job_id` so re-runs are idempotent and easy to trace back.
+    """
+    os.makedirs(assets_dir, exist_ok=True)
+    print(f"[tripo] job_id={job_id} submitting prompt ({len(prompt)} chars)", file=sys.stderr, flush=True)
+    task_id = submit_text_to_model(api_key, prompt, style=style)
+    print(f"[tripo] job_id={job_id} task_id={task_id} polling", file=sys.stderr, flush=True)
+    data = poll_until_done(api_key, task_id)
+    model_url = pick_model_url(data)
+    glb_path = os.path.join(assets_dir, f"{job_id}.glb")
+    stl_path = os.path.join(assets_dir, f"{job_id}.stl")
+    png_path = os.path.join(assets_dir, f"{job_id}.png")
+    download_to_path(model_url, glb_path)
+    print(f"[tripo] job_id={job_id} downloaded glb ({os.path.getsize(glb_path)} bytes)", file=sys.stderr, flush=True)
+    glb_to_stl(glb_path, stl_path)
+    print(f"[tripo] job_id={job_id} converted stl ({os.path.getsize(stl_path)} bytes)", file=sys.stderr, flush=True)
+    # Listing thumbnail: prefer Tripo's preview render; placeholder otherwise.
+    preview_url = pick_preview_url(data)
+    if preview_url:
+        try:
+            download_to_path(preview_url, png_path)
+            print(f"[tripo] job_id={job_id} downloaded preview png", file=sys.stderr, flush=True)
+        except TripoError as e:
+            print(f"[tripo] job_id={job_id} preview download failed: {e} — using placeholder", file=sys.stderr, flush=True)
+            _placeholder_preview(png_path, prompt)
+    else:
+        _placeholder_preview(png_path, prompt)
+    return glb_path, stl_path, png_path

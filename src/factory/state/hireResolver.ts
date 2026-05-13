@@ -109,6 +109,8 @@ export function fireHireEvent(set: SetFn, get: GetFn, e: HireEvent): void {
     task: "",
     model: roleSpec.model,
     tokensToday: 0,
+    completedToday: 0,
+    failedToday: 0,
     currentJobId: null,
   };
   set((s) => ({

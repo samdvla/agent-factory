@@ -73,6 +73,274 @@ function RoleWorkFx({ roleId }: { roleId: string }) {
   }
 }
 
+/**
+ * Per-role hair / hat. Replaces the default swoop with a silhouette that
+ * differentiates each role at a glance — silhouette is the biggest legibility
+ * lever at this scale, much more than any tiny on-face accessory.
+ *
+ * Coord system: head center is (0, hcy). Head bottom = hcy + headR (touches
+ * torso top). All shapes are filled (no thin strokes) so they stay crisp.
+ */
+function RoleHair({
+  roleId, accent, hcy, headR,
+}: { roleId: string; accent: string; hcy: number; headR: number }): ReactNode {
+  const hair = "var(--uniform-dark)";
+
+  switch (roleId) {
+    case "designer": {
+      // Beret hat on top, with a small wisp of hair underneath
+      return (
+        <g>
+          <path
+            d={`M ${-headR + 0.4} ${hcy - headR + 1.8}
+                Q 0 ${hcy - headR + 0.4}
+                  ${headR - 0.4} ${hcy - headR + 1.8} Z`}
+            fill={hair}
+          />
+          <ellipse cx={-0.6} cy={hcy - headR + 0.2} rx={headR + 1.5} ry={1.5} fill={accent} />
+          <ellipse cx={-0.6} cy={hcy - headR + 0.55} rx={headR + 0.7} ry={0.9}
+            fill="var(--uniform-dark)" fillOpacity={0.16} />
+          <circle cx={headR - 0.4} cy={hcy - headR - 1.0} r={0.6} fill={accent} />
+        </g>
+      );
+    }
+    case "publisher": {
+      // Baseball cap (forward-facing) — fills the head crown + brim
+      return (
+        <g>
+          <path
+            d={`M ${-headR + 0.2} ${hcy - headR + 1.6}
+                Q 0 ${hcy - headR - 1.4}
+                  ${headR - 0.2} ${hcy - headR + 1.6}
+                L ${headR + 0.2} ${hcy - headR + 2.4}
+                L ${-headR - 0.2} ${hcy - headR + 2.4} Z`}
+            fill={accent}
+          />
+          <ellipse cx={headR + 1.1} cy={hcy - headR + 2.1} rx={1.7} ry={0.55}
+            fill={accent} fillOpacity={0.92} />
+          <circle cx={0} cy={hcy - headR - 0.4} r={0.4} fill="var(--ink-0)" fillOpacity={0.3} />
+        </g>
+      );
+    }
+    case "research": {
+      // Bob — chin-length on the sides, framing the face
+      const top = hcy - headR - 1.4;
+      const sides = hcy + headR - 0.2;
+      const fringe = hcy - headR + 1.5;
+      return (
+        <path
+          d={`M ${-headR - 0.7} ${sides}
+              L ${-headR - 0.7} ${hcy - headR + 0.8}
+              Q ${-headR + 0.2} ${top} 0 ${top - 0.2}
+              Q ${headR - 0.2} ${top} ${headR + 0.7} ${hcy - headR + 0.8}
+              L ${headR + 0.7} ${sides}
+              L ${headR - 0.3} ${sides - 0.4}
+              L ${headR - 0.4} ${fringe}
+              L ${-headR + 0.4} ${fringe}
+              L ${-headR + 0.3} ${sides - 0.4} Z`}
+          fill={hair}
+        />
+      );
+    }
+    case "cs": {
+      // Soft curls — overlapping rounds on top of the head
+      return (
+        <g fill={hair}>
+          <ellipse cx={0} cy={hcy - headR + 0.7} rx={headR + 0.7} ry={1.4} />
+          <circle cx={-2.3} cy={hcy - headR - 0.2} r={1.5} />
+          <circle cx={-0.7} cy={hcy - headR - 1.0} r={1.6} />
+          <circle cx={0.9} cy={hcy - headR - 1.0} r={1.6} />
+          <circle cx={2.3} cy={hcy - headR - 0.2} r={1.5} />
+        </g>
+      );
+    }
+    case "cfo":
+    case "orchestrator": {
+      // Slicked back — flat low-profile with a sharp hairline
+      return (
+        <path
+          d={`M ${-headR - 0.2} ${hcy - headR + 1.0}
+              Q ${-headR + 1.4} ${hcy - headR - 0.8}
+                ${headR + 0.2} ${hcy - headR + 1.6}
+              L ${headR - 0.4} ${hcy - headR + 1.8}
+              L ${-headR + 0.4} ${hcy - headR + 1.4} Z`}
+          fill={hair}
+        />
+      );
+    }
+    case "listing": {
+      // Side-swept — asymmetric peak, leaves the right ear free for a pencil
+      return (
+        <path
+          d={`M ${-headR - 0.4} ${hcy - headR + 0.5}
+              Q ${-headR + 1.4} ${hcy - headR - 2.0}
+                ${headR + 0.4} ${hcy - headR + 0.8}
+              L ${headR - 0.4} ${hcy - headR + 1.4}
+              L ${-headR + 0.4} ${hcy - headR + 1.1} Z`}
+          fill={hair}
+        />
+      );
+    }
+    case "si": {
+      // Buzz cut — close to scalp, leaves room for antenna up top
+      return (
+        <path
+          d={`M ${-headR + 0.2} ${hcy - headR + 1.4}
+              Q 0 ${hcy - headR + 0.1}
+                ${headR - 0.2} ${hcy - headR + 1.4}
+              L ${headR - 0.4} ${hcy - headR + 1.7}
+              L ${-headR + 0.4} ${hcy - headR + 1.7} Z`}
+          fill={hair}
+        />
+      );
+    }
+  }
+
+  // Default swoop — unchanged from the original
+  return (
+    <path
+      d={`M ${-headR - 0.5} ${hcy - headR + 0.5}
+          Q 0 ${hcy - headR * 2 - 1}
+            ${headR + 0.5} ${hcy - headR + 0.5}
+          L ${headR - 0.5} ${hcy - headR + 1}
+          L ${-headR + 0.5} ${hcy - headR + 1} Z`}
+      fill={hair}
+    />
+  );
+}
+
+/** Eyes — universal. Skipped when role has lenses overlaying the face. */
+function RoleEyes({ hcy }: { hcy: number }): ReactNode {
+  const eyeY = hcy + 0.5;
+  const c = "var(--uniform-dark)";
+  return (
+    <g>
+      <ellipse cx={-1.5} cy={eyeY} rx={0.55} ry={0.7} fill={c} />
+      <ellipse cx={1.5} cy={eyeY} rx={0.55} ry={0.7} fill={c} />
+    </g>
+  );
+}
+
+/** Role-specific accessory — drawn on top of hair/eyes. */
+function RoleAccessory({
+  roleId, accent, hcy, headR,
+}: { roleId: string; accent: string; hcy: number; headR: number }): ReactNode {
+  const c = "var(--uniform-dark)";
+
+  switch (roleId) {
+    case "research": {
+      // Round glasses (full pupils inside the rims)
+      const eyeY = hcy + 0.5;
+      return (
+        <g>
+          <circle cx={-1.5} cy={eyeY} r={1.25} fill="var(--bg-0)" fillOpacity={0.28} />
+          <circle cx={1.5} cy={eyeY} r={1.25} fill="var(--bg-0)" fillOpacity={0.28} />
+          <circle cx={-1.5} cy={eyeY} r={1.25} fill="none" stroke={c} strokeWidth={0.5} />
+          <circle cx={1.5} cy={eyeY} r={1.25} fill="none" stroke={c} strokeWidth={0.5} />
+          <line x1={-0.25} y1={eyeY} x2={0.25} y2={eyeY} stroke={c} strokeWidth={0.5} />
+          <ellipse cx={-1.5} cy={eyeY} rx={0.4} ry={0.55} fill={c} />
+          <ellipse cx={1.5} cy={eyeY} rx={0.4} ry={0.55} fill={c} />
+        </g>
+      );
+    }
+    case "cs": {
+      // Headset arches over the curls, mic boom on the left
+      return (
+        <g>
+          <path d={`M ${-headR + 0.1} ${hcy + 0.1}
+                    Q 0 ${hcy - headR - 2.4}
+                      ${headR - 0.1} ${hcy + 0.1}`}
+            fill="none" stroke={c} strokeWidth={0.8} strokeLinecap="round" />
+          <circle cx={-headR + 0.1} cy={hcy + 0.3} r={1.0} fill={c} />
+          <circle cx={headR - 0.1} cy={hcy + 0.3} r={1.0} fill={c} />
+          <circle cx={-headR + 0.1} cy={hcy + 0.3} r={0.5} fill={accent} />
+          <circle cx={headR - 0.1} cy={hcy + 0.3} r={0.5} fill={accent} />
+          <path d={`M ${-headR + 0.6} ${hcy + 1.0}
+                    Q ${-headR + 1.4} ${hcy + 2.6}
+                      ${-headR + 1.0} ${hcy + 3.4}`}
+            fill="none" stroke={c} strokeWidth={0.55} strokeLinecap="round" />
+          <circle cx={-headR + 1.0} cy={hcy + 3.4} r={0.55} fill={accent} />
+        </g>
+      );
+    }
+    case "cfo": {
+      // Bow tie under the chin (on the chest top)
+      const tieCy = hcy + headR + 1.6;
+      return (
+        <g>
+          <path d={`M ${-2.4} ${tieCy - 1.2}
+                    L ${-0.4} ${tieCy + 0.2}
+                    L ${-2.4} ${tieCy + 1.4} Z`} fill={accent} />
+          <path d={`M ${2.4} ${tieCy - 1.2}
+                    L ${0.4} ${tieCy + 0.2}
+                    L ${2.4} ${tieCy + 1.4} Z`} fill={accent} />
+          <rect x={-0.6} y={tieCy - 0.6} width={1.2} height={1.3} rx={0.25} fill={accent} />
+          <rect x={-0.6} y={tieCy - 0.6} width={1.2} height={0.45}
+            fill="var(--uniform-dark)" opacity={0.3} />
+        </g>
+      );
+    }
+    case "si": {
+      // Antenna with pulsing tip + soft halo
+      return (
+        <g>
+          <line x1={0} y1={hcy - headR - 0.2} x2={0} y2={hcy - headR - 3.2}
+            stroke={c} strokeWidth={0.6} strokeLinecap="round" />
+          <circle cx={0} cy={hcy - headR - 3.5} r={1.6} fill={accent} fillOpacity={0.22}>
+            <animate attributeName="r" values="1.4;2.0;1.4" dur="2.4s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.22;0.05;0.22" dur="2.4s" repeatCount="indefinite" />
+          </circle>
+          <circle cx={0} cy={hcy - headR - 3.5} r={0.9} fill={accent}>
+            <animate attributeName="opacity" values="1;0.55;1" dur="2.4s" repeatCount="indefinite" />
+          </circle>
+        </g>
+      );
+    }
+    case "listing": {
+      // Pencil tucked behind the right ear (eraser + tip + body)
+      return (
+        <g transform={`rotate(-20 ${headR - 0.1} ${hcy})`}>
+          <rect x={headR - 0.3} y={hcy - 0.5} width={2.8} height={0.85} rx={0.12}
+            fill={accent} />
+          <rect x={headR - 0.3} y={hcy - 0.5} width={0.55} height={0.85} rx={0.12}
+            fill="var(--accent-bad)" fillOpacity={0.92} />
+          <path d={`M ${headR + 2.5} ${hcy - 0.55}
+                    L ${headR + 3.3} ${hcy - 0.07}
+                    L ${headR + 2.5} ${hcy + 0.41} Z`}
+            fill={c} />
+        </g>
+      );
+    }
+    case "orchestrator": {
+      // 3-point crown pip sitting on the slick hair
+      return (
+        <g>
+          <path d={`M ${-2.3} ${hcy - headR + 0.4}
+                    L ${-2.0} ${hcy - headR - 1.4}
+                    L ${-0.9} ${hcy - headR - 0.6}
+                    L ${0} ${hcy - headR - 2.0}
+                    L ${0.9} ${hcy - headR - 0.6}
+                    L ${2.0} ${hcy - headR - 1.4}
+                    L ${2.3} ${hcy - headR + 0.4} Z`}
+            fill={accent} />
+          <circle cx={0} cy={hcy - headR - 1.4} r={0.35} fill="var(--ink-0)" fillOpacity={0.45} />
+        </g>
+      );
+    }
+    case "guardian": {
+      // Visor band across the forehead
+      return (
+        <path
+          d={`M ${-headR + 0.3} ${hcy - 0.3}
+              Q 0 ${hcy - headR + 1.5}
+                ${headR - 0.3} ${hcy - 0.3}`}
+          fill="none" stroke={accent} strokeWidth={0.9} strokeLinecap="round" />
+      );
+    }
+  }
+  return null;
+}
+
 const STATE_GLYPH: Record<AgentVisualState, string> = {
   working:       "W",
   idle:          ".",
@@ -179,9 +447,9 @@ export default function Avatar({
         <ellipse cx={0} cy={2} rx={11} ry={3} fill={c} fillOpacity={0.35} />
         <ellipse cx={0} cy={2} rx={7}  ry={2} fill={c} fillOpacity={0.7}  />
         <ellipse cx={0} cy={3} rx={9}  ry={2} fill="#000" fillOpacity={0.45} />
-        <rect x={-3}   y={-12} width={2.2} height={14} rx={1} fill="#1f2a37" />
-        <rect x={0.8}  y={-12} width={2.2} height={14} rx={1} fill="#1f2a37" />
-        <rect x={-torsoW / 2}       y={-torsoH - 12} width={torsoW}     height={torsoH + 2} rx={2.5} fill="#2a3849" />
+        <rect x={-3}   y={-12} width={2.2} height={14} rx={1} fill="var(--uniform-dark)" />
+        <rect x={0.8}  y={-12} width={2.2} height={14} rx={1} fill="var(--uniform-dark)" />
+        <rect x={-torsoW / 2}       y={-torsoH - 12} width={torsoW}     height={torsoH + 2} rx={2.5} fill="var(--uniform)" />
         <rect x={-torsoW / 2 + 1.5} y={-torsoH - 9}  width={torsoW - 3} height={torsoH - 6} rx={1.5} fill={c} fillOpacity={0.85} />
         {rewards && rewards.stars > 0 && (() => {
           // 5×2 grid centered in the chest rect. Chest spans x ∈
@@ -214,7 +482,7 @@ export default function Avatar({
           return <g aria-label={`${rewards.stars} ${TIER_NAMES[Math.min(rewards.tier, TIER_NAMES.length - 1)]} stars`}>{slots}</g>;
         })()}
         {isAuth && (
-          <rect x={-torsoW / 2 - 1} y={-torsoH - 10} width={torsoW + 2} height={3} rx={0.5} fill="#0e1620" />
+          <rect x={-torsoW / 2 - 1} y={-torsoH - 10} width={torsoW + 2} height={3} rx={0.5} fill="var(--bg-0)" />
         )}
         {isLab && (
           <>
@@ -239,29 +507,30 @@ export default function Avatar({
             />
           </>
         )}
-        <circle cx={0} cy={-torsoH - 12 - headR - 0.5} r={headR} fill="#d8b894" />
-        <path
-          d={`M ${-headR - 0.5} ${-torsoH - 12 - headR + 0.5} Q 0 ${-torsoH - 12 - headR * 2 - 1} ${headR + 0.5} ${-torsoH - 12 - headR + 0.5} L ${headR - 0.5} ${-torsoH - 12 - headR + 1} L ${-headR + 0.5} ${-torsoH - 12 - headR + 1} Z`}
-          fill="#1f2a37"
-        />
+        <circle cx={0} cy={-torsoH - 12 - headR - 0.5} r={headR} fill="var(--skin)" />
+        <RoleHair roleId={role.id} accent={c} hcy={-torsoH - 12 - headR - 0.5} headR={headR} />
+        {role.id !== "research" && <RoleEyes hcy={-torsoH - 12 - headR - 0.5} />}
+        <RoleAccessory roleId={role.id} accent={c} hcy={-torsoH - 12 - headR - 0.5} headR={headR} />
       </svg>
-      <span
-        className={`avatar-glyph glyph-${state}`}
-        style={{
-          top: -12 * sizeScale,
-          // Scale via font + padding rather than transform: scale() so the
-          // glyph (a unicode character) re-rasterizes crisp at every zoom
-          // instead of being bitmap-stretched.
-          fontSize: 11 * sizeScale,
-          padding: `${1 * sizeScale}px ${4 * sizeScale}px`,
-          minWidth: 14 * sizeScale,
-          borderRadius: 8 * sizeScale,
-          borderWidth: Math.max(1, sizeScale),
-          transform: `translateX(-50%)`,
-        }}
-      >
-        {STATE_GLYPH[state]}
-      </span>
+      {state !== "idle" && (
+        <span
+          className={`avatar-glyph glyph-${state}`}
+          style={{
+            top: -12 * sizeScale,
+            // Scale via font + padding rather than transform: scale() so the
+            // glyph (a unicode character) re-rasterizes crisp at every zoom
+            // instead of being bitmap-stretched.
+            fontSize: 11 * sizeScale,
+            padding: `${1 * sizeScale}px ${4 * sizeScale}px`,
+            minWidth: 14 * sizeScale,
+            borderRadius: 8 * sizeScale,
+            borderWidth: Math.max(1, sizeScale),
+            transform: `translateX(-50%)`,
+          }}
+        >
+          {STATE_GLYPH[state]}
+        </span>
+      )}
     </div>
   );
 }

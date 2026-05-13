@@ -172,6 +172,158 @@ export const api = {
   printifyVerify: (apiKey: string): Promise<PrintifyVerifyOk> =>
     invoke("cmd_printify_verify", { apiKey }),
   printifyStatus: (): Promise<PrintifyStatus> => invoke("cmd_printify_status"),
+  tripoVerify: (apiKey: string): Promise<TripoVerifyOk> =>
+    invoke("cmd_tripo_verify", { apiKey }),
+  tripoStatus: (): Promise<TripoStatus> => invoke("cmd_tripo_status"),
+  meshyVerify: (apiKey: string): Promise<MeshyVerifyOk> =>
+    invoke("cmd_meshy_verify", { apiKey }),
+  meshyStatus: (): Promise<MeshyStatus> => invoke("cmd_meshy_status"),
+  googleVerify: (apiKey: string): Promise<GoogleAiVerifyOk> =>
+    invoke("cmd_google_verify", { apiKey }),
+  googleStatus: (): Promise<GoogleAiStatus> => invoke("cmd_google_status"),
+  cults3dVerify: (username: string, apiKey: string): Promise<Cults3dVerifyOk> =>
+    invoke("cmd_cults3d_verify", { username, apiKey }),
+  cults3dStatus: (): Promise<Cults3dStatus> => invoke("cmd_cults3d_status"),
+  cults3dSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_cults3d_set_enabled", { enabled }),
+  cults3dSetDailyCap: (cap: number): Promise<void> =>
+    invoke("cmd_cults3d_set_daily_cap", { cap }),
+  cults3dListPublishes: (limit?: number): Promise<Cults3dPublishRow[]> =>
+    invoke("cmd_cults3d_list_publishes", { limit }),
+  sketchfabVerify: (apiToken: string): Promise<SketchfabVerifyOk> =>
+    invoke("cmd_sketchfab_verify", { apiToken }),
+  sketchfabStatus: (): Promise<SketchfabStatus> => invoke("cmd_sketchfab_status"),
+  sketchfabSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_sketchfab_set_enabled", { enabled }),
+  sketchfabSetSellOnStore: (sell: boolean): Promise<void> =>
+    invoke("cmd_sketchfab_set_sell_on_store", { sell }),
+  sketchfabSetDailyCap: (cap: number): Promise<void> =>
+    invoke("cmd_sketchfab_set_daily_cap", { cap }),
+  sketchfabListPublishes: (limit?: number): Promise<SketchfabPublishRow[]> =>
+    invoke("cmd_sketchfab_list_publishes", { limit }),
+  gumroadVerify: (accessToken: string): Promise<GumroadVerifyOk> =>
+    invoke("cmd_gumroad_verify", { accessToken }),
+  gumroadStatus: (): Promise<GumroadStatus> => invoke("cmd_gumroad_status"),
+  gumroadSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_gumroad_set_enabled", { enabled }),
+  gumroadSetDailyCap: (cap: number): Promise<void> =>
+    invoke("cmd_gumroad_set_daily_cap", { cap }),
+  gumroadListPublishes: (limit?: number): Promise<GumroadPublishRow[]> =>
+    invoke("cmd_gumroad_list_publishes", { limit }),
+  mmfVerify: (apiKey: string): Promise<MmfVerifyOk> =>
+    invoke("cmd_mmf_verify", { apiKey }),
+  mmfStatus: (): Promise<MmfStatus> => invoke("cmd_mmf_status"),
+  mmfSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_mmf_set_enabled", { enabled }),
+  mmfSetSellPaid: (sell: boolean): Promise<void> =>
+    invoke("cmd_mmf_set_sell_paid", { sell }),
+  mmfSetDailyCap: (cap: number): Promise<void> =>
+    invoke("cmd_mmf_set_daily_cap", { cap }),
+  mmfListPublishes: (limit?: number): Promise<MmfPublishRow[]> =>
+    invoke("cmd_mmf_list_publishes", { limit }),
+  youtubeVerify: (apiKey: string): Promise<YoutubeVerifyOk> =>
+    invoke("cmd_youtube_verify", { apiKey }),
+  youtubeStatus: (): Promise<YoutubeStatus> => invoke("cmd_youtube_status"),
+  higgsfieldStatus: (): Promise<HiggsfieldStatus> => invoke("cmd_higgsfield_status"),
+  higgsfieldSetEnabled: (enabled: boolean): Promise<void> =>
+    invoke("cmd_higgsfield_set_enabled", { enabled }),
+  githubAssetHostVerify: (
+    repo: string,
+    token: string,
+  ): Promise<AssetHostVerifyOk> =>
+    invoke("cmd_github_asset_host_verify", { repo, token }),
+  readJobAsset: (jobId: number): Promise<JobAssetInfo> =>
+    invoke("cmd_read_job_asset", { jobId }),
+  readListingAsset: (listingId: number): Promise<JobAssetInfo> =>
+    invoke("cmd_read_listing_asset", { listingId }),
+  getShopFocus: (): Promise<{ value: string }> => invoke("cmd_get_shop_focus"),
+  setShopFocus: (value: string): Promise<void> =>
+    invoke("cmd_set_shop_focus", { value }),
+  getCharacterPool: (): Promise<{ value: string }> =>
+    invoke("cmd_get_character_pool"),
+  setCharacterPool: (value: string): Promise<void> =>
+    invoke("cmd_set_character_pool", { value }),
+  getImageTo3dProvider: (): Promise<{ value: string }> =>
+    invoke("cmd_get_image_to_3d_provider"),
+  setImageTo3dProvider: (value: string): Promise<void> =>
+    invoke("cmd_set_image_to_3d_provider", { value }),
+  postAgentMessage: (msg: {
+    from_role: string;
+    to_role: string;
+    topic?: string | null;
+    content: string;
+    importance?: AgentMessageImportance | null;
+    job_id?: number | null;
+  }): Promise<number> => invoke("cmd_post_agent_message", { args: msg }),
+  listAgentMessages: (opts?: {
+    limit?: number;
+    role?: string | null;
+  }): Promise<AgentMessageRow[]> =>
+    invoke("cmd_list_agent_messages", {
+      limit: opts?.limit ?? 100,
+      role: opts?.role ?? null,
+    }),
+  agentMessagesSince: (sinceUnix: number): Promise<number> =>
+    invoke("cmd_agent_messages_since", { sinceUnix }),
+  listListingStats: (limit?: number): Promise<ListingStatsSummary[]> =>
+    invoke("cmd_list_listing_stats", { limit }),
+  listingStatsHistory: (
+    etsyListingId: number,
+    limit?: number,
+  ): Promise<ListingStatsRow[]> =>
+    invoke("cmd_listing_stats_history", { etsyListingId, limit }),
+  chatWithAgent: (
+    agentId: string,
+    history: ChatTurn[],
+    message: string,
+  ): Promise<ChatReply> =>
+    invoke("cmd_chat_with_agent", { agentId, history, message }),
+  agentSteerRoles: (): Promise<string[]> => invoke("cmd_agent_steer_roles"),
+  agentSteerAdd: (role: string, text: string): Promise<void> =>
+    invoke("cmd_agent_steer_add", { args: { role, text } }),
+  agentSteerList: (role: string): Promise<string[]> =>
+    invoke("cmd_agent_steer_list", { role }),
+  agentSteerClear: (role: string): Promise<void> =>
+    invoke("cmd_agent_steer_clear", { role }),
+};
+
+export type ChatTurn = { from: "user" | "agent"; text: string };
+export type ChatReply = {
+  text: string;
+  tokens_in: number;
+  tokens_out: number;
+  model: string;
+};
+
+export type ListingStatsSummary = {
+  etsy_listing_id: number;
+  local_listing_id: number | null;
+  title: string;
+  views: number;
+  favorites: number;
+  total_orders: number;
+  last_polled_ts: number;
+};
+export type ListingStatsRow = {
+  id: number;
+  etsy_listing_id: number;
+  local_listing_id: number | null;
+  views: number;
+  favorites: number;
+  total_orders: number;
+  ts: number;
+};
+
+export type AgentMessageImportance = "info" | "heads_up" | "critical";
+export type AgentMessageRow = {
+  id: number;
+  from_role: string;
+  to_role: string;
+  topic: string | null;
+  content: string;
+  importance: AgentMessageImportance;
+  job_id: number | null;
+  ts: number;
 };
 
 export type PrintifyVerifyOk = {
@@ -183,4 +335,124 @@ export type PrintifyStatus = {
   key_present: boolean;
   shop_id: number | null;
   pod_enabled: boolean;
+};
+export type TripoStatus = {
+  key_present: boolean;
+  balance: number | null;
+};
+export type TripoVerifyOk = {
+  balance: number;
+};
+export type MeshyStatus = {
+  key_present: boolean;
+  balance: number | null;
+};
+export type MeshyVerifyOk = {
+  balance: number;
+};
+export type GoogleAiStatus = {
+  key_present: boolean;
+};
+export type GoogleAiVerifyOk = {
+  model: string;
+};
+export type Cults3dStatus = {
+  creds_present: boolean;
+  asset_host_configured: boolean;
+  enabled: boolean;
+  daily_cap: number;
+  today_count: number;
+};
+export type Cults3dVerifyOk = { username: string };
+export type AssetHostVerifyOk = { repo: string; default_branch: string };
+export type Cults3dPublishRow = {
+  id: number;
+  local_listing_id: number | null;
+  cults3d_creation_id: string | null;
+  title: string;
+  url: string | null;
+  file_url: string | null;
+  image_url: string | null;
+  price_usd: number | null;
+  state: string;
+  error: string | null;
+  published_at: number;
+};
+export type SketchfabStatus = {
+  creds_present: boolean;
+  enabled: boolean;
+  sell_on_store: boolean;
+  daily_cap: number;
+  today_count: number;
+};
+export type SketchfabVerifyOk = { username: string };
+export type SketchfabPublishRow = {
+  id: number;
+  local_listing_id: number | null;
+  sketchfab_uid: string | null;
+  store_product_id: string | null;
+  title: string;
+  url: string | null;
+  price_usd: number | null;
+  state: string;
+  error: string | null;
+  warning: string | null;
+  published_at: number;
+};
+export type GumroadStatus = {
+  creds_present: boolean;
+  enabled: boolean;
+  daily_cap: number;
+  today_count: number;
+};
+export type GumroadVerifyOk = { account: string };
+export type GumroadPublishRow = {
+  id: number;
+  local_listing_id: number | null;
+  gumroad_product_id: string | null;
+  title: string;
+  short_url: string | null;
+  edit_url: string | null;
+  price_usd: number | null;
+  state: string;
+  error: string | null;
+  warning: string | null;
+  published_at: number;
+};
+export type MmfStatus = {
+  creds_present: boolean;
+  enabled: boolean;
+  sell_paid: boolean;
+  daily_cap: number;
+  today_count: number;
+};
+export type MmfVerifyOk = { account: string };
+export type MmfPublishRow = {
+  id: number;
+  local_listing_id: number | null;
+  mmf_object_id: string | null;
+  title: string;
+  url: string | null;
+  price_usd: number | null;
+  state: string;
+  error: string | null;
+  warning: string | null;
+  published_at: number;
+};
+export type YoutubeStatus = { key_present: boolean };
+export type YoutubeVerifyOk = { sample_video_title: string };
+export type HiggsfieldStatus = {
+  cli_installed: boolean;
+  cli_authed: boolean;
+  enabled: boolean;
+};
+export type JobAssetInfo = {
+  /** "svg" | "glb" | "stl" | "png" | "none" */
+  kind: string;
+  path: string | null;
+  glb_path: string | null;
+  bytes: number;
+  data_base64: string;
+  glb_data_base64: string | null;
+  png_data_base64: string | null;
 };

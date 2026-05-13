@@ -36,7 +36,7 @@ export function KanbanWall({ ox, oy, accent }: FeatureProps) {
     const hp = iso((xL + xR) / 2, oy + 0.4);
     headers.push(
       <text key={`ht-${col}`} x={hp.x} y={hp.y - 30.5} textAnchor="middle"
-        fontFamily="JetBrains Mono, monospace" fontSize={2.6} fill="#0a0e15" fontWeight="700">
+        fontFamily="JetBrains Mono, monospace" fontSize={2.6} fill="var(--bg-0)" fontWeight="700">
         {labels[col]}
       </text>,
     );

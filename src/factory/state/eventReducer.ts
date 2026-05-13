@@ -30,6 +30,59 @@ function visualRole(r: string | undefined, store: FactoryStore): string | null {
   return SUPERVISOR_ROLE_MAP[r] ?? r;
 }
 
+/**
+ * Translate a raw JSON-RPC worker-notification (method + params) into a
+ * human-readable line for the ticker / LiveLog. Used as the fallback for any
+ * notification method the reducer doesn't have a dedicated branch for.
+ */
+function humanizeWorkerNote(method: string, params: unknown): string {
+  const p = (params && typeof params === "object")
+    ? (params as Record<string, unknown>)
+    : {};
+
+  if (method === "agent_message") {
+    const to = typeof p.to === "string" ? p.to : "?";
+    const topic = typeof p.topic === "string" ? p.topic : null;
+    const content = typeof p.content === "string" ? p.content : "";
+    const trimmed = content.replace(/\s+/g, " ").trim();
+    const snippet = trimmed.length > 140
+      ? trimmed.slice(0, 137).trimEnd() + "…"
+      : trimmed;
+    const importance = typeof p.importance === "string" ? p.importance : null;
+    const tag = importance && importance !== "info" ? ` [${importance}]` : "";
+    if (topic && snippet) return `→ ${to}${tag} (${topic}): ${snippet}`;
+    if (topic) return `→ ${to}${tag}: ${topic}`;
+    if (snippet) return `→ ${to}${tag}: ${snippet}`;
+    return `→ ${to}${tag}`;
+  }
+
+  if (method === "event") {
+    const kind = typeof p.kind === "string" ? p.kind : null;
+    if (kind === "started") return "worker online";
+    if (kind === "stopped") return "worker stopping";
+    if (kind) return kind.replace(/_/g, " ");
+    return "event";
+  }
+
+  if (method === "request_gate") {
+    const action = typeof p.action_class === "string" ? p.action_class : "action";
+    return `requested gate: ${action.replace(/_/g, " ")}`;
+  }
+
+  if (method === "log" || method === "trace") {
+    const msg = typeof p.message === "string" ? p.message : null;
+    if (msg) return msg;
+  }
+
+  // Generic fallback — humanize snake_case method name + key value pair if
+  // there's an obvious "kind" or "type" field.
+  const human = method.replace(/_/g, " ");
+  const kind = typeof p.kind === "string" ? p.kind
+    : typeof p.type === "string" ? p.type
+    : null;
+  return kind ? `${human}: ${kind}` : human;
+}
+
 /** Friendly label for the doc-sprite flying between rooms, by source role. */
 const HANDOFF_LABEL_BY_FROM: Record<string, string> = {
   research: "demand brief",
@@ -65,7 +118,7 @@ export function applySupervisorEvent(
         store.pushTicker({
           ts: Date.now(),
           source: r,
-          text: "started",
+          text: "agent online",
         });
       }
       break;
@@ -103,6 +156,7 @@ export function applySupervisorEvent(
         store.setAgentState(r, "idle");
         store.setAgentJob(r, null);
         store.setAgentTask(r, "");
+        store.incrementAgentCompleted(r);
         const result = evt.result as Record<string, unknown> | null | undefined;
         const tickerText =
           result && typeof result["ticker_text"] === "string"
@@ -135,6 +189,7 @@ export function applySupervisorEvent(
       if (r && evt.job_id !== undefined) {
         store.setAgentState(r, "crashed");
         store.setAgentJob(r, null);
+        store.incrementAgentFailed(r);
         store.pushTicker({
           ts: Date.now(),
           source: r,
@@ -181,7 +236,7 @@ export function applySupervisorEvent(
       store.pushTicker({
         ts: Date.now(),
         source: r,
-        text: `note: ${evt.method}`,
+        text: humanizeWorkerNote(evt.method, evt.params),
       });
       break;
     }
@@ -194,6 +249,17 @@ export function applySupervisorEvent(
       const cost = (evt as any).cost_usd as number;
       if (typeof cost === "number" && cost > 0) {
         store.setBudget(store.budgetTodayUsd + cost);
+      }
+      // BudgetSpent carries tokens_in/tokens_out per LLM call. Attribute to
+      // the per-agent token counter so the drawer + queue stats reflect
+      // real LLM usage rather than zero.
+      if (r) {
+        const tokensIn = (evt as any).tokens_in as number | undefined;
+        const tokensOut = (evt as any).tokens_out as number | undefined;
+        const total =
+          (typeof tokensIn === "number" ? tokensIn : 0) +
+          (typeof tokensOut === "number" ? tokensOut : 0);
+        if (total > 0) store.addAgentTokens(r, total);
       }
       break;
     }

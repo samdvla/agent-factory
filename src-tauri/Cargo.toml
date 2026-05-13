@@ -39,6 +39,7 @@ sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 url = "2"
+urlencoding = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
