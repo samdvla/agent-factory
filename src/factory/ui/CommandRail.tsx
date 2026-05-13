@@ -510,6 +510,8 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
 
   // ActivityModal open state
   const [activityOpen, setActivityOpen] = useState(false);
+  // Timestamp of last Activity open — anything newer counts as unrated-unseen.
+  const lastActivitySeenRef = useRef<number>(Math.floor(Date.now() / 1000));
   // ConversationsModal open state + unread badge
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const [conversationsUnread, setConversationsUnread] = useState(0);
@@ -565,9 +567,11 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
   }, [refreshPromptCount]);
 
   // Unrated count: poll every 15s AND bump on job_completed/job_failed.
+  // Only counts jobs newer than the last Activity open, mirroring the
+  // conversations badge — keeps the number small and actionable.
   const refreshUnratedCount = useCallback(async () => {
     try {
-      const n = await api.unratedJobCount();
+      const n = await api.unratedJobCount(lastActivitySeenRef.current);
       setUnratedCount(n);
     } catch {
       // Silent during boot / non-Tauri
@@ -621,6 +625,14 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     };
   }, [refreshConvUnread]);
 
+  // When the Activity modal opens, mark everything currently waiting as
+  // "seen" — the badge then only re-lights for outputs that land afterwards.
+  const openActivity = useCallback(() => {
+    lastActivitySeenRef.current = Math.floor(Date.now() / 1000);
+    setUnratedCount(0);
+    setActivityOpen(true);
+  }, []);
+
   // When the modal opens, treat everything currently in the log as "seen".
   const openConversations = useCallback(() => {
     lastConvSeenRef.current = Math.floor(Date.now() / 1000);
@@ -657,7 +669,7 @@ export default function CommandRail({ collapsed, onToggle }: CommandRailProps) {
     // Activity + Conversations are modals, not rail rows — open them directly
     // regardless of collapsed state.
     if (target === "activity") {
-      setActivityOpen(true);
+      openActivity();
       return;
     }
     if (target === "conversations") {

@@ -2822,11 +2822,14 @@ pub async fn cmd_agent_messages_since(
     Ok(count)
 }
 
-/// Count of jobs in the last 24 h that don't yet have an operator rating —
-/// used by the CommandRail badge to nudge the boss to review new outputs.
+/// Count of unrated jobs newer than `since_unix` — used by the CommandRail
+/// badge so it tracks new outputs since the boss last opened Activity, instead
+/// of accumulating into a useless "99+".
 #[tauri::command]
-pub async fn cmd_unrated_job_count(state: State<'_, Arc<AppState>>) -> Result<i64, String> {
-    let cutoff = chrono::Utc::now().timestamp() - 24 * 3600;
+pub async fn cmd_unrated_job_count(
+    state: State<'_, Arc<AppState>>,
+    since_unix: i64,
+) -> Result<i64, String> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM jobs j \
          LEFT JOIN job_feedback f ON f.job_id = j.id AND f.rater = 'operator' \
@@ -2835,7 +2838,7 @@ pub async fn cmd_unrated_job_count(state: State<'_, Arc<AppState>>) -> Result<i6
          AND f.id IS NULL",
     )
     .bind(state.project_id)
-    .bind(cutoff)
+    .bind(since_unix)
     .fetch_one(&state.pool)
     .await
     .map_err(|e| e.to_string())?;

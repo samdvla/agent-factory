@@ -218,7 +218,8 @@ export const api = {
     }),
   readJobSvg: (jobId: number): Promise<string | null> =>
     invoke("cmd_read_job_svg", { jobId }),
-  unratedJobCount: (): Promise<number> => invoke("cmd_unrated_job_count"),
+  unratedJobCount: (sinceUnix: number): Promise<number> =>
+    invoke("cmd_unrated_job_count", { sinceUnix }),
   printifyVerify: (apiKey: string): Promise<PrintifyVerifyOk> =>
     invoke("cmd_printify_verify", { apiKey }),
   printifyStatus: (): Promise<PrintifyStatus> => invoke("cmd_printify_status"),
