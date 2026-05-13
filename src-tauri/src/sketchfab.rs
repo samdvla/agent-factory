@@ -22,6 +22,77 @@ use std::time::Duration;
 const API_BASE: &str = "https://api.sketchfab.com/v3";
 const UA: &str = "agent-factory/1.0";
 
+/// Trim `s` to at most `max_chars` characters (not bytes), cutting on a
+/// word boundary when possible and adding a single ellipsis char if trimmed.
+/// Counts Unicode scalar values to stay consistent with Sketchfab's
+/// validator which rejects "more than 48 characters" by codepoint.
+fn clamp_name(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        return s.to_string();
+    }
+    // Reserve one slot for the ellipsis.
+    let limit = max_chars.saturating_sub(1).max(1);
+    // Try to cut at the last whitespace within the limit so we don't slice
+    // a word in half. If the prefix has no space, fall back to a hard cut.
+    let prefix: String = chars.iter().take(limit).collect();
+    let cut_at = prefix
+        .rfind(|c: char| c.is_whitespace())
+        .filter(|i| *i >= max_chars / 2)
+        .map(|i| prefix[..i].trim_end().to_string())
+        .unwrap_or(prefix);
+    format!("{cut_at}…")
+}
+
+/// Trim `s` to at most `max_chars` characters with an ellipsis. Sketchfab
+/// caps the description field at 1024 characters; longer strings 400.
+fn clamp_description(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        return s.to_string();
+    }
+    let limit = max_chars.saturating_sub(1).max(1);
+    let prefix: String = chars.iter().take(limit).collect();
+    format!("{prefix}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_name_short_unchanged() {
+        assert_eq!(clamp_name("Norse Wolf STL", 48), "Norse Wolf STL");
+    }
+
+    #[test]
+    fn clamp_name_word_boundary() {
+        let long = "Lovecraftian Deep One Altar Figurine STL Cthulhu Cosmic Horror 3D Print";
+        let out = clamp_name(long, 48);
+        assert!(out.chars().count() <= 48, "length was {}", out.chars().count());
+        assert!(out.ends_with('…'));
+        // Should not end mid-word — last char before ellipsis is whitespace-
+        // trimmed (no trailing space).
+        assert!(!out[..out.len() - "…".len()].ends_with(' '));
+    }
+
+    #[test]
+    fn clamp_name_no_space_hard_cut() {
+        let s = "x".repeat(80);
+        let out = clamp_name(&s, 48);
+        assert_eq!(out.chars().count(), 48);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn clamp_description_long_trimmed() {
+        let s = "a".repeat(2000);
+        let out = clamp_description(&s, 1024);
+        assert_eq!(out.chars().count(), 1024);
+        assert!(out.ends_with('…'));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Creds {
     pub api_token: String,
@@ -111,10 +182,17 @@ pub async fn upload_model(
         .unwrap_or("model.glb")
         .to_string();
 
+    // Sketchfab API caps `name` at 48 chars and `description` at 1024.
+    // Etsy titles run up to 140 chars — without truncation here every
+    // upload fails with HTTP 400 "Ensure this value has at most 48
+    // characters". Trim on a word boundary to avoid awkward mid-word cuts,
+    // and only suffix the ellipsis when we actually had to trim.
+    let name = clamp_name(&input.name, 48);
+    let description = clamp_description(&input.description, 1024);
     let tags_joined = input.tags.join(" ");
     let mut form = reqwest::multipart::Form::new()
-        .text("name", input.name.clone())
-        .text("description", input.description.clone())
+        .text("name", name)
+        .text("description", description)
         .text("tags", tags_joined)
         .text("isPublished", input.is_published.to_string())
         .text("isInspectable", "true".to_string())
