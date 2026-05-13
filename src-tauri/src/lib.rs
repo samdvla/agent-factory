@@ -49,6 +49,13 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // Initialize the opener plugin so JS-side `openUrl(...)` works.
+        // Without this Tauri 2 throws "plugin opener not found" the moment
+        // any caller tries to launch a system browser (Etsy OAuth, MMF
+        // OAuth, listing external-link buttons, etc.). The plugin crate +
+        // capability permission were already in the build manifest;
+        // initializing it here is the missing wire.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
