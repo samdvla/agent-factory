@@ -244,8 +244,29 @@ def generate_3d_from_image(
     return glb_path, stl_path, png_path
 
 
+def _clamp_prompt_to_meshy_limit(prompt: str) -> str:
+    """Meshy text-to-3D rejects prompts longer than 800 chars with HTTP 400
+    `Prompt must be a maximum of 800 characters in length`. Orchestrator
+    briefs occasionally cross that threshold (the LLM doesn't honor a soft
+    cap reliably). Truncate at a word boundary near 790 to leave headroom
+    and avoid mid-word cuts. Sufficient for Meshy's intent extraction —
+    the first ~700 chars carry the visual description; the tail tends to
+    be style modifiers and instructions Meshy already infers."""
+    LIMIT = 800
+    SOFT = 790
+    if len(prompt) <= LIMIT:
+        return prompt
+    cut = prompt[:SOFT]
+    # Step back to the last space so we don't break a word.
+    space = cut.rfind(" ")
+    if space > SOFT - 80:
+        cut = cut[:space]
+    return cut
+
+
 def submit_preview(api_key: str, prompt: str, art_style: str = "realistic") -> str:
     """Create a preview task. Returns the task id."""
+    prompt = _clamp_prompt_to_meshy_limit(prompt)
     body: dict = {
         "mode": "preview",
         "prompt": prompt,
