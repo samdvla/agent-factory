@@ -16,7 +16,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{sse::Event, sse::KeepAlive, Sse},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
@@ -79,6 +79,15 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/api/mmf/status", get(mmf_status_handler))
         .route("/api/mmf/publishes", get(mmf_publishes_handler))
         .route("/api/printify/status", get(printify_status_handler))
+        // Mutating endpoints (phase 2). All POST, all bearer-auth.
+        .route("/api/supervisor/start", post(supervisor_start_handler))
+        .route("/api/supervisor/stop", post(supervisor_stop_handler))
+        .route("/api/secrets/set", post(secrets_set_handler))
+        .route("/api/secrets/get", post(secrets_get_handler))
+        .route("/api/enqueue", post(enqueue_handler))
+        .route("/api/etsy/kill_switch", post(etsy_kill_switch_handler))
+        .route("/api/jobs/rate", post(rate_job_handler))
+        .route("/api/agent_messages/post", post(post_agent_message_handler))
         .with_state(api_state)
         // The laptop's Vite dev server runs on a different origin (typically
         // tauri://localhost or http://localhost:1420). For now allow any
@@ -609,4 +618,183 @@ async fn printify_status_handler(
     let shop_id = secrets::get("printify_shop_id").ok().flatten().and_then(|s| s.parse::<i64>().ok());
     let pod_enabled = secrets::get("pod_enabled").ok().flatten().map(|v| v == "true").unwrap_or(false);
     Ok(Json(commands::PrintifyStatus { key_present, shop_id, pod_enabled }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mutating endpoints (phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Every handler below requires bearer auth, just like the read endpoints.
+// They mirror the matching Tauri command's body but call the same
+// underlying helpers (queue::enqueue, secrets::*, EventBus emit, etc.) so
+// the laptop and the mini converge on identical behavior.
+
+async fn supervisor_start_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::start_supervisor_with_state(Arc::clone(&s.inner))
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::warn!("api supervisor/start: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn supervisor_stop_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let mut guard = s.inner.supervisor_handle.lock().await;
+    if let Some(h) = guard.take() {
+        h.shutdown().await;
+    }
+    Ok(Json(()))
+}
+
+#[derive(serde::Deserialize)]
+struct SecretSetBody { key: String, value: String }
+
+async fn secrets_set_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<SecretSetBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    secrets::set(&body.key, &body.value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(()))
+}
+
+#[derive(serde::Deserialize)]
+struct SecretGetBody { key: String }
+
+async fn secrets_get_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<SecretGetBody>,
+) -> Result<Json<Option<String>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    secrets::get(&body.key).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(serde::Deserialize)]
+struct EnqueueBody { agent_role: String, payload: serde_json::Value }
+
+async fn enqueue_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<EnqueueBody>,
+) -> Result<Json<i64>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    // Mirror the same safety gate cmd_enqueue uses: refuse pipeline jobs in
+    // Live mode when real Etsy publishing is off (prevents silent dry-runs).
+    let ui_sandbox = secrets::get("ui_sandbox_mode").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let real_etsy = secrets::get("real_etsy_enabled").ok().flatten()
+        .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let smoke_active = secrets::get("smoke_cycle_id").ok().flatten()
+        .filter(|s| !s.is_empty()).is_some();
+    let role = body.agent_role.as_str();
+    let is_pipeline_role = matches!(role, "research" | "orchestrator" | "designer" | "listing" | "publisher");
+    if is_pipeline_role && !ui_sandbox && !real_etsy && !smoke_active {
+        return Err(StatusCode::CONFLICT);
+    }
+    crate::queue::enqueue(&s.inner.pool, s.inner.project_id, &body.agent_role, body.payload)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn etsy_kill_switch_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    secrets::set("real_etsy_enabled", "false").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyKillSwitchTriggered);
+    Ok(Json(()))
+}
+
+#[derive(serde::Deserialize)]
+struct RateJobBody { job_id: i64, rating: Option<String>, note: Option<String> }
+
+async fn rate_job_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<RateJobBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let now = chrono::Utc::now().timestamp();
+    match body.rating.as_deref() {
+        Some("up") | Some("down") => {
+            let rating = body.rating.unwrap();
+            sqlx::query(
+                "INSERT INTO job_feedback (job_id, rating, note, rater, created_at) \
+                 VALUES (?, ?, ?, 'operator', ?) \
+                 ON CONFLICT(job_id, rater) DO UPDATE SET \
+                   rating = excluded.rating, note = excluded.note, created_at = excluded.created_at",
+            )
+            .bind(body.job_id).bind(rating).bind(body.note).bind(now)
+            .execute(&s.inner.pool).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        None => {
+            sqlx::query("DELETE FROM job_feedback WHERE job_id = ? AND rater = 'operator'")
+                .bind(body.job_id)
+                .execute(&s.inner.pool).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        Some(_) => return Err(StatusCode::BAD_REQUEST),
+    }
+    // Best-effort snapshot + SI wake-up (same as cmd_rate_job).
+    let _ = commands::snapshot_operator_feedback_to_disk(&s.inner.pool, s.inner.project_id).await;
+    let _ = crate::queue::enqueue(
+        &s.inner.pool,
+        s.inner.project_id,
+        "si",
+        serde_json::json!({"trigger": "operator_rating", "job_id": body.job_id}),
+    ).await;
+    Ok(Json(()))
+}
+
+#[derive(serde::Deserialize)]
+struct PostMessageBody {
+    from_role: String,
+    to_role: String,
+    topic: Option<String>,
+    content: String,
+    importance: Option<String>,
+    job_id: Option<i64>,
+}
+
+async fn post_agent_message_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<PostMessageBody>,
+) -> Result<Json<i64>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let importance = body.importance.unwrap_or_else(|| "info".into());
+    if !["info", "heads_up", "critical"].contains(&importance.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let to = if body.to_role.trim().is_empty() { "*".into() } else { body.to_role };
+    let now = chrono::Utc::now().timestamp();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO agent_messages (project_id, from_role, to_role, topic, content, importance, job_id, ts) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(s.inner.project_id)
+    .bind(&body.from_role)
+    .bind(&to)
+    .bind(&body.topic)
+    .bind(&body.content)
+    .bind(&importance)
+    .bind(body.job_id)
+    .bind(now)
+    .fetch_one(&s.inner.pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(id))
 }

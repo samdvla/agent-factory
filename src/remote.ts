@@ -53,6 +53,35 @@ export async function remoteFetch<T>(path: string): Promise<T> {
 }
 
 /**
+ * POST a JSON body to a remote endpoint with bearer-token auth. Returns the
+ * parsed JSON response. The mutating phase-2 endpoints all use this.
+ */
+export async function remotePost<T>(path: string, body?: unknown): Promise<T> {
+  const cfg = getRemoteConfig();
+  if (!cfg) throw new Error("remotePost called without remote config");
+  const url = cfg.url.replace(/\/+$/, "") + path;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      "Content-Type": "application/json",
+    },
+    body: body !== undefined ? JSON.stringify(body) : "",
+  });
+  if (!res.ok) {
+    throw new Error(`remote POST ${path} → ${res.status}`);
+  }
+  // Mutating endpoints sometimes return `null` / `()` — guard parse.
+  const text = await res.text();
+  if (!text) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return undefined as T;
+  }
+}
+
+/**
  * Open a server-sent events stream from /api/events on the remote mini.
  * Returns a teardown function. The handler receives parsed JSON objects
  * matching the supervisor's event shape.

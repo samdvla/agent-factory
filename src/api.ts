@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isRemoteMode, remoteFetch } from "./remote";
+import { isRemoteMode, remoteFetch, remotePost } from "./remote";
 
 /**
  * When the user has configured a remote mini (window.__af_remote.set or
@@ -10,6 +10,18 @@ import { isRemoteMode, remoteFetch } from "./remote";
  */
 function remoteOr<T>(path: string, local: () => Promise<T>): Promise<T> {
   return isRemoteMode() ? remoteFetch<T>(path) : local();
+}
+
+/**
+ * POST variant for mutating actions: when in remote mode, send a JSON body
+ * to the mini's mutating endpoint; otherwise run the local Tauri invoke.
+ */
+function remoteOrPost<T>(
+  path: string,
+  body: unknown,
+  local: () => Promise<T>
+): Promise<T> {
+  return isRemoteMode() ? remotePost<T>(path, body) : local();
 }
 
 export type StatusReport = { running: boolean; project_id: number };
@@ -185,14 +197,28 @@ export interface TodayStats {
 export const api = {
   status: () =>
     remoteOr<StatusReport>("/api/status", () => invoke<StatusReport>("cmd_status")),
-  start: () => invoke<void>("cmd_start_supervisor"),
-  stop: () => invoke<void>("cmd_stop_supervisor"),
+  start: () =>
+    remoteOrPost<void>("/api/supervisor/start", undefined, () =>
+      invoke<void>("cmd_start_supervisor")
+    ),
+  stop: () =>
+    remoteOrPost<void>("/api/supervisor/stop", undefined, () =>
+      invoke<void>("cmd_stop_supervisor")
+    ),
   setSecret: (key: string, value: string) =>
-    invoke<void>("cmd_set_secret", { key, value }),
+    remoteOrPost<void>("/api/secrets/set", { key, value }, () =>
+      invoke<void>("cmd_set_secret", { key, value })
+    ),
   getSecret: (key: string) =>
-    invoke<string | null>("cmd_get_secret", { key }),
+    remoteOrPost<string | null>("/api/secrets/get", { key }, () =>
+      invoke<string | null>("cmd_get_secret", { key })
+    ),
   enqueue: (agentRole: string, payload: unknown) =>
-    invoke<number>("cmd_enqueue", { args: { agent_role: agentRole, payload } }),
+    remoteOrPost<number>(
+      "/api/enqueue",
+      { agent_role: agentRole, payload },
+      () => invoke<number>("cmd_enqueue", { args: { agent_role: agentRole, payload } })
+    ),
   etsyStartOAuth: () => invoke<OAuthInit>("cmd_etsy_start_oauth"),
   etsyStatus: () =>
     remoteOr<EtsyStatus>("/api/etsy/status", () => invoke<EtsyStatus>("cmd_etsy_status")),
@@ -213,7 +239,10 @@ export const api = {
     invoke<ActivateResult>("cmd_etsy_activate_listing", {
       localListingId,
     }),
-  etsyKillSwitch: () => invoke<void>("cmd_etsy_kill_switch"),
+  etsyKillSwitch: () =>
+    remoteOrPost<void>("/api/etsy/kill_switch", undefined, () =>
+      invoke<void>("cmd_etsy_kill_switch")
+    ),
   etsyResyncListings: () => invoke<EtsyResyncResult>("cmd_etsy_resync_listings"),
   resyncMarketplace: (marketplace: MarketplaceId): Promise<MarketplaceResyncStats> =>
     invoke("cmd_resync_marketplace", { marketplace }),
@@ -301,9 +330,14 @@ export const api = {
   todayStats: (): Promise<TodayStats> =>
     remoteOr<TodayStats>("/api/today_stats", () => invoke("cmd_today_stats")),
   rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>
-    invoke<void>("cmd_rate_job", {
-      args: { job_id: jobId, rating, note: note ?? null },
-    }),
+    remoteOrPost<void>(
+      "/api/jobs/rate",
+      { job_id: jobId, rating, note: note ?? null },
+      () =>
+        invoke<void>("cmd_rate_job", {
+          args: { job_id: jobId, rating, note: note ?? null },
+        })
+    ),
   readJobSvg: (jobId: number): Promise<string | null> =>
     invoke("cmd_read_job_svg", { jobId }),
   unratedJobCount: (sinceUnix: number): Promise<number> =>
@@ -436,7 +470,10 @@ export const api = {
     content: string;
     importance?: AgentMessageImportance | null;
     job_id?: number | null;
-  }): Promise<number> => invoke("cmd_post_agent_message", { args: msg }),
+  }): Promise<number> =>
+    remoteOrPost<number>("/api/agent_messages/post", msg, () =>
+      invoke("cmd_post_agent_message", { args: msg })
+    ),
   listAgentMessages: (opts?: {
     limit?: number;
     role?: string | null;
