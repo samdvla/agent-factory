@@ -236,9 +236,14 @@ export const api = {
       invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes")
     ),
   etsyActivateListing: (localListingId: number) =>
-    invoke<ActivateResult>("cmd_etsy_activate_listing", {
-      localListingId,
-    }),
+    remoteOrPost<ActivateResult>(
+      "/api/etsy/listings/activate",
+      { local_listing_id: localListingId },
+      () =>
+        invoke<ActivateResult>("cmd_etsy_activate_listing", {
+          localListingId,
+        })
+    ),
   etsyKillSwitch: () =>
     remoteOrPost<void>("/api/etsy/kill_switch", undefined, () =>
       invoke<void>("cmd_etsy_kill_switch")
@@ -271,18 +276,39 @@ export const api = {
       localListingId,
     }),
   etsyDiscardDraft: (localListingId: number) =>
-    invoke<void>("cmd_etsy_discard_draft", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/discard",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_discard_draft", { localListingId })
+    ),
   etsyRegenerateDraft: (localListingId: number) =>
-    invoke<void>("cmd_etsy_regenerate_draft", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/regenerate",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_regenerate_draft", { localListingId })
+    ),
   etsyRejectDraft: (localListingId: number, reason?: string | null) =>
-    invoke<void>("cmd_etsy_reject_draft", {
-      localListingId,
-      reason: reason ?? null,
-    }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/reject",
+      { local_listing_id: localListingId, reason: reason ?? null },
+      () =>
+        invoke<void>("cmd_etsy_reject_draft", {
+          localListingId,
+          reason: reason ?? null,
+        })
+    ),
   etsyRestoreRejected: (localListingId: number) =>
-    invoke<void>("cmd_etsy_restore_rejected", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/restore",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_restore_rejected", { localListingId })
+    ),
   etsyCancelRegeneration: (localListingId: number) =>
-    invoke<void>("cmd_etsy_cancel_regeneration", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/cancel_regeneration",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_cancel_regeneration", { localListingId })
+    ),
   etsyListRejections: (limit?: number) =>
     remoteOr<ListingRejectionRow[]>(
       `/api/etsy/rejections${limit ? `?limit=${limit}` : ""}`,
@@ -290,8 +316,14 @@ export const api = {
     ),
   budgetStatus: (): Promise<BudgetStatus> =>
     remoteOr<BudgetStatus>("/api/budget", () => invoke("cmd_budget_status")),
-  startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
-  resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
+  startSmokeTest: (): Promise<string> =>
+    remoteOrPost<string>("/api/smoke_test/start", undefined, () =>
+      invoke("cmd_start_smoke_test")
+    ),
+  resumeFromSmokeTest: (): Promise<void> =>
+    remoteOrPost<void>("/api/smoke_test/resume", undefined, () =>
+      invoke("cmd_resume_from_smoke_test")
+    ),
   listRecentJobs: (opts?: {
     limit?: number;
     offset?: number;

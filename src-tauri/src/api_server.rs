@@ -88,6 +88,15 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/api/etsy/kill_switch", post(etsy_kill_switch_handler))
         .route("/api/jobs/rate", post(rate_job_handler))
         .route("/api/agent_messages/post", post(post_agent_message_handler))
+        // Phase 2 batch 2 — listing review actions + smoke-test triggers.
+        .route("/api/etsy/listings/activate", post(etsy_activate_listing_handler))
+        .route("/api/etsy/listings/discard", post(etsy_discard_draft_handler))
+        .route("/api/etsy/listings/regenerate", post(etsy_regenerate_draft_handler))
+        .route("/api/etsy/listings/reject", post(etsy_reject_draft_handler))
+        .route("/api/etsy/listings/restore", post(etsy_restore_rejected_handler))
+        .route("/api/etsy/listings/cancel_regeneration", post(etsy_cancel_regeneration_handler))
+        .route("/api/smoke_test/start", post(smoke_test_start_handler))
+        .route("/api/smoke_test/resume", post(smoke_test_resume_handler))
         .with_state(api_state)
         // The laptop's Vite dev server runs on a different origin (typically
         // tauri://localhost or http://localhost:1420). For now allow any
@@ -797,4 +806,282 @@ async fn post_agent_message_handler(
     .fetch_one(&s.inner.pool).await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(id))
+}
+
+// ---- Listing review actions ----
+
+#[derive(serde::Deserialize)]
+struct ListingIdBody { local_listing_id: i64 }
+
+async fn etsy_activate_listing_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ListingIdBody>,
+) -> Result<Json<commands::ActivateResult>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let row: Option<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT etsy_listing_id, url FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(s.inner.project_id)
+    .bind(body.local_listing_id)
+    .fetch_optional(&s.inner.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (etsy_listing_id, url) = row.ok_or(StatusCode::NOT_FOUND)?;
+
+    let status = crate::etsy::load_status();
+    if !status.connected {
+        return Err(StatusCode::CONFLICT);
+    }
+    let shop_id = status.shop_id.ok_or(StatusCode::CONFLICT)?;
+    if secrets::get("etsy_api_keystring").ok().flatten().map(|k| k.is_empty()).unwrap_or(true) {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let client = reqwest::Client::new();
+    crate::etsy_publish::activate_listing(&client, shop_id, etsy_listing_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!("api activate: {e:#}");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    let now = chrono::Utc::now().timestamp();
+    if let Err(e) = sqlx::query(
+        "UPDATE etsy_publishes SET state = 'active', activated_at = ? WHERE project_id = ? AND etsy_listing_id = ?",
+    )
+    .bind(now)
+    .bind(s.inner.project_id)
+    .bind(etsy_listing_id)
+    .execute(&s.inner.pool)
+    .await
+    {
+        tracing::warn!("update etsy_publishes after activate: {e}");
+    }
+
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyListingActivated { etsy_listing_id });
+    Ok(Json(commands::ActivateResult { etsy_listing_id, url }))
+}
+
+async fn etsy_regenerate_draft_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ListingIdBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'queued' \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'draft'",
+    )
+    .bind(s.inner.project_id)
+    .bind(body.local_listing_id)
+    .execute(&s.inner.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::queue::enqueue(
+        &s.inner.pool,
+        s.inner.project_id,
+        "orchestrator",
+        serde_json::json!({"trigger": "regenerate", "regenerate_from": body.local_listing_id}),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyDraftRegenerated {
+        local_listing_id: body.local_listing_id,
+    });
+    Ok(Json(()))
+}
+
+async fn etsy_discard_draft_handler(
+    state: State<ApiState>,
+    headers: HeaderMap,
+    body: Json<ListingIdBody>,
+) -> Result<Json<()>, StatusCode> {
+    // Per cmd_etsy_discard_draft: discard == regenerate (kept for UI clarity).
+    etsy_regenerate_draft_handler(state, headers, body).await
+}
+
+#[derive(serde::Deserialize)]
+struct RejectBody { local_listing_id: i64, reason: Option<String> }
+
+async fn etsy_reject_draft_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<RejectBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let pid = s.inner.project_id;
+    let pool = &s.inner.pool;
+
+    let title: String = sqlx::query_scalar(
+        "SELECT title FROM etsy_publishes \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(pid).bind(body.local_listing_id)
+    .fetch_optional(pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .unwrap_or_default();
+
+    // publisher_output.json: description, tags, niche.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let pub_path = std::path::PathBuf::from(&home).join(".agent-factory").join("publisher_output.json");
+    let mut description = String::new();
+    let mut tags: Vec<String> = Vec::new();
+    let mut niche: Option<String> = None;
+    if let Ok(text) = std::fs::read_to_string(&pub_path) {
+        if let Ok(records) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(arr) = records.as_array() {
+                if let Some(rec) = arr.iter().rev().find(|r| {
+                    r.get("listing_id").and_then(|v| v.as_i64()) == Some(body.local_listing_id)
+                }) {
+                    description = rec.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    tags = rec.get("tags").and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    niche = rec.get("niche").and_then(|v| v.as_str()).map(String::from);
+                }
+            }
+        }
+    }
+
+    let cycle_id: Option<String> = sqlx::query_scalar(
+        "SELECT cycle_id FROM pipeline_cycles \
+         WHERE project_id = ? AND local_listing_id = ? \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(pid).bind(body.local_listing_id)
+    .fetch_optional(pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rejected_at = chrono::Utc::now().timestamp_millis();
+    let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+
+    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'rejected' \
+         WHERE project_id = ? AND local_listing_id = ?",
+    )
+    .bind(pid).bind(body.local_listing_id)
+    .execute(&mut *tx).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query(
+        "INSERT INTO listing_rejections \
+         (project_id, local_listing_id, cycle_id, title, niche, tags_json, description, rejected_at, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(pid).bind(body.local_listing_id).bind(cycle_id.as_deref())
+    .bind(&title).bind(niche.as_deref()).bind(&tags_json).bind(&description)
+    .bind(rejected_at).bind(body.reason.as_deref())
+    .execute(&mut *tx).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let _ = commands::snapshot_rejections_to_disk(pool, pid).await;
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyDraftRejected {
+        local_listing_id: body.local_listing_id,
+    });
+    Ok(Json(()))
+}
+
+async fn etsy_restore_rejected_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ListingIdBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let pool = &s.inner.pool;
+    let pid = s.inner.project_id;
+    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'draft' \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'rejected'",
+    )
+    .bind(pid).bind(body.local_listing_id)
+    .execute(&mut *tx).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query("DELETE FROM listing_rejections WHERE project_id = ? AND local_listing_id = ?")
+        .bind(pid).bind(body.local_listing_id)
+        .execute(&mut *tx).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let _ = commands::snapshot_rejections_to_disk(pool, pid).await;
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyDraftRestored {
+        local_listing_id: body.local_listing_id,
+    });
+    Ok(Json(()))
+}
+
+async fn etsy_cancel_regeneration_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ListingIdBody>,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    sqlx::query(
+        "UPDATE etsy_publishes SET state = 'rejected' \
+         WHERE project_id = ? AND local_listing_id = ? AND state = 'queued'",
+    )
+    .bind(s.inner.project_id).bind(body.local_listing_id)
+    .execute(&s.inner.pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    s.inner.bus.send(crate::events::SupervisorEvent::EtsyDraftRejected {
+        local_listing_id: body.local_listing_id,
+    });
+    Ok(Json(()))
+}
+
+// ---- Smoke test ----
+
+async fn smoke_test_start_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<String>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let _ = secrets::delete("smoke_pause_until");
+    // Force a clean supervisor restart (stop then start) so workers are alive.
+    {
+        let mut guard = s.inner.supervisor_handle.lock().await;
+        if let Some(h) = guard.take() {
+            h.shutdown().await;
+        }
+    }
+    commands::start_supervisor_with_state(Arc::clone(&s.inner))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let cycle_id = format!("smoke-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
+    secrets::set("smoke_cycle_id", &cycle_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let now_ts = chrono::Utc::now().timestamp().to_string();
+    secrets::set("smoke_started_at", &now_ts).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let prior_real = secrets::get("real_etsy_enabled").ok().flatten().unwrap_or_default();
+    secrets::set("pre_smoke_real_etsy_enabled", &prior_real).ok();
+    secrets::set("real_etsy_enabled", "true").ok();
+    let payload = serde_json::json!({ "smoke": true, "cycle_id": cycle_id });
+    crate::queue::enqueue(&s.inner.pool, s.inner.project_id, "research", payload)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(cycle_id))
+}
+
+async fn smoke_test_resume_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<()>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    secrets::delete("smoke_pause_until").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    secrets::delete("smoke_cycle_id").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    secrets::delete("smoke_started_at").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let prior = secrets::get("pre_smoke_real_etsy_enabled").ok().flatten().unwrap_or_default();
+    if prior.is_empty() {
+        let _ = secrets::delete("real_etsy_enabled");
+    } else {
+        let _ = secrets::set("real_etsy_enabled", &prior);
+    }
+    let _ = secrets::delete("pre_smoke_real_etsy_enabled");
+    Ok(Json(()))
 }
