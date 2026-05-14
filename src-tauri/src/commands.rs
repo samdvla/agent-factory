@@ -3615,11 +3615,14 @@ pub async fn cmd_mmf_start_oauth(
 ) -> Result<OAuthInit, String> {
     let cid = client_id.trim();
     let csec = client_secret.trim();
-    if cid.is_empty() || csec.is_empty() {
-        return Err("MMF client_id and client_secret are both required. \
+    if cid.is_empty() {
+        return Err("MMF client_id is required. \
                     Register an app at myminifactory.com/settings/developer."
             .into());
     }
+    // Allow empty client_secret — MMF may treat this app as a public
+    // client (no secret required). Our exchange_code drops Basic auth
+    // when the secret is empty and sends client_id in the body alone.
     secrets::set("mmf_client_id", cid).map_err(|e| format!("save client_id: {e}"))?;
     secrets::set("mmf_client_secret", csec).map_err(|e| format!("save client_secret: {e}"))?;
 

@@ -2043,16 +2043,18 @@ function MmfSection() {
 
           <div className="settings-field-row">
             <div className="settings-field-label-col">
-              <span className="settings-field-label">Client secret</span>
+              <span className="settings-field-label">Client secret <em style={{ opacity: 0.6 }}>(optional)</em></span>
               <span className="settings-helper">
-                From the same MMF developer app. Used to authenticate the
-                token-exchange POST.
+                From the same MMF developer app. <strong>Leave blank</strong> if MMF
+                treats your app as a public client (no separate secret on
+                the dev page). We'll fall through to public-client OAuth
+                automatically.
               </span>
             </div>
             <input
               type="password"
               className="settings-cred-input"
-              placeholder="MMF client_secret"
+              placeholder="MMF client_secret (or leave blank)"
               value={clientSecretDraft}
               onChange={(e) => setClientSecretDraft(e.target.value)}
               autoComplete="off"
@@ -2064,8 +2066,7 @@ function MmfSection() {
               onClick={handleConnect}
               disabled={
                 connectState === "connecting" ||
-                !clientIdDraft.trim() ||
-                !clientSecretDraft.trim()
+                !clientIdDraft.trim()
               }
             >
               {connectState === "connecting"

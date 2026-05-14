@@ -74,23 +74,55 @@ pub fn build_authorize_url(client_id: &str, state: &str) -> String {
     )
 }
 
+/// Build the token-exchange request body. Sends credentials in BOTH the
+/// form body AND HTTP Basic auth (when a secret is provided) so we work
+/// against any OAuth server regardless of which style it validates.
+/// For public-client OAuth (no secret), we drop Basic and send just
+/// `client_id` in the body — RFC 6749 §2.3 allows this for clients that
+/// can't safely store a secret.
+fn build_token_request(
+    client: &reqwest::Client,
+    client_id: &str,
+    client_secret: &str,
+    extra_fields: &[(&str, &str)],
+) -> reqwest::RequestBuilder {
+    // Compose the full form body. Allocate strings up-front so we can pass
+    // string slices into the `form(&[...])` builder cleanly.
+    let mut body: Vec<(&str, &str)> = vec![("client_id", client_id)];
+    if !client_secret.is_empty() {
+        body.push(("client_secret", client_secret));
+    }
+    body.extend_from_slice(extra_fields);
+
+    let mut req = client.post(TOKEN_URL).form(&body);
+    if !client_secret.is_empty() {
+        // Standard confidential-client auth. The body params above
+        // duplicate what Basic carries — servers ignore whichever pair
+        // they aren't configured to read.
+        req = req.basic_auth(client_id, Some(client_secret));
+    }
+    req
+}
+
 pub async fn exchange_code(
     client: &reqwest::Client,
     client_id: &str,
     client_secret: &str,
     code: &str,
 ) -> Result<Tokens> {
-    let resp = client
-        .post(TOKEN_URL)
-        .basic_auth(client_id, Some(client_secret))
-        .form(&[
+    let resp = build_token_request(
+        client,
+        client_id,
+        client_secret,
+        &[
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", REDIRECT_URI),
-        ])
-        .send()
-        .await
-        .context("mmf oauth token exchange POST failed")?;
+        ],
+    )
+    .send()
+    .await
+    .context("mmf oauth token exchange POST failed")?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -106,16 +138,18 @@ pub async fn refresh_tokens(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<Tokens> {
-    let resp = client
-        .post(TOKEN_URL)
-        .basic_auth(client_id, Some(client_secret))
-        .form(&[
+    let resp = build_token_request(
+        client,
+        client_id,
+        client_secret,
+        &[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-        ])
-        .send()
-        .await
-        .context("mmf oauth refresh POST failed")?;
+        ],
+    )
+    .send()
+    .await
+    .context("mmf oauth refresh POST failed")?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
