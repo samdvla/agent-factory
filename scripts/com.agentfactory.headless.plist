@@ -22,6 +22,14 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!--
+          Route secrets to ~/.agent-factory/secrets.json instead of the macOS
+          Keychain. The login Keychain locks on inactivity and requires GUI
+          prompts to unlock — which is fatal in a headless launchd context.
+          File-backed storage is single-user, restricted to mode 0600.
+        -->
+        <key>AGENT_FACTORY_FILE_SECRETS</key>
+        <string>1</string>
     </dict>
 
     <key>RunAtLoad</key>

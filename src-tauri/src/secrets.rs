@@ -1,9 +1,7 @@
-#[cfg(not(debug_assertions))]
 use keyring::Entry;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-#[cfg_attr(debug_assertions, allow(dead_code))]
 const SERVICE: &str = "com.agentfactory.app";
 
 fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
@@ -11,26 +9,37 @@ fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[cfg(debug_assertions)]
-fn debug_file_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home)
-        .join(".agent-factory")
-        .join("secrets.dev.json")
+/// File-backed secret storage. Used in two cases:
+///   1. Debug builds (always) — so dev runs don't pollute the user's Keychain.
+///   2. Release builds where AGENT_FACTORY_FILE_SECRETS is set — required for
+///      the Mac mini headless server, where the user's login keychain locks
+///      on inactivity and the locked-state prompts have nowhere to display.
+fn use_file_store() -> bool {
+    cfg!(debug_assertions) || std::env::var("AGENT_FACTORY_FILE_SECRETS").is_ok()
 }
 
-#[cfg(debug_assertions)]
-fn load_debug_file() -> HashMap<String, String> {
-    let path = debug_file_path();
+fn file_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let name = if cfg!(debug_assertions) {
+        "secrets.dev.json"
+    } else {
+        "secrets.json"
+    };
+    std::path::PathBuf::from(home)
+        .join(".agent-factory")
+        .join(name)
+}
+
+fn load_file() -> HashMap<String, String> {
+    let path = file_path();
     match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str::<HashMap<String, String>>(&s).unwrap_or_default(),
         Err(_) => HashMap::new(),
     }
 }
 
-#[cfg(debug_assertions)]
-fn save_debug_file(data: &HashMap<String, String>) -> anyhow::Result<()> {
-    let path = debug_file_path();
+fn save_file(data: &HashMap<String, String>) -> anyhow::Result<()> {
+    let path = file_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -47,14 +56,11 @@ fn save_debug_file(data: &HashMap<String, String>) -> anyhow::Result<()> {
 }
 
 pub fn set(key: &str, value: &str) -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        let mut data = load_debug_file();
+    if use_file_store() {
+        let mut data = load_file();
         data.insert(key.to_string(), value.to_string());
-        save_debug_file(&data)?;
-    }
-    #[cfg(not(debug_assertions))]
-    {
+        save_file(&data)?;
+    } else {
         let entry = Entry::new(SERVICE, key)?;
         entry.set_password(value)?;
     }
@@ -66,14 +72,11 @@ pub fn get(key: &str) -> anyhow::Result<Option<String>> {
     if let Some(cached) = cache().lock().unwrap().get(key) {
         return Ok(cached.clone());
     }
-    #[cfg(debug_assertions)]
-    let value: Option<String> = {
-        let data = load_debug_file();
+    let value: Option<String> = if use_file_store() {
+        let data = load_file();
         let from_file = data.get(key).cloned();
         from_file.or_else(|| std::env::var(key.to_uppercase()).ok())
-    };
-    #[cfg(not(debug_assertions))]
-    let value: Option<String> = {
+    } else {
         let entry = Entry::new(SERVICE, key)?;
         match entry.get_password() {
             Ok(v) => Some(v),
@@ -86,14 +89,11 @@ pub fn get(key: &str) -> anyhow::Result<Option<String>> {
 }
 
 pub fn delete(key: &str) -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        let mut data = load_debug_file();
+    if use_file_store() {
+        let mut data = load_file();
         data.remove(key);
-        save_debug_file(&data)?;
-    }
-    #[cfg(not(debug_assertions))]
-    {
+        save_file(&data)?;
+    } else {
         let entry = Entry::new(SERVICE, key)?;
         match entry.delete_credential() {
             Ok(()) => {}

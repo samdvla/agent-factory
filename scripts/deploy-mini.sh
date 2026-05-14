@@ -50,8 +50,11 @@ for d in workers/*/; do
 done
 
 # --- build the Tauri .app ---
-log "cargo tauri build (release)"
-npm run tauri -- build
+# --bundles app: skip the DMG step. bundle_dmg.sh shells out to AppleScript
+# which fails over a headless SSH session on the mini ("not authorized to
+# send Apple events"). We only need the .app to install into /Applications.
+log "cargo tauri build (release, app bundle only)"
+npm run tauri -- build --bundles app
 
 # --- install / replace .app ---
 BUILT_APP="$REPO_DIR/src-tauri/target/release/bundle/macos/$APP_NAME"
