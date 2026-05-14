@@ -1,4 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isRemoteMode, remoteFetch } from "./remote";
+
+/**
+ * When the user has configured a remote mini (window.__af_remote.set or
+ * Settings → Remote factory), read-only endpoints route through HTTP
+ * instead of Tauri's local invoke. Mutating commands still invoke locally
+ * for now — they ship in a later phase 1 slice once a UI confirmation
+ * gate is in place so the laptop can't accidentally double-publish.
+ */
+function remoteOr<T>(path: string, local: () => Promise<T>): Promise<T> {
+  return isRemoteMode() ? remoteFetch<T>(path) : local();
+}
 
 export type StatusReport = { running: boolean; project_id: number };
 
@@ -171,7 +183,8 @@ export interface TodayStats {
 }
 
 export const api = {
-  status: () => invoke<StatusReport>("cmd_status"),
+  status: () =>
+    remoteOr<StatusReport>("/api/status", () => invoke<StatusReport>("cmd_status")),
   start: () => invoke<void>("cmd_start_supervisor"),
   stop: () => invoke<void>("cmd_stop_supervisor"),
   setSecret: (key: string, value: string) =>
@@ -191,7 +204,10 @@ export const api = {
   etsySetListingCap: (cap: number) =>
     invoke<void>("cmd_etsy_set_listing_cap", { cap }),
   etsyGetListingCap: () => invoke<number>("cmd_etsy_get_listing_cap"),
-  etsyListPublishes: () => invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes"),
+  etsyListPublishes: () =>
+    remoteOr<EtsyPublishRow[]>("/api/etsy/publishes", () =>
+      invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes")
+    ),
   etsyActivateListing: (localListingId: number) =>
     invoke<ActivateResult>("cmd_etsy_activate_listing", {
       localListingId,
@@ -203,8 +219,14 @@ export const api = {
   resyncAllMarketplaces: (): Promise<ResyncAllResult> =>
     invoke("cmd_resync_all_marketplaces"),
   listRecentCycles: (limit?: number) =>
-    invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit }),
-  listWealth: () => invoke<AgentWealth[]>("cmd_list_wealth"),
+    remoteOr<CycleSummary[]>(
+      `/api/recent_cycles${limit ? `?limit=${limit}` : ""}`,
+      () => invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit })
+    ),
+  listWealth: () =>
+    remoteOr<AgentWealth[]>("/api/wealth", () =>
+      invoke<AgentWealth[]>("cmd_list_wealth")
+    ),
   listPrompts: () => invoke<Record<string, PromptRow>>("cmd_list_prompts"),
   setPromptOverride: (role: string, system: string) =>
     invoke<void>("cmd_set_prompt_override", { args: { role, system } }),
@@ -233,7 +255,8 @@ export const api = {
     invoke<void>("cmd_etsy_cancel_regeneration", { localListingId }),
   etsyListRejections: (limit?: number) =>
     invoke<ListingRejectionRow[]>("cmd_etsy_list_rejections", { limit }),
-  budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
+  budgetStatus: (): Promise<BudgetStatus> =>
+    remoteOr<BudgetStatus>("/api/budget", () => invoke("cmd_budget_status")),
   startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
   resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
   listRecentJobs: (opts?: {
@@ -256,7 +279,8 @@ export const api = {
       role: opts?.role ?? null,
       sinceUnix: opts?.sinceUnix ?? null,
     }),
-  todayStats: (): Promise<TodayStats> => invoke("cmd_today_stats"),
+  todayStats: (): Promise<TodayStats> =>
+    remoteOr<TodayStats>("/api/today_stats", () => invoke("cmd_today_stats")),
   rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>
     invoke<void>("cmd_rate_job", {
       args: { job_id: jobId, rating, note: note ?? null },

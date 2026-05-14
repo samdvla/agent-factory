@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, StatusReport } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
+import { getRemoteConfig, isRemoteMode } from "../../remote";
 
 export default function TopBar({
   onAlertClick,
@@ -125,6 +126,39 @@ export default function TopBar({
         <div className="brand-mark" aria-hidden="true" />
         <span className="float-brand-text">AF</span>
       </div>
+
+      {isRemoteMode() && (
+        <div
+          className="remote-badge"
+          title={`Viewing remote factory at ${getRemoteConfig()?.url ?? "?"}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 8px",
+            marginLeft: 8,
+            borderRadius: 6,
+            background: "rgba(80,180,255,0.14)",
+            color: "#7ec1ff",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            border: "1px solid rgba(80,180,255,0.32)",
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: status?.running ? "#7ec1ff" : "#888",
+              boxShadow: status?.running ? "0 0 6px #7ec1ff" : undefined,
+            }}
+          />
+          mini
+        </div>
+      )}
 
       <div className="mode-cluster">
         <button

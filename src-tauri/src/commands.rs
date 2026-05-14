@@ -927,6 +927,15 @@ pub struct EtsyPublishRow {
 pub async fn cmd_etsy_list_publishes(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<EtsyPublishRow>, String> {
+    etsy_list_publishes_with(&state.pool, state.project_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server. Tauri command above
+/// thin-wraps this.
+pub async fn etsy_list_publishes_with(
+    pool: &sqlx::SqlitePool,
+    pid: i64,
+) -> Result<Vec<EtsyPublishRow>, String> {
     let rows = sqlx::query_as::<
         _,
         (i64, i64, i64, String, String, Option<String>, i64, Option<i64>, Option<i64>),
@@ -934,8 +943,8 @@ pub async fn cmd_etsy_list_publishes(
         "SELECT id, local_listing_id, etsy_listing_id, state, title, url, published_at, activated_at, parent_listing_id \
          FROM etsy_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
     )
-    .bind(state.project_id)
-    .fetch_all(&state.pool)
+    .bind(pid)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
     Ok(rows
@@ -2263,8 +2272,16 @@ pub struct TodayStats {
 /// historical rows.
 #[tauri::command]
 pub async fn cmd_today_stats(state: State<'_, Arc<AppState>>) -> Result<TodayStats, String> {
-    let pool = &state.pool;
-    let pid = state.project_id;
+    today_stats_with(&state.pool, state.project_id).await
+}
+
+/// Same body as cmd_today_stats but callable with a raw pool + project_id.
+/// Used by the HTTP API server (api_server.rs) to mirror the mini's state
+/// to a remote laptop client. Tauri command thin-wraps this.
+pub async fn today_stats_with(
+    pool: &sqlx::SqlitePool,
+    pid: i64,
+) -> Result<TodayStats, String> {
 
     // Budget: sum today's budget_ledger rows. Authoritative source — the
     // budget cap logic also reads from here, so they stay in sync.

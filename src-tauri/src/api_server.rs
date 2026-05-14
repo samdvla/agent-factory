@@ -23,7 +23,8 @@ use serde_json::json;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::cors::CorsLayer;
 
-use crate::commands::AppState;
+use crate::commands::{self, AppState};
+use crate::{budget, pnl, secrets};
 
 #[derive(Clone)]
 struct ApiState {
@@ -55,6 +56,11 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/healthz", get(healthz))
         .route("/api/status", get(status_handler))
         .route("/api/events", get(events_handler))
+        .route("/api/today_stats", get(today_stats_handler))
+        .route("/api/recent_cycles", get(recent_cycles_handler))
+        .route("/api/wealth", get(wealth_handler))
+        .route("/api/budget", get(budget_handler))
+        .route("/api/etsy/publishes", get(etsy_publishes_handler))
         .with_state(api_state)
         // The laptop's Vite dev server runs on a different origin (typically
         // tauri://localhost or http://localhost:1420). For now allow any
@@ -109,4 +115,80 @@ async fn events_handler(
         })
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+// ---- Read-only data endpoints: bodies inlined from commands.rs so the
+// laptop UI can mirror the mini's live state. Mutating endpoints (start,
+// stop, set_secret, enqueue) ship in a later phase.
+
+#[derive(serde::Deserialize)]
+struct CyclesQuery { limit: Option<i64> }
+
+async fn today_stats_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<commands::TodayStats>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::today_stats_with(&s.inner.pool, s.inner.project_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn recent_cycles_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<CyclesQuery>,
+) -> Result<Json<Vec<pnl::CycleSummary>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    pnl::list_recent_cycles(&s.inner.pool, s.inner.project_id, q.limit.unwrap_or(20))
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn wealth_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<pnl::AgentWealth>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    pnl::list_wealth(&s.inner.pool, s.inner.project_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn budget_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    let pool = &s.inner.pool;
+    let pid = s.inner.project_id;
+    let today_usd = budget::today_spend_usd(pool, pid).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hour_usd  = budget::spend_window(pool, pid, 1).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let month_usd = budget::month_spend_usd(pool, pid).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let read = |k: &str, default: f64| -> f64 {
+        secrets::get(k).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(default)
+    };
+    Ok(Json(json!({
+        "today_usd": today_usd,
+        "hour_usd": hour_usd,
+        "month_usd": month_usd,
+        "hourly_cap_usd": read("hourly_budget_usd", 0.50),
+        "daily_cap_usd":  read("daily_budget_usd",  1.00),
+        "monthly_cap_usd": read("monthly_budget_usd", 20.00),
+        "burn_per_hour_usd": hour_usd,
+    })))
+}
+
+async fn etsy_publishes_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<commands::EtsyPublishRow>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::etsy_list_publishes_with(&s.inner.pool, s.inner.project_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
