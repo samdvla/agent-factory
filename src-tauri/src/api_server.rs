@@ -454,8 +454,8 @@ async fn cults3d_publishes_handler(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     check_auth(&headers, &s.token)?;
-    let rows: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, Option<String>, String, Option<String>, i64)>(
-        "SELECT id, local_listing_id, cults3d_url, title, asset_url, state, error, published_at \
+    let rows: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, Option<String>, Option<f64>, String, Option<String>, i64)>(
+        "SELECT id, local_listing_id, cults3d_creation_id, title, url, price_usd, state, error, published_at \
          FROM cults3d_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
     )
     .bind(s.inner.project_id)
@@ -464,8 +464,8 @@ async fn cults3d_publishes_handler(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .into_iter()
     .map(|r| json!({
-        "id": r.0, "local_listing_id": r.1, "cults3d_url": r.2, "title": r.3,
-        "asset_url": r.4, "state": r.5, "error": r.6, "published_at": r.7,
+        "id": r.0, "local_listing_id": r.1, "cults3d_creation_id": r.2, "title": r.3,
+        "url": r.4, "price_usd": r.5, "state": r.6, "error": r.7, "published_at": r.8,
     }))
     .collect();
     Ok(Json(json!(rows)))
@@ -537,8 +537,8 @@ async fn gumroad_publishes_handler(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     check_auth(&headers, &s.token)?;
-    let rows: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, Option<String>, Option<f64>, String, Option<String>, i64)>(
-        "SELECT id, local_listing_id, gumroad_product_id, title, url, price_usd, state, error, published_at \
+    let rows: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, Option<String>, Option<String>, Option<f64>, String, Option<String>, Option<String>, i64)>(
+        "SELECT id, local_listing_id, gumroad_product_id, title, short_url, edit_url, price_usd, state, error, warning, published_at \
          FROM gumroad_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
     )
     .bind(s.inner.project_id)
@@ -548,7 +548,7 @@ async fn gumroad_publishes_handler(
     .into_iter()
     .map(|r| json!({
         "id": r.0, "local_listing_id": r.1, "gumroad_product_id": r.2, "title": r.3,
-        "url": r.4, "price_usd": r.5, "state": r.6, "error": r.7, "published_at": r.8,
+        "short_url": r.4, "edit_url": r.5, "price_usd": r.6, "state": r.7, "error": r.8, "warning": r.9, "published_at": r.10,
     }))
     .collect();
     Ok(Json(json!(rows)))
