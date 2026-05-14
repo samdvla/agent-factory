@@ -255,6 +255,22 @@ def submit_image_to_model(
     return task_id
 
 
+def _clamp_prompt_to_tripo_limit(prompt: str) -> str:
+    """Tripo's text-to-3D rejects prompts longer than 1024 chars. Mirrors
+    the same defensive truncation Meshy submit_preview does — orchestrator
+    briefs occasionally cross the threshold; first ~900 chars carry the
+    visual content, the tail is recoverable style modifiers."""
+    LIMIT = 1024
+    SOFT = 1000
+    if len(prompt) <= LIMIT:
+        return prompt
+    cut = prompt[:SOFT]
+    space = cut.rfind(" ")
+    if space > SOFT - 80:
+        cut = cut[:space]
+    return cut
+
+
 def submit_text_to_model(
     api_key: str,
     prompt: str,
@@ -266,6 +282,7 @@ def submit_text_to_model(
 
     See submit_image_to_model docstring for why texture/pbr are explicit.
     """
+    prompt = _clamp_prompt_to_tripo_limit(prompt)
     body: dict = {
         "type": "text_to_model",
         "prompt": prompt,
