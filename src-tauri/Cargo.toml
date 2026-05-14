@@ -41,6 +41,13 @@ rand = "0.8"
 url = "2"
 urlencoding = "2"
 
+# HTTP/SSE server for the headless mini → laptop client mode (phase 1).
+# Pulled in only when the binary is built; not on the request path of any
+# normal Tauri command. Versions chosen to share hyper with reqwest.
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"

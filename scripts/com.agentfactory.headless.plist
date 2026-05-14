@@ -30,6 +30,13 @@
         -->
         <key>AGENT_FACTORY_FILE_SECRETS</key>
         <string>1</string>
+        <!--
+          Read-only HTTP/SSE API for the laptop UI's client mode (phase 1).
+          The mini binds 0.0.0.0:7420; bearer-token auth gates everything
+          except /healthz. Token lives in secrets under api_server_token.
+        -->
+        <key>AGENT_FACTORY_API_PORT</key>
+        <string>7420</string>
     </dict>
 
     <key>RunAtLoad</key>

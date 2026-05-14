@@ -1,3 +1,4 @@
+pub mod api_server;
 pub mod asset_host_github;
 pub mod budget;
 pub mod commands;
@@ -164,6 +165,11 @@ pub fn run() {
             }
 
             let autostart_state = if autostart { Some(Arc::clone(&state)) } else { None };
+            // Clone for the API server before we move state into Tauri.
+            let api_state = std::env::var("AGENT_FACTORY_API_PORT")
+                .ok()
+                .and_then(|p| p.parse::<u16>().ok())
+                .map(|port| (Arc::clone(&state), port));
             app.manage(state);
             if let Some(s) = autostart_state {
                 tauri::async_runtime::spawn(async move {
@@ -171,6 +177,25 @@ pub fn run() {
                         tracing::error!("autostart: supervisor start failed: {e}");
                     } else {
                         tracing::info!("autostart: supervisor started");
+                    }
+                });
+            }
+            // Spawn the read-only HTTP/SSE API server when AGENT_FACTORY_API_PORT
+            // is set. The headless mini sets it via its launchd plist; the
+            // laptop's default unset = no server, no port open.
+            if let Some((s, port)) = api_state {
+                tauri::async_runtime::spawn(async move {
+                    let token = match api_server::resolve_or_create_token() {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::error!("api_server: token init failed: {e}");
+                            return;
+                        }
+                    };
+                    tracing::info!("api_server: token (first 8 chars) = {}…", &token[..8.min(token.len())]);
+                    let bind = format!("0.0.0.0:{port}");
+                    if let Err(e) = api_server::run(s, bind, token).await {
+                        tracing::error!("api_server exited: {e}");
                     }
                 });
             }
