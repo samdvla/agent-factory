@@ -97,6 +97,12 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/api/etsy/listings/cancel_regeneration", post(etsy_cancel_regeneration_handler))
         .route("/api/smoke_test/start", post(smoke_test_start_handler))
         .route("/api/smoke_test/resume", post(smoke_test_resume_handler))
+        // Asset readers — let the laptop UI render draft images / 3D / SVG
+        // pulled from the mini's filesystem (base64 inline up to MAX_INLINE).
+        .route("/api/assets/listing_svg", get(read_listing_svg_handler))
+        .route("/api/assets/listing", get(read_listing_asset_handler))
+        .route("/api/assets/job_svg", get(read_job_svg_handler))
+        .route("/api/assets/job", get(read_job_asset_handler))
         .with_state(api_state)
         // The laptop's Vite dev server runs on a different origin (typically
         // tauri://localhost or http://localhost:1420). For now allow any
@@ -1084,4 +1090,60 @@ async fn smoke_test_resume_handler(
     }
     let _ = secrets::delete("pre_smoke_real_etsy_enabled");
     Ok(Json(()))
+}
+
+// ---- Asset readers ----
+
+#[derive(serde::Deserialize)]
+struct ListingIdQuery { listing_id: i64 }
+
+#[derive(serde::Deserialize)]
+struct JobIdQuery { job_id: i64 }
+
+async fn read_listing_svg_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<ListingIdQuery>,
+) -> Result<Json<Option<String>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::cmd_read_asset_svg(q.listing_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn read_listing_asset_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<ListingIdQuery>,
+) -> Result<Json<commands::JobAssetInfo>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::cmd_read_listing_asset(q.listing_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn read_job_svg_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<JobIdQuery>,
+) -> Result<Json<Option<String>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::read_job_svg_with(&s.inner.pool, s.inner.project_id, q.job_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn read_job_asset_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<JobIdQuery>,
+) -> Result<Json<commands::JobAssetInfo>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::read_job_asset_with(&s.inner.pool, s.inner.project_id, q.job_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }

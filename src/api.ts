@@ -270,7 +270,10 @@ export const api = {
   promptHistory: (role: string, limit?: number) =>
     invoke<PromptHistoryEntry[]>("cmd_prompt_history", { role, limit }),
   readAssetSvg: (listingId: number) =>
-    invoke<string | null>("cmd_read_asset_svg", { listingId }),
+    remoteOr<string | null>(
+      `/api/assets/listing_svg?listing_id=${listingId}`,
+      () => invoke<string | null>("cmd_read_asset_svg", { listingId })
+    ),
   etsyListingReviewInfo: (localListingId: number) =>
     invoke<ListingReviewInfo>("cmd_etsy_listing_review_info", {
       localListingId,
@@ -371,7 +374,9 @@ export const api = {
         })
     ),
   readJobSvg: (jobId: number): Promise<string | null> =>
-    invoke("cmd_read_job_svg", { jobId }),
+    remoteOr<string | null>(`/api/assets/job_svg?job_id=${jobId}`, () =>
+      invoke("cmd_read_job_svg", { jobId })
+    ),
   unratedJobCount: (sinceUnix: number): Promise<number> =>
     remoteOr<number>(`/api/unrated_jobs_count?since_unix=${sinceUnix}`, () =>
       invoke("cmd_unrated_job_count", { sinceUnix })
@@ -481,9 +486,13 @@ export const api = {
   ): Promise<AssetHostVerifyOk> =>
     invoke("cmd_github_asset_host_verify", { repo, token }),
   readJobAsset: (jobId: number): Promise<JobAssetInfo> =>
-    invoke("cmd_read_job_asset", { jobId }),
+    remoteOr<JobAssetInfo>(`/api/assets/job?job_id=${jobId}`, () =>
+      invoke("cmd_read_job_asset", { jobId })
+    ),
   readListingAsset: (listingId: number): Promise<JobAssetInfo> =>
-    invoke("cmd_read_listing_asset", { listingId }),
+    remoteOr<JobAssetInfo>(`/api/assets/listing?listing_id=${listingId}`, () =>
+      invoke("cmd_read_listing_asset", { listingId })
+    ),
   getShopFocus: (): Promise<{ value: string }> => invoke("cmd_get_shop_focus"),
   setShopFocus: (value: string): Promise<void> =>
     invoke("cmd_set_shop_focus", { value }),

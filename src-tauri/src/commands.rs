@@ -2556,12 +2556,21 @@ pub async fn cmd_read_job_asset(
     state: State<'_, Arc<AppState>>,
     job_id: i64,
 ) -> Result<JobAssetInfo, String> {
+    read_job_asset_with(&state.pool, state.project_id, job_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn read_job_asset_with(
+    pool: &SqlitePool,
+    project_id: i64,
+    job_id: i64,
+) -> Result<JobAssetInfo, String> {
     let row: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
     )
     .bind(job_id)
-    .bind(state.project_id)
-    .fetch_optional(&state.pool)
+    .bind(project_id)
+    .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
     let mut info = JobAssetInfo {
@@ -2707,12 +2716,21 @@ pub async fn cmd_read_job_svg(
     state: State<'_, Arc<AppState>>,
     job_id: i64,
 ) -> Result<Option<String>, String> {
+    read_job_svg_with(&state.pool, state.project_id, job_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn read_job_svg_with(
+    pool: &SqlitePool,
+    project_id: i64,
+    job_id: i64,
+) -> Result<Option<String>, String> {
     let row: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
     )
     .bind(job_id)
-    .bind(state.project_id)
-    .fetch_optional(&state.pool)
+    .bind(project_id)
+    .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
     let Some((Some(result_json),)) = row else { return Ok(None) };
