@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "deploy:mini": "bash scripts/deploy-from-laptop.sh"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

@@ -446,6 +446,13 @@ pub async fn cmd_printify_status() -> Result<PrintifyStatus, String> {
 
 #[tauri::command]
 pub async fn cmd_start_supervisor(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    start_supervisor_with_state(Arc::clone(&*state)).await
+}
+
+/// Headless / autostart entry point: lib.rs setup calls this when
+/// AGENT_FACTORY_AUTOSTART (or --autostart) is set on the mini server.
+/// Same logic as cmd_start_supervisor; that command now thin-wraps this.
+pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), String> {
     let mut guard = state.supervisor_handle.lock().await;
     if guard.is_some() { return Ok(()); }
 

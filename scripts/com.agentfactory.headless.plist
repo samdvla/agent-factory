@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the headless agent-factory server on the Mac mini.
+  Installed at ~/Library/LaunchAgents/com.agentfactory.headless.plist by
+  scripts/deploy-mini.sh. The mini needs auto-login enabled (System
+  Settings → Users & Groups) so this loads at boot without a console.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agentfactory.headless</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/agent-factory.app/Contents/MacOS/agent-factory</string>
+        <string>--headless</string>
+        <string>--autostart</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/samdavila/Library/Logs/agent-factory/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/samdavila/Library/Logs/agent-factory/stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/samdavila/Projects/agent-factory</string>
+</dict>
+</plist>

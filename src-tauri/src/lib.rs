@@ -48,6 +48,16 @@ pub fn run() {
         )
         .init();
 
+    // Headless = hide the main window on launch (laptop unchanged; the
+    // Mac mini server runs with --headless via launchd). Autostart = run
+    // the supervisor immediately, the same logic the UI's Start button
+    // triggers. Both opt-in via CLI flag or env var so the laptop default
+    // (window visible, idle until user clicks Start) is preserved.
+    let headless = std::env::args().any(|a| a == "--headless")
+        || std::env::var("AGENT_FACTORY_HEADLESS").is_ok();
+    let autostart = std::env::args().any(|a| a == "--autostart")
+        || std::env::var("AGENT_FACTORY_AUTOSTART").is_ok();
+
     tauri::Builder::default()
         // Initialize the opener plugin so JS-side `openUrl(...)` works.
         // Without this Tauri 2 throws "plugin opener not found" the moment
@@ -56,7 +66,7 @@ pub fn run() {
         // capability permission were already in the build manifest;
         // initializing it here is the missing wire.
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             let app_data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
             let db_path = app_data_dir.join("db.sqlite");
@@ -143,8 +153,27 @@ pub fn run() {
             // Supervisor does NOT auto-start. The user must click Start in the
             // top bar, which calls cmd_start_supervisor. This keeps idle spend
             // at zero — no jobs are enqueued until the user explicitly acts.
+            // EXCEPTION: --autostart / AGENT_FACTORY_AUTOSTART (set by the Mac
+            // mini's launchd plist) flips this so the headless server starts
+            // its workers immediately on boot.
 
+            if headless {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+
+            let autostart_state = if autostart { Some(Arc::clone(&state)) } else { None };
             app.manage(state);
+            if let Some(s) = autostart_state {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = commands::start_supervisor_with_state(s).await {
+                        tracing::error!("autostart: supervisor start failed: {e}");
+                    } else {
+                        tracing::info!("autostart: supervisor started");
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
