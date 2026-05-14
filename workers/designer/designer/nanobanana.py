@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -62,6 +63,19 @@ _URL_RE = re.compile(r"https?://[^\s'\"<>]+\.(?:png|jpg|jpeg|webp)(?:\?[^\s'\"<>
 class NanobananaError(Exception):
     """Non-recoverable reference-render failure. Caller should fall
     back to text-to-3D — never block the pipeline."""
+
+
+# Bounded retry for TCP/DNS/connect-level blips when fetching a finished
+# render from the Higgsfield CDN. The image was already paid for by the
+# time we reach `_download` — a single dropped TCP connection should not
+# burn that credit.
+_NET_RETRY_ATTEMPTS = 3
+_NET_RETRY_BACKOFF_SEC = (1.0, 3.0)
+
+
+def _backoff_sleep(attempt: int) -> None:
+    idx = min(attempt, len(_NET_RETRY_BACKOFF_SEC) - 1)
+    time.sleep(_NET_RETRY_BACKOFF_SEC[idx])
 
 
 def _cli_available() -> bool:
@@ -122,20 +136,39 @@ def _download(url: str, dest: str, timeout: int = DOWNLOAD_TIMEOUT_SEC) -> None:
     SYN_SENT for ~75s/attempt before the timeout fires.
     """
     from .ipv4 import force_ipv4
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "agent-factory/1.0"},
-        )
-        with force_ipv4(), urllib.request.urlopen(req, timeout=timeout) as resp:
-            tmp = dest + ".tmp"
-            with open(tmp, "wb") as f:
-                f.write(resp.read())
-        os.replace(tmp, dest)
-        if not (os.path.exists(dest) and os.path.getsize(dest) > 0):
-            raise NanobananaError(f"downloaded file empty: {dest}")
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        raise NanobananaError(f"download {url} failed: {e}") from e
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "agent-factory/1.0"},
+            )
+            with force_ipv4(), urllib.request.urlopen(req, timeout=timeout) as resp:
+                tmp = dest + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(resp.read())
+            os.replace(tmp, dest)
+            if not (os.path.exists(dest) and os.path.getsize(dest) > 0):
+                raise NanobananaError(f"downloaded file empty: {dest}")
+            return
+        except urllib.error.HTTPError as e:
+            raise NanobananaError(f"download {url} failed: {e}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[nanobanana] download {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise NanobananaError(f"download {url} failed: {e}") from e
+        except OSError as e:
+            # Disk-side failure (no space, permission, bad path) — local,
+            # not transient at the network layer. Surface immediately.
+            raise NanobananaError(f"download {url} failed: {e}") from e
+    raise NanobananaError(f"download {url} failed: {last_err}")
 
 
 def generate_reference_image(

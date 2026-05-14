@@ -20,6 +20,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -37,6 +38,19 @@ DEFAULT_TIMEOUT_SEC = 120
 class GeminiImageError(Exception):
     """Non-recoverable image-generation failure. Caller should fall back
     to text-to-3D — never block the pipeline on a missing reference."""
+
+
+# Bounded retry for TCP/DNS/connect-level blips. A bare URLError means the
+# HTTP request never landed at Google, so the account wasn't debited and
+# retrying is safe. HTTPError is excluded — a 4xx/5xx response proves the
+# request *did* arrive and may have charged.
+_NET_RETRY_ATTEMPTS = 3
+_NET_RETRY_BACKOFF_SEC = (1.0, 3.0)
+
+
+def _backoff_sleep(attempt: int) -> None:
+    idx = min(attempt, len(_NET_RETRY_BACKOFF_SEC) - 1)
+    time.sleep(_NET_RETRY_BACKOFF_SEC[idx])
 
 
 # Accept any of the common Google-AI key env names. Different docs use
@@ -167,34 +181,50 @@ def generate_reference_image(
         },
     }
     url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "x-goog-api-key": key,
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
+    body_bytes = json.dumps(body).encode("utf-8")
 
     print(
         f"[gemini_image] job_id={job_id} model={model} aspect={aspect_ratio} "
         f"prompt_len={len(enriched)}",
         file=sys.stderr, flush=True,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
+    raw: str | None = None
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            url,
+            data=body_bytes,
+            headers={
+                "x-goog-api-key": key,
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
         try:
-            body_text = e.read().decode("utf-8", errors="replace")[:400]
-        except Exception:
-            body_text = ""
-        raise GeminiImageError(
-            f"Gemini HTTP {e.code}: {body_text or e.reason}"
-        ) from e
-    except urllib.error.URLError as e:
-        raise GeminiImageError(f"Gemini network error: {e}") from e
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+            break
+        except urllib.error.HTTPError as e:
+            try:
+                body_text = e.read().decode("utf-8", errors="replace")[:400]
+            except Exception:
+                body_text = ""
+            raise GeminiImageError(
+                f"Gemini HTTP {e.code}: {body_text or e.reason}"
+            ) from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[gemini_image] URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise GeminiImageError(f"Gemini network error: {e}") from e
+    if raw is None:
+        raise GeminiImageError(f"Gemini network error: {last_err}")
 
     try:
         data = json.loads(raw)
