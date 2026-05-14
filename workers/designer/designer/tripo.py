@@ -59,41 +59,80 @@ class TripoError(Exception):
     failure: fail the design job, fall through to text-only output."""
 
 
+# Bounded retry for TCP/DNS/connect-level blips. A bare URLError means the
+# HTTP request never landed at Tripo, so the account wasn't debited and
+# retrying is safe. HTTPError is excluded — a 4xx/5xx response proves the
+# request *did* arrive, and any retry could double-charge. Worst-case wall
+# clock when all retries miss: ~4s, far cheaper than burning the upstream
+# nanobanana reference-render spend on a 1-second DNS hiccup.
+_NET_RETRY_ATTEMPTS = 3
+_NET_RETRY_BACKOFF_SEC = (1.0, 3.0)
+
+
+def _backoff_sleep(attempt: int) -> None:
+    idx = min(attempt, len(_NET_RETRY_BACKOFF_SEC) - 1)
+    time.sleep(_NET_RETRY_BACKOFF_SEC[idx])
+
+
 def _post(url: str, body: dict, api_key: str, timeout: int = 60) -> dict:
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        raise TripoError(f"Tripo POST {url} HTTP {e.code}: {raw}") from e
-    except urllib.error.URLError as e:
-        raise TripoError(f"Tripo POST {url} network error: {e}") from e
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise TripoError(f"Tripo POST {url} HTTP {e.code}: {raw}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[tripo] POST {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise TripoError(f"Tripo POST {url} network error: {e}") from e
+    raise TripoError(f"Tripo POST {url} network error: {last_err}")
 
 
 def _get(url: str, api_key: str, timeout: int = 60) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {api_key}"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        raise TripoError(f"Tripo GET {url} HTTP {e.code}: {raw}") from e
-    except urllib.error.URLError as e:
-        raise TripoError(f"Tripo GET {url} network error: {e}") from e
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise TripoError(f"Tripo GET {url} HTTP {e.code}: {raw}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[tripo] GET {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise TripoError(f"Tripo GET {url} network error: {e}") from e
+    raise TripoError(f"Tripo GET {url} network error: {last_err}")
 
 
 def _ext_from_path(path: str) -> str:
@@ -132,23 +171,39 @@ def upload_image(api_key: str, image_path: str, timeout: int = 120) -> str:
         f"{crlf.decode()}--{boundary}--{crlf.decode()}"
     ).encode("utf-8")
 
-    req = urllib.request.Request(
-        f"{TRIPO_API_BASE}/v2/openapi/upload",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        raise TripoError(f"Tripo upload HTTP {e.code}: {raw}") from e
-    except urllib.error.URLError as e:
-        raise TripoError(f"Tripo upload network error: {e}") from e
+    upload_url = f"{TRIPO_API_BASE}/v2/openapi/upload"
+    last_err: urllib.error.URLError | None = None
+    payload: dict | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            upload_url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise TripoError(f"Tripo upload HTTP {e.code}: {raw}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[tripo] upload URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise TripoError(f"Tripo upload network error: {e}") from e
+    if payload is None:
+        raise TripoError(f"Tripo upload network error: {last_err}")
 
     if payload.get("code") != 0:
         raise TripoError(f"Tripo upload returned code={payload.get('code')}: {payload}")
@@ -286,18 +341,43 @@ def pick_preview_url(data: dict) -> Optional[str]:
 
 
 def download_to_path(url: str, dest_path: str, timeout: int = 120) -> None:
-    """Stream a binary file from a presigned URL into dest_path."""
-    req = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            with open(dest_path, "wb") as f:
-                while True:
-                    chunk = resp.read(64 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
-        raise TripoError(f"Tripo download {url} failed: {e}") from e
+    """Stream a binary file from a presigned URL into dest_path.
+
+    Retries only the URLError branch: presigned URLs sometimes fail at the
+    TCP/DNS layer for a second (CloudFront edge swap, DNS cache miss). The
+    GLB / preview PNG is already paid for upstream — re-fetching it costs
+    nothing but a few seconds of wall clock.
+    """
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(64 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            return
+        except urllib.error.HTTPError as e:
+            raise TripoError(f"Tripo download {url} failed: {e}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[tripo] download {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise TripoError(f"Tripo download {url} failed: {e}") from e
+        except OSError as e:
+            # Disk-side failure (no space, permission, bad path) — local,
+            # not transient at the network layer. Surface immediately.
+            raise TripoError(f"Tripo download {url} failed: {e}") from e
+    raise TripoError(f"Tripo download {url} failed: {last_err}")
 
 
 def glb_to_stl(glb_path: str, stl_path: str) -> None:

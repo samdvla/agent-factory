@@ -43,6 +43,21 @@ class MeshyError(Exception):
     the designer; the pipeline continues with text-only output."""
 
 
+# Bounded retry for TCP/DNS/connect-level blips. A bare URLError means the
+# HTTP request never landed at Meshy, so the account wasn't debited and
+# retrying is safe. HTTPError is excluded — a 4xx/5xx response proves the
+# request *did* arrive, and any retry could double-charge. Worst-case wall
+# clock when all retries miss: ~4s, far cheaper than burning the upstream
+# nanobanana reference-render spend on a 1-second DNS hiccup.
+_NET_RETRY_ATTEMPTS = 3
+_NET_RETRY_BACKOFF_SEC = (1.0, 3.0)
+
+
+def _backoff_sleep(attempt: int) -> None:
+    idx = min(attempt, len(_NET_RETRY_BACKOFF_SEC) - 1)
+    time.sleep(_NET_RETRY_BACKOFF_SEC[idx])
+
+
 def _gate_mesh_or_raise(glb_path: str, stl_path: str, job_id: int) -> None:
     """Same shared gate as tripo._gate_mesh_or_raise — repair + validate
     Meshy output. MeshQualityError gets wrapped in MeshyError so the
@@ -63,39 +78,63 @@ def _gate_mesh_or_raise(glb_path: str, stl_path: str, job_id: int) -> None:
 
 def _post(url: str, body: dict, api_key: str, timeout: int = 60) -> dict:
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        raise MeshyError(f"Meshy POST {url} HTTP {e.code}: {raw}") from e
-    except urllib.error.URLError as e:
-        raise MeshyError(f"Meshy POST {url} network error: {e}") from e
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise MeshyError(f"Meshy POST {url} HTTP {e.code}: {raw}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[meshy] POST {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise MeshyError(f"Meshy POST {url} network error: {e}") from e
+    raise MeshyError(f"Meshy POST {url} network error: {last_err}")
 
 
 def _get(url: str, api_key: str, timeout: int = 60) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {api_key}"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        raise MeshyError(f"Meshy GET {url} HTTP {e.code}: {raw}") from e
-    except urllib.error.URLError as e:
-        raise MeshyError(f"Meshy GET {url} network error: {e}") from e
+    last_err: urllib.error.URLError | None = None
+    for attempt in range(_NET_RETRY_ATTEMPTS):
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise MeshyError(f"Meshy GET {url} HTTP {e.code}: {raw}") from e
+        except urllib.error.URLError as e:
+            last_err = e
+            if attempt + 1 < _NET_RETRY_ATTEMPTS:
+                print(
+                    f"[meshy] GET {url} URLError "
+                    f"(attempt {attempt + 1}/{_NET_RETRY_ATTEMPTS}): {e} — retrying",
+                    file=sys.stderr, flush=True,
+                )
+                _backoff_sleep(attempt)
+                continue
+            raise MeshyError(f"Meshy GET {url} network error: {e}") from e
+    raise MeshyError(f"Meshy GET {url} network error: {last_err}")
 
 
 def _image_to_data_uri(image_path: str) -> str:
