@@ -225,7 +225,11 @@ def test_tripo_download_to_path_does_not_retry_http_error(tmp_path, monkeypatch)
     assert calls["n"] == 1
 
 
-# ---- Nanobanana download --------------------------------------------------
+# ---- Nanobanana download (REMOVED) ----------------------------------------
+# Higgsfield-CDN download retry tests lived here. That path was removed when
+# the shop's Higgsfield plan ran out of credits — nanobanana now thin-
+# delegates to gemini_image, and the Gemini POST retry is covered below.
+
 
 def _bytes_resp(body: bytes):
     fake = io.BytesIO(body)
@@ -238,62 +242,6 @@ def _bytes_resp(body: bytes):
             return False
 
     return _Ctx()
-
-
-def test_nanobanana_download_retries_urlerror(tmp_path, monkeypatch):
-    """The Higgsfield render is already paid for by the time we hit
-    `_download` — a CloudFront TCP blip should not burn the credit."""
-    calls = {"n": 0}
-    payload = b"PNG-bytes"
-
-    def _urlopen(req, timeout=None):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise urllib.error.URLError("connection reset")
-        return _bytes_resp(payload)
-
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
-    monkeypatch.setattr(nanobanana_mod.time, "sleep", lambda _s: None)
-
-    dest = tmp_path / "ref.png"
-    nanobanana_mod._download("https://cdn.example/render.png", str(dest))
-
-    assert dest.read_bytes() == payload
-    assert calls["n"] == 2
-
-
-def test_nanobanana_download_raises_after_all_retries(tmp_path, monkeypatch):
-    calls = {"n": 0}
-
-    def _urlopen(req, timeout=None):
-        calls["n"] += 1
-        raise urllib.error.URLError("network unreachable")
-
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
-    monkeypatch.setattr(nanobanana_mod.time, "sleep", lambda _s: None)
-
-    dest = tmp_path / "ref.png"
-    with pytest.raises(nanobanana_mod.NanobananaError):
-        nanobanana_mod._download("https://cdn.example/render.png", str(dest))
-
-    assert calls["n"] == nanobanana_mod._NET_RETRY_ATTEMPTS
-
-
-def test_nanobanana_download_does_not_retry_http_error(tmp_path, monkeypatch):
-    calls = {"n": 0}
-
-    def _urlopen(req, timeout=None):
-        calls["n"] += 1
-        raise _http_error(403, b"forbidden")
-
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
-    monkeypatch.setattr(nanobanana_mod.time, "sleep", lambda _s: None)
-
-    dest = tmp_path / "ref.png"
-    with pytest.raises(nanobanana_mod.NanobananaError):
-        nanobanana_mod._download("https://cdn.example/render.png", str(dest))
-
-    assert calls["n"] == 1
 
 
 # ---- Gemini image POST ----------------------------------------------------

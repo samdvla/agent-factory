@@ -10,6 +10,7 @@ pub mod etsy_polling;
 pub mod etsy_publish;
 pub mod events;
 pub mod gumroad;
+pub mod ip_sanitize;
 pub mod gumroad_publish;
 pub mod heartbeat;
 pub mod llm;
@@ -31,6 +32,9 @@ pub mod sketchfab;
 pub mod sketchfab_publish;
 pub mod supervisor;
 pub mod worker;
+
+#[cfg(test)]
+mod marketplace_smoke_tests;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -258,6 +262,7 @@ pub fn run() {
             commands::cmd_gumroad_status,
             commands::cmd_gumroad_set_daily_cap,
             commands::cmd_gumroad_list_publishes,
+            commands::cmd_gumroad_backfill_files,
             commands::cmd_mmf_verify,
             commands::cmd_mmf_set_enabled,
             commands::cmd_mmf_set_sell_paid,

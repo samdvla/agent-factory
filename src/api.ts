@@ -325,6 +325,8 @@ export const api = {
     invoke("cmd_gumroad_set_daily_cap", { cap }),
   gumroadListPublishes: (limit?: number): Promise<GumroadPublishRow[]> =>
     invoke("cmd_gumroad_list_publishes", { limit }),
+  gumroadBackfillFiles: (): Promise<GumroadBackfillResult> =>
+    invoke("cmd_gumroad_backfill_files"),
   mmfVerify: (apiKey: string): Promise<MmfVerifyOk> =>
     invoke("cmd_mmf_verify", { apiKey }),
   mmfStatus: (): Promise<MmfStatus> => invoke("cmd_mmf_status"),
@@ -560,6 +562,13 @@ export type GumroadPublishRow = {
   warning: string | null;
   published_at: number;
 };
+export type GumroadBackfillResult = {
+  checked: number;
+  fixed: number;
+  skipped_missing_assets: number;
+  errors: number;
+  details: string[];
+};
 export type MmfStatus = {
   creds_present: boolean;
   enabled: boolean;
@@ -598,4 +607,28 @@ export type JobAssetInfo = {
   data_base64: string;
   glb_data_base64: string | null;
   png_data_base64: string | null;
+  // Rigged + animated variants (Meshy rig+anim pass output, when present
+  // — only populated for full-body humanoid figurines that went through
+  // workers/designer/designer/meshy.py::rig_and_animate). Path returned
+  // even when the file is too large to inline so the UI can show a
+  // download link without loading the bytes.
+  rigged_glb_path: string | null;
+  rigged_glb_data_base64: string | null;
+  walking_glb_path: string | null;
+  walking_glb_data_base64: string | null;
+  running_glb_path: string | null;
+  running_glb_data_base64: string | null;
+  animated_glb_path: string | null;
+  animated_glb_data_base64: string | null;
+  // nanobanana reference image (the still photo Meshy turned into the
+  // 3D mesh). When present, the inspector exposes a "Reference" tab so
+  // the operator can compare "what we asked for" vs "what Meshy made of
+  // it". Saved by workers/designer/designer/nanobanana.py.
+  ref_image_path: string | null;
+  ref_image_data_base64: string | null;
+  // Full enriched prompt sent to Gemini for the ref image (brief +
+  // studio-reference wrapping from workers/designer/designer/ref_prompt.py).
+  // Shown under the Reference tab so the operator can iterate the prompt
+  // wording against real outputs.
+  ref_prompt: string | null;
 };

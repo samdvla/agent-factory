@@ -351,3 +351,44 @@ def try_render_angles(
             file=sys.stderr, flush=True,
         )
         return []
+
+
+def try_render_previews(
+    mesh_path: str | None,
+    *,
+    output_dir: str,
+    job_id: int,
+    resolution: int = 1024,
+) -> list[str]:
+    """Render listing preview images: a textured hero shot first, then
+    untextured clay angles.
+
+    Prefers the bundled headless three.js renderer (`glb_render`), which
+    gives real PBR materials and studio lighting. Falls back to the pure-
+    Python clay rasterizer (`render_angles`) when Node/Chromium is
+    unavailable, so the factory always produces *some* previews. Never
+    raises — returns [] only if both render paths fail.
+
+    The returned list is render-ordered: index 0 is the hero (textured
+    when the three.js path ran), the rest are supporting angles. Callers
+    can hand this straight to `preview_pngs`.
+    """
+    if not mesh_path or not os.path.exists(mesh_path):
+        return []
+    try:
+        from . import glb_render
+
+        paths = glb_render.try_render(
+            mesh_path, output_dir=output_dir, job_id=job_id
+        )
+        if paths:
+            return paths
+    except Exception as e:  # import error, unexpected failure
+        print(
+            f"[preview] job_id={job_id} textured render path errored: {e}",
+            file=sys.stderr, flush=True,
+        )
+    # Fallback: pure-Python clay angles (no textures, but always works).
+    return try_render_angles(
+        mesh_path, output_dir=output_dir, job_id=job_id, resolution=resolution
+    )

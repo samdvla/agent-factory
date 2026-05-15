@@ -34,12 +34,19 @@ fn per_call_usd(model: &str) -> Option<f64> {
         "tripo-image-to-3d" => Some(0.40),
         "tripo-text-to-model" => Some(0.35),
 
-        // --- Meshy
-        // Preview ~$0.05 + Refine ~$0.05 when refine=true (now the default
-        // in workers/designer/designer/meshy.py — see commit f73c10a).
-        // image-to-3D bundles both stages, similar total.
-        "meshy-text-to-3d" => Some(0.10),
-        "meshy-image-to-3d" => Some(0.10),
+        // --- Meshy 6 (current default — see workers/designer/designer/meshy.py)
+        //   text-to-3d (preview 20 + refine 10)         = 30 credits
+        //   image-to-3d (with PBR)                       = 30 credits
+        //   auto-rigging                                 =  5 credits
+        //   animation (1 preset action via Animation API)=  3 credits
+        // At $0.02/credit on the Pro/Max monthly plans:
+        //   30 credits ≈ $0.60   |   5 credits ≈ $0.10   |   3 credits ≈ $0.06
+        // (Pay-as-you-go credits run a few cents higher; we use the
+        // monthly-plan rate since that's the operator's default.)
+        "meshy-text-to-3d" => Some(0.60),
+        "meshy-image-to-3d" => Some(0.60),
+        "meshy-rigging" => Some(0.10),
+        "meshy-animation" => Some(0.06),
 
         // --- Google AI Studio (direct Gemini image)
         // Gemini 3.1 Flash Image (Nano Banana 2): $0.067 per 1024px image
@@ -372,8 +379,25 @@ mod tests {
 
     #[test]
     fn cost_usd_uses_per_call_rate_for_meshy_text_to_3d() {
+        // Meshy 6 = preview 20 + refine 10 = 30 credits ≈ $0.60.
         let usd = cost_usd("meshy-text-to-3d", 0, 0);
-        assert!((usd - 0.10).abs() < 1e-9, "expected 0.10, got {usd}");
+        assert!((usd - 0.60).abs() < 1e-9, "expected 0.60, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_meshy_image_to_3d() {
+        // Meshy 6 image-to-3D with PBR = 30 credits ≈ $0.60.
+        let usd = cost_usd("meshy-image-to-3d", 0, 0);
+        assert!((usd - 0.60).abs() < 1e-9, "expected 0.60, got {usd}");
+    }
+
+    #[test]
+    fn cost_usd_uses_per_call_rate_for_meshy_rigging_and_animation() {
+        // Auto-rig = 5 credits ≈ $0.10; animation = 3 credits ≈ $0.06.
+        let rig = cost_usd("meshy-rigging", 0, 0);
+        let anim = cost_usd("meshy-animation", 0, 0);
+        assert!((rig - 0.10).abs() < 1e-9, "expected 0.10, got {rig}");
+        assert!((anim - 0.06).abs() < 1e-9, "expected 0.06, got {anim}");
     }
 
     #[test]

@@ -359,6 +359,25 @@ def _load_strategist_notes() -> str | None:
     return None
 
 
+def _load_system_override() -> str | None:
+    """Read the orchestrator's system_override from prompts.json (3-layer
+    prompt architecture — see memory/project_prompt_architecture.md).
+
+    When present, REPLACES the entire mechanical baseline below. Used by
+    the strategist auto-loop for total prompt rewrites and by the operator
+    via the PromptsPanel "Edit Override" UI. Returns None when missing or
+    malformed; the mechanical baseline is the fallback."""
+    try:
+        with open(_prompts_path()) as f:
+            data = json.load(f)
+        override = data.get("orchestrator", {}).get("system_override")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _load_operator_steers(role: str) -> list[dict]:
     """Read operator standing instructions for `role` from prompts.json.
 
@@ -933,10 +952,22 @@ def build_orchestrator_prompt(
         )
 
     if is_3d:
-        # 3D-only mode: completely different niche universe. Stop picking
-        # planners / printables / mugs / stickers; aim at the high-margin
-        # 3D-printable + game-asset markets where AI-generated meshes
-        # actually look professional.
+        # 3-layer prompt architecture (memory/project_prompt_architecture.md):
+        #   1. MECHANICAL BASELINE (below) — job, output schema, hard
+        #      operator-locked constraints. NO opinions about which niches
+        #      to pick. Code-reviewable, versioned with the binary.
+        #   2. operator_steers (prompts.json) — day-to-day policy. Drives
+        #      WHICH categories / archetypes / vibes to favor or avoid.
+        #      Appended below the system prompt with high attention weight.
+        #   3. system_override (prompts.json) — nuclear option. When set,
+        #      REPLACES the entire mechanical baseline. Used by strategist
+        #      auto-loop or by operator via PromptsPanel "Edit override".
+        #
+        # The dynamic `pool_block` (IP risk pools from settings) and
+        # `pt_hint` (product-type rotation) are computed regardless and
+        # appended at the end — they're shop config + rotation state, not
+        # niche-policy opinions, so they ride alongside both override and
+        # baseline paths.
         pools = _enabled_pools()
         pool_lines: list[str] = []
         if "original_anime" in pools:
@@ -966,51 +997,59 @@ def build_orchestrator_prompt(
         pool_block = ""
         if pool_lines:
             pool_block = (
-                "\n\nCHARACTER POOLS YOU MAY PICK FROM (rotate across them, do "
-                "NOT pile up one tier):\n" + "\n".join(pool_lines) + "\n"
+                "\n\nIP-RISK POOLS ENABLED (operator setting — pick from "
+                "across these, never over-stack one):\n"
+                + "\n".join(pool_lines) + "\n"
             )
 
-        system = (
-            "You are the Strategy Lead at an AI-run 3D-asset shop. We sell "
-            "AI-generated 3D models (STL + GLB) on Etsy and Cults3D. We DO "
-            "NOT sell 2D printables, stickers, mugs, or planners — those got "
-            "zero sales after 58 drafts and we pivoted. Pick niches in the "
-            "3D market where our Tripo/Meshy generation quality genuinely "
-            "competes:\n\n"
-            " • TABLETOP MINIATURES — D&D minis, Warhammer-compat, NPCs, "
-            "monsters, terrain tiles, dice towers, dice trays. Highest-"
-            "margin 3D niche on Etsy + huge Cults3D demand.\n"
-            " • 3D-PRINTABLE JEWELRY — pendants, earrings, rings, charms. "
-            "Stylized organic forms (botanical, animal, geometric). Small "
-            "files, fast prints, low filament cost = perfect for AI-gen.\n"
-            " • DESK + HOME DECOR — face planters, animal planters, lamp "
-            "shades, sculptural vases, wall-mounted busts, organizers, "
-            "geometric mathematical art.\n"
-            " • COSPLAY + PROPS — fantasy weapons, masks, helmets, jewelry "
-            "props, anime accessories. High willingness-to-pay.\n"
-            " • SEASONAL + GIFT — Christmas ornaments, Halloween figures, "
-            "wedding cake toppers, birthday party props, themed keychains.\n"
-            " • EVERYDAY-CARRY — phone stands, cable organizers, headphone "
-            "hooks, key holders, sunglass stands. Saturated but high "
-            "search volume on Etsy.\n"
-            " • EDUCATIONAL — anatomical models, molecular structures, "
-            "planets, fossils, historical artifacts. Schools + parents buy.\n"
-            " • PET ACCESSORIES — name tags, food bowl stands, custom toys, "
-            "memorial figurines. Underserved niche.\n\n"
-            "AVOID: anything 2D (planners, stickers, printables, posters, "
-            "wall art that's an image not a 3D bas-relief), commodity prints "
-            "(generic 'low-poly dragon'), and concepts that need detailed "
-            "rigging/PBR-texturing — our pipeline ships untextured printable "
-            "meshes, not game-ready textured assets."
-            f"{pool_block}\n"
-            f"{pt_hint}\n\n"
-            "Return JSON only with this exact shape:\n"
-            "{\n"
-            '  "niche_seed": "<specific niche, 3-7 words, e.g. \'D&D goblin warrior mini\' or \'botanical leaf earring STL\'>",\n'
-            '  "rationale": "<one sentence on WHY this niche sells on Etsy/Cults3D now AND why it differs from recent drafts>",\n'
-            '  "target_audience": "<who buys: tabletop gamers / jewelry makers / cosplayers / home decorators / etc.>"\n'
-            "}"
-        )
+        override = _load_system_override()
+        if override is not None:
+            # Operator / strategist wholesale rewrite. Append the dynamic
+            # context (rotation hint + pool list) at the end so the override
+            # author doesn't have to know about settings + rotation state.
+            system = override + f"{pool_block}\n{pt_hint}"
+        else:
+            # MECHANICAL BASELINE — purely the role's job + output contract +
+            # operator-locked hard constraints. Niche policy, archetype
+            # preferences, and category gating live in operator_steers.
+            system = (
+                "You are the Strategy Lead at an AI-run 3D-asset shop. We "
+                "sell AI-generated 3D models (STL + GLB) on Etsy and Cults3D, "
+                "produced via Nano Banana Pro image generation → Meshy 6 "
+                "image-to-3D with PBR textures (optionally rigged + animated "
+                "for humanoid characters).\n\n"
+
+                "HARD CONSTRAINTS (operator-locked, non-negotiable):\n"
+                " • Price band: $3-$15 per listing. The publisher silently "
+                "clamps anything outside this range.\n"
+                " • Never recommend 2D products (stickers, mugs, planners, "
+                "posters, printables). The shop pivoted away from these.\n"
+                " • Never recommend named copyrighted IP (Naruto, Pikachu, "
+                "Mickey, Spider-Man, named Necron / Chainsaw Man unit). Strip "
+                "the franchise name and describe the form generically. Public-"
+                "domain mythology figures are fine.\n\n"
+
+                "WHAT YOUR OPERATOR_STEERS WILL TELL YOU (read them carefully "
+                "below — they're the policy layer):\n"
+                " • Which character / product categories to favor or avoid.\n"
+                " • Niche taste, archetype preferences, rotation rules.\n"
+                " • Anything else the operator wants you to weigh.\n\n"
+
+                "When operator_steers and your own intuition conflict, the "
+                "steers WIN — they're the operator's standing instructions. "
+                "When two steers conflict, the most recent / most specific "
+                "one wins."
+                f"{pool_block}\n"
+                f"{pt_hint}\n\n"
+
+                "Return JSON only with this exact shape:\n"
+                "{\n"
+                '  "niche_seed": "<specific niche, 3-7 words>",\n'
+                '  "rationale": "<one sentence on WHY this niche AND why it '
+                "differs from recent drafts>\",\n"
+                '  "target_audience": "<who buys this>"\n'
+                "}"
+            )
     else:
         system = (
             "You are the Strategy Lead at an AI-run multi-niche Etsy shop. "

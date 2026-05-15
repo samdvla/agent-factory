@@ -37,11 +37,13 @@ TAIL_LIMIT = 30
 
 # A safe size envelope for any prompt the strategist writes. Anything outside
 # this band is rejected (likely a model hallucination or empty response) and
-# the override is left untouched. Cap bumped from 5000 → 10000 to match the
-# richer 3D-aware designer baseline (which is ~5400 chars on its own, so the
-# strategist's tuned variants legitimately run 6-9k chars).
+# the override is left untouched. Cap bumped from 10000 → 15000 to match the
+# richer character-archetype designer baseline (which is ~9000 chars on its
+# own with 8 lane definitions). Strategist is asked to aim for ≤14000 to
+# leave headroom under the 15000 hard ceiling.
 SYSTEM_MIN_LEN = 400
-SYSTEM_MAX_LEN = 10000
+SYSTEM_MAX_LEN = 15000
+SYSTEM_TARGET_MAX = 14000
 
 # Bounds for the orchestrator strategist_notes payload. Notes are ADVISORY
 # (appended to the orchestrator's user prompt), not a full prompt replacement
@@ -263,19 +265,47 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         "every call — so focus on subject framing, stylization anchors, "
         "scale, printability, and what NOT to include.\n\n"
 
-        "Your goal: more sales. The override you write must encode:\n"
-        " • Subject + pose specificity (e.g. 'goblin warrior, three-quarter "
-        "stance, sword raised'; 'Bastet seated upright, paws forward').\n"
+        "PRODUCT SCOPE (HARD RULE — operator-locked):\n"
+        " The shop sells CHARACTER FIGURINES ONLY — humanoid, monster, "
+        "creature, mascot, animal-as-character, robot, named-archetype 3D "
+        "model. The override you write MUST keep the Designer producing only "
+        "character sculpts. NEVER recommend dice towers, dice trays, candle "
+        "holders, planters, canopic jars, jewelry, pendants, rings, terrain "
+        "tiles, fidget toys, articulated mechanisms, or standalone props. "
+        "If past outcomes show a dice tower or planter winning, that's "
+        "STALE data from before the scope change — DO NOT cite it as a "
+        "winner or carry it into the new override.\n\n"
+
+        "FULL-BODY + NO-BASE (HARD RULE — operator-locked):\n"
+        " Every character MUST be rendered FULL-BODY — no busts, no head-"
+        "only, no waist-up, no floating-torso. AND no base/plinth/pedestal/"
+        "stand of any kind. The character stands on its own feet (or sits / "
+        "crouches / lies on its own form) — the mesh is the character ONLY, "
+        "with nothing under it. The override you write MUST NOT contain the "
+        "strings 'integral base', 'integral slotta-base', 'integral plinth', "
+        "'on plinth', 'on pedestal', 'with base', 'with plinth', 'standing "
+        "on integral', or 'optional integral base'. SCALE examples should "
+        "always end with 'standing on own feet, no base' or equivalent. "
+        "This is non-negotiable — the operator down-rates anything that "
+        "ships with a base.\n\n"
+
+        "Your goal: more sales of CHARACTER FIGURINES. The override you write must encode:\n"
+        " • Subject + pose specificity for full-body characters (e.g. "
+        "'goblin warrior, three-quarter stance, sword raised'; 'Bastet "
+        "cat-goddess upright, ankh in raised hand, full-body figurine').\n"
+        " • Character-archetype diversity across mythology, anime, sci-fi, "
+        "fantasy, monsters, mascots — rotation requirement, never the same "
+        "lane back-to-back.\n"
         " • Stylization anchors that print well — stylized cartoon, "
         "low-poly, semi-realistic, hard-surface geometric, organic flowing.\n"
         " • Printability constraints — no thin overhangs, support-friendly "
-        "silhouette, single static mesh, untextured single-color, hollow vs "
-        "solid hints, base/platform for stability.\n"
-        " • Scale anchors — 28mm tabletop mini / 8cm desk piece / wearable "
-        "pendant / 15cm display figurine — drives buyer expectations and "
-        "matches the price band.\n"
-        " • What to AVOID — no PBR textures, no rigging, no moving parts, "
-        "no thin appendages, no copyrighted IP traits.\n\n"
+        "silhouette, single static mesh, full-body never bust-only.\n"
+        " • Scale anchors — 28mm tabletop mini / 80mm desk figurine / "
+        "150mm display piece — drives buyer expectations and matches the "
+        "price band.\n"
+        " • What to AVOID — no moving parts, no thin appendages, no "
+        "copyrighted IP traits, no functional objects masquerading as "
+        "character briefs.\n\n"
 
         "DIAGNOSE FROM THE OUTCOMES TABLE — distinguish three failure modes:\n"
         " • LOW VIEWS → niche/SEO problem (wrong tags, boring concept). "
@@ -303,20 +333,29 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         "If one marketplace consistently lags, the design has a fit problem "
         "for THAT audience — adjust framing in brief_for_image_gen.\n\n"
 
-        "DRAW ON EXTERNAL KNOWLEDGE — what you know about:\n"
-        " • What sells on Etsy + Cults3D + MyMiniFactory: occult / Egyptian "
-        "/ Norse / Lovecraftian altar figurines, D&D minis, dice towers, "
-        "articulated fidget toys, jewelry pendants, modular terrain tiles, "
-        "desk decor, cosplay props.\n"
-        " • Prompt patterns that produce printable 3D output — concrete "
-        "subject + pose + single stylization anchor + scale + 'support-"
-        "friendly silhouette' / 'single static mesh, untextured'.\n"
-        " • Aesthetic codes by niche: Lovecraftian → tentacle motifs, "
-        "asymmetric organic forms; Norse → angular geometric, runic "
-        "details; Egyptian → upright iconic poses, hieroglyph accents; "
-        "D&D terrain → modular tile sets with assemble-able edges.\n"
+        "DRAW ON EXTERNAL KNOWLEDGE — what you know about CHARACTER FIGURINES:\n"
+        " • What sells in the character-collectible / tabletop-mini space: "
+        "mythology deity figurines (Egyptian, Norse, Greek, Hindu, Aztec, "
+        "Celtic, Slavic, Shinto, Sumerian), eldritch humanoid avatars "
+        "(Cthulhu / Deep One / cultist as full-body characters), anime / "
+        "manga archetypes (samurai, mecha pilot, magical girl, shounen "
+        "hero, idol, ninja), comic / superhero / vigilante archetypes, "
+        "sci-fi (cyberpunk merc, space marine, android, mech pilot), "
+        "fantasy (dragon-rider, druid, lich, orc warlord), monsters and "
+        "creatures as hero figurines, mascots (animal-warriors, kid heroes, "
+        "cute monsters), and original characters in coined universes.\n"
+        " • Prompt patterns that produce printable 3D characters — concrete "
+        "subject + full-body pose + single stylization anchor + scale + "
+        "'support-friendly silhouette' / 'single static mesh' / 'fully "
+        "sculpted finished character'.\n"
+        " • Aesthetic codes by archetype: Lovecraftian humanoid → tentacle "
+        "motifs ON THE BODY (face/limbs/hair), asymmetric organic forms; "
+        "Norse → angular geometric armor, runic accents on fabric/skin; "
+        "Egyptian deity → upright iconic full-body pose, hieroglyph relief "
+        "on regalia; cyberpunk → neon-trim power armor, circuitry across "
+        "chestplate; mascot → exaggerated chunky printable proportions.\n"
         " • Pricing reality — operator policy locks every sale to $3-$15. "
-        "Single minis $4-$9, jewelry $3-$7, decor $7-$12, cosplay $10-$15. "
+        "Single minis $4-$9, desk figurines $7-$12, large display $11-$15. "
         "Never write 'price-anchor toward $20-$30' or any value outside "
         "[$3, $15] — the publisher will silently clamp.\n\n"
 
@@ -328,6 +367,12 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         " • The strings 'SVG', 'viewBox', 'kiss-cut', 'sticker', 'thumbnail "
         "psychology', '200px', 'planner', 'printable wall art'. These are "
         "pre-pivot artifacts that will be rejected by the Designer at runtime.\n"
+        " • Recommendations or examples involving non-character products: "
+        "'dice tower', 'dice tray', 'candle holder', 'planter', 'canopic "
+        "jar', 'pendant', 'ring', 'jewelry', 'terrain tile', 'modular tile', "
+        "'fidget toy', 'flexi', 'articulated mechanism', 'standalone prop', "
+        "'altar piece' (unless rephrased as a deity figurine), 'desk caddy', "
+        "'organizer'. The shop is character-figurines-only.\n"
         " • Instructions to emit markup, fences, or anything other than JSON.\n"
         " • Price ceilings or floors outside [$3, $15] — that's listing's job, "
         "not design's.\n\n"
@@ -342,10 +387,13 @@ def build_synthesis_prompt(current_override: str | None, outcomes: list[dict]) -
         '  "improved_system_prompt": "<the new full system prompt for the Designer>",\n'
         '  "rationale": "<2-3 sentences: what you noticed, what you changed, expected effect>"\n'
         "}\n"
-        f"The improved prompt must be between {SYSTEM_MIN_LEN} and {SYSTEM_MAX_LEN} characters. "
-        "Aim for ~7000 characters — leave headroom; do not max out the cap. "
-        "Trim any section that doesn't materially change what gets generated; "
-        "the budget is for substance, not padding.\n"
+        f"The improved prompt must be between {SYSTEM_MIN_LEN} and {SYSTEM_MAX_LEN} characters, "
+        f"and MUST NOT exceed {SYSTEM_TARGET_MAX} characters — leave a "
+        f"{SYSTEM_MAX_LEN - SYSTEM_TARGET_MAX}-char buffer under the hard cap so "
+        "small additions later don't blow the limit. Aim for 9000-12000 characters "
+        "— enough to cover the 8 character-archetype lanes with concrete pose "
+        "examples, without padding. Trim any section that doesn't materially "
+        "change what gets generated.\n"
     )
 
     cur = current_override or "(no override — Designer is using its built-in baseline prompt)"
@@ -530,12 +578,25 @@ def build_orchestrator_notes_prompt(
         "it decides. Your note becomes the LAST block in the orchestrator's "
         "user prompt (last tokens = strongest attention), so make every "
         "sentence pull weight on the decision.\n\n"
+        "PRODUCT SCOPE (HARD RULE — operator-locked):\n"
+        " The shop sells CHARACTER FIGURINES ONLY — humanoid, monster, "
+        "creature, mascot, animal-as-character, robot, named-archetype 3D "
+        "model. Your note MUST keep the orchestrator picking character "
+        "niches. NEVER suggest dice towers, dice trays, candle holders, "
+        "planters, canopic jars, jewelry, pendants, rings, terrain tiles, "
+        "fidget toys, articulated mechanisms, or standalone props. If past "
+        "outcomes show a non-character winner, that's STALE pre-scope-shift "
+        "data — do NOT cite it as a winner. The variable to tune is WHAT "
+        "KIND OF CHARACTER (anime, mythology, sci-fi, fantasy, monster, "
+        "mascot, etc.), not whether to pivot back to objects.\n\n"
+
         "WHAT THE ORCHESTRATOR ALREADY SEES on its own:\n"
-        " • Its hardcoded category universe (tabletop minis, jewelry, "
-        "decor, cosplay, seasonal, everyday-carry, educational, pet).\n"
+        " • A character-archetype universe (mythology deities, eldritch "
+        "humanoids, anime archetypes, comic / superhero, sci-fi, fantasy, "
+        "monsters / creatures, mascots, originals).\n"
         " • Recent outcomes bucketed into Top performers / Promising "
         "(traction but no sales) / Underperformers — read straight from "
-        "outcomes.jsonl.\n"
+        "outcomes.jsonl. Treat any non-character row as stale.\n"
         " • Recent drafts with over-concentrated theme words flagged.\n"
         " • Operator steers (highest-priority overrides) and rejections.\n"
         " • Live trend signals (Reddit / Google Trends / YouTube).\n\n"
@@ -556,6 +617,9 @@ def build_orchestrator_notes_prompt(
         " • Issue generic 'focus on what sells' advice — useless.\n"
         " • Pick a specific niche — that's the orchestrator's job.\n"
         " • Mention SVG, stickers, planners, or any pre-pivot product.\n"
+        " • Recommend any non-character product (dice tower, candle holder, "
+        "planter, pendant, jewelry, ring, terrain, fidget, articulated, "
+        "standalone prop). The shop is character-figurines-only.\n"
         " • Exceed 1500 chars. Aim for 400-900 — surgical, not exhaustive.\n\n"
         "OUTPUT FORMAT — return JSON ONLY, no markdown fences:\n"
         "{\n"
@@ -748,6 +812,77 @@ def process_job(job_id: int, payload: dict) -> dict:
             "error": f"improved prompt length {len(improved)} outside [{SYSTEM_MIN_LEN},{SYSTEM_MAX_LEN}]",
             "ticker_text": "strategist rejected: bad length",
         }
+    # Soft target: warn (and reject) when the model exceeded the 14000-char
+    # target even if it stayed under the 15000 hard cap. Leaving the buffer
+    # protects against tiny later additions blowing the cap and stalling the
+    # next strategist tick on a bad re-tune.
+    if len(improved) > SYSTEM_TARGET_MAX:
+        return {
+            "ok": False,
+            "error": (
+                f"improved prompt length {len(improved)} exceeded soft target "
+                f"{SYSTEM_TARGET_MAX} (hard cap {SYSTEM_MAX_LEN}). Rejected to "
+                "preserve buffer; the next tick will retry with a tighter draft."
+            ),
+            "ticker_text": "strategist rejected: over 14k buffer",
+        }
+    # Auto-scrub base/plinth/pedestal phrases that the LLM keeps re-injecting
+    # despite the persona's HARD RULE. Rejecting + retrying every 15 min just
+    # burns Opus credits without making progress (the model's "knowledge of
+    # what sells" stubbornly remembers integral-base figurines). Instead we
+    # accept the override but rewrite the offending phrases to operator-
+    # approved alternatives, then validate the cleaned output. Reject only
+    # when scrubbing would produce something incoherent (no sentences left).
+    BANNED_BASE_REWRITES: list[tuple[str, str]] = [
+        # Each pair: (banned substring, replacement). Case-insensitive match,
+        # case-preserving replacement (we lowercase the haystack for matching
+        # but write the canonical replacement back so the prompt stays legible).
+        ("integral slotta-base", "no base — character on own feet"),
+        ("integral slotta base", "no base — character on own feet"),
+        ("optional integral base only if mid-action", "no base — character holds the pose on its own form"),
+        ("optional integral base", "no base — character on own feet"),
+        ("clean integral base", "no base"),
+        ("integral base", "no base"),
+        ("integral plinth", "no plinth"),
+        ("with plinth", "with no plinth"),
+        ("with base", "with no base"),
+        ("on plinth", "no plinth"),
+        ("on pedestal", "no pedestal"),
+        ("standing on integral", "standing on own feet, no"),
+        ("slotta-base", "no base"),
+    ]
+    cleaned = improved
+    scrub_hits: list[str] = []
+    for banned, replacement in BANNED_BASE_REWRITES:
+        # Manual case-insensitive replace to preserve other casing in the prompt.
+        idx = 0
+        lower = cleaned.lower()
+        while True:
+            pos = lower.find(banned, idx)
+            if pos == -1:
+                break
+            cleaned = cleaned[:pos] + replacement + cleaned[pos + len(banned):]
+            lower = cleaned.lower()
+            scrub_hits.append(banned)
+            idx = pos + len(replacement)
+    if scrub_hits:
+        rationale = (
+            f"{rationale.strip()} [auto-scrubbed banned phrases: "
+            f"{', '.join(sorted(set(scrub_hits)))}]"
+        )
+        improved = cleaned
+        # Re-validate length after scrubbing — the rewrites trim a few chars
+        # each so we'd only fall under, never over the cap.
+        if not (SYSTEM_MIN_LEN <= len(improved) <= SYSTEM_MAX_LEN):
+            return {
+                "ok": False,
+                "error": (
+                    f"after auto-scrubbing banned phrases, prompt length "
+                    f"{len(improved)} fell outside [{SYSTEM_MIN_LEN},{SYSTEM_MAX_LEN}]. "
+                    "Rejected; next tick will retry."
+                ),
+                "ticker_text": "strategist scrubbed but length out of range",
+            }
 
     # Write the new override to prompts.json. Designer will pick it up on
     # its next job.

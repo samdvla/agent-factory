@@ -1,14 +1,23 @@
 """Direct Google AI Studio image-generation client.
 
-Drop-in replacement for the higgsfield-CLI path in nanobanana.py — same
-function signature, same output (`{assets_dir}/{job_id}-ref.png`), but
-hits the Gemini API directly so we skip Higgsfield's middleman markup.
+This is the ONE production path for reference-image generation. Earlier
+the shop also kept a Higgsfield CLI fallback in nanobanana.py, but the
+Higgsfield plan ran out of credits and that path was removed; nanobanana
+now thinly delegates to this module.
 
-Defaults to `gemini-3.1-flash-image-preview` (a.k.a. Nano Banana 2),
-which Google labels "Pro-level" quality and prices at ~$0.067 per 1024px
-image — about half the cost of `gemini-3-pro-image-preview` (Nano Banana
-Pro) at $0.134. Override via `GEMINI_IMAGE_MODEL` env when a specific
-brief needs the Pro model's extra fidelity.
+Defaults to `gemini-3-pro-image-preview` (Nano Banana Pro) at ~$0.134
+per 1024px image. This is the most expensive image model we use, and
+it is the default on purpose — the shop sells AAA-game-asset-quality
+3D figurines, the mesh quality is upper-bounded by the ref-image PBR
+fidelity, and a $0.07 saving per cycle (versus `gemini-2.5-flash-image`)
+is not worth shipping clay-textured product. Override to a cheaper
+model via `GEMINI_IMAGE_MODEL` env if budget pressure changes.
+
+History on model picks:
+  - `gemini-3.1-flash-image-preview` was tried but queues >120s in
+    practice and times out the designer.
+  - `gemini-2.5-flash-image` is stable + fast (~5s) at ~$0.067 but its
+    material fidelity is visibly weaker than Pro on textured characters.
 
 Auth: GEMINI_IMAGE_API_KEY env. Get a key at
 https://aistudio.google.com/apikey — image generation has no free tier,
@@ -29,10 +38,13 @@ GEMINI_API_BASE = os.environ.get(
 ).rstrip("/")
 
 DEFAULT_MODEL = os.environ.get(
-    "GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview"
+    "GEMINI_IMAGE_MODEL", "gemini-3-pro-image-preview"
 )
 DEFAULT_ASPECT_RATIO = os.environ.get("NANOBANANA_ASPECT", "9:16")
-DEFAULT_TIMEOUT_SEC = 120
+# Pro queues a few seconds longer than Flash on busy days; 180s comfortably
+# covers the worst observed end-to-end while staying well under the
+# designer's outer 750s supervisor cap.
+DEFAULT_TIMEOUT_SEC = 180
 
 
 class GeminiImageError(Exception):
@@ -79,35 +91,16 @@ def is_configured() -> bool:
 
 
 def _enrich_prompt(prompt: str, aspect_ratio: str) -> str:
-    """Wrap the designer's brief into a studio-reference rendering plate
-    optimized for downstream image-to-3D ingestion. Mirrors the enrichment
-    in nanobanana.py so swapping providers produces a comparable output
-    framing (single hero subject, clean grey backdrop, even lighting).
+    """Delegate to the shared studio-reference plate builder.
 
-    Aspect-ratio is requested explicitly in the prompt because the
-    Gemini API's image config field set is in flux across previews —
-    putting the ask in plain text reliably steers composition even when
-    the structured config doesn't take effect.
+    The prompt body lives in `ref_prompt.py` so the Gemini direct path
+    (this file) and the Higgsfield CLI fallback (`nanobanana.py`) stay
+    in lock-step. Iterating the wording in one place but not the other
+    is what shipped matte-grey clay characters to production for weeks
+    while the CLI fallback path looked fixed.
     """
-    return (
-        f"{prompt}\n\n"
-        f"Aspect ratio: {aspect_ratio} vertical portrait.\n"
-        "Composition: single hero subject, centered, fills 60-70% of "
-        "frame, three-quarter view for characters / front-elevation for "
-        "symmetric props / top-down for terrain tiles. Full subject "
-        "visible from base to top — no edge cropping.\n"
-        "Background: clean neutral light-grey #E8E8E8 seamless backdrop. "
-        "No horizon line, no environment, no shadow on backdrop.\n"
-        "Lighting: even soft ambient illumination, no harsh directional "
-        "light, no rim light, no cast shadows.\n"
-        "Style: photorealistic studio-reference render of a single 3D-"
-        "printable object. Matte single-color surface. No painted decals, "
-        "no PBR textures, no rigging, no moving parts.\n"
-        "(negative: no text, no logos, no watermarks, no UI overlays, no "
-        "multiple subjects, no environment, no humans, no measuring tools, "
-        "no film grain, no depth-of-field blur, no specular highlights, "
-        "no second figure, no props occluding the subject)"
-    )
+    from .ref_prompt import build_ref_prompt
+    return build_ref_prompt(prompt, aspect_ratio)
 
 
 def _extract_image_bytes(response: dict) -> bytes:
@@ -239,6 +232,22 @@ def generate_reference_image(
     with open(tmp, "wb") as f:
         f.write(image_bytes)
     os.replace(tmp, dest)
+    # Sidecar: the actual prompt we sent to Gemini, written next to the
+    # ref PNG so the inspector can show "this is what produced that
+    # image". Lets the operator iterate the wrapping in ref_prompt.py
+    # against real outputs instead of guessing what Claude+wrapping
+    # combined into.
+    prompt_path = os.path.join(assets_dir, f"{job_id}-ref-prompt.txt")
+    try:
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(enriched)
+    except OSError as e:
+        # Non-fatal — the image already landed; losing the prompt sidecar
+        # just means the inspector won't show it.
+        print(
+            f"[gemini_image] job_id={job_id} could not write prompt sidecar: {e}",
+            file=sys.stderr, flush=True,
+        )
     print(
         f"[gemini_image] job_id={job_id} saved {len(image_bytes)} bytes → {dest}",
         file=sys.stderr, flush=True,

@@ -28,14 +28,14 @@ pub const LISTING_DEFAULT: &str = "You are the Listing Copywriter at an AI-run d
 pub const CS_DEFAULT: &str = "You are the Customer Service agent at an AI-run digital-products Etsy shop. All products are digital downloads \u{2014} no shipping, no physical inventory, no custom work. Respond to the buyer's message with a polite, policy-compliant reply. If the buyer requests a refund, asks for custom work, or raises a dispute, do NOT promise anything \u{2014} say you'll escalate to the shop owner. Keep replies under 60 words. Return JSON only:\n{\"reply\": \"<your reply>\", \"escalate\": <true|false>, \"category\": \"<file_format|refund_request|custom_request|policy_question|thank_you|other>\"}";
 
 // Orchestrator is the Strategy Lead — the agent that actually picks the
-// niche_seed each cycle. Its full prompt is built dynamically in
-// workers/orchestrator/orchestrator/agent.py::build_orchestrator_prompt
-// (it varies by SHOP_FOCUS, character pool, recent-drafts context, etc.),
-// so we store only a stub here. The UI shows this default as informational
-// text; system_override editing on orchestrator is not currently supported
-// (only operator_steers), so the UI should hide the Edit Override action
-// for this role.
-pub const ORCHESTRATOR_DEFAULT: &str = "Strategy Lead — picks the next niche_seed each cycle and hands it to Research. Full prompt is generated dynamically from shop focus, character pool, and recent-drafts context. Use Steer to inject standing instructions (e.g. 'focus on superhero/supervillain archetypes', 'rotate into pet accessories') — those land as the final OPERATOR OVERRIDE block in the orchestrator's system prompt and supersede the built-in category list.";
+// niche_seed each cycle. Per the 3-layer prompt architecture
+// (memory/project_prompt_architecture.md): the BASELINE in
+// workers/orchestrator/orchestrator/agent.py is purely mechanical (job
+// description, output schema, hard constraints — no policy opinions),
+// operator_steers carry day-to-day policy, and system_override is the
+// nuclear option for total replacement. The UI exposes both for this role
+// the same way it does for designer/listing/research.
+pub const ORCHESTRATOR_DEFAULT: &str = "Strategy Lead — picks the next niche_seed each cycle and hands it to Research. The built-in baseline is purely mechanical (job + JSON schema + hard constraints, no category opinions). Use Steer for day-to-day policy ('only character figurines', 'rotate across mythology / anime / sci-fi / fantasy lanes', 'avoid IP'). Use Edit Override for a full prompt rewrite — typically when the strategist auto-loop has strong signal that the whole strategy needs a refresh.";
 
 pub const ROLES: [&str; 5] = ["orchestrator", "research", "designer", "listing", "cs"];
 

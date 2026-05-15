@@ -150,11 +150,20 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
     ))
 }
 
-/// Create an object + upload its file, following the documented two-step
-/// MMF API flow:
+/// Create an object + upload one or more files, following the documented
+/// two-step MMF API flow:
 ///   1. POST /api/v2/object — JSON body with metadata + files[{filename, bytes}].
-///      Returns the object id + a per-file `upload_id`.
-///   2. POST /api/v2/file?upload_id=… — raw binary body of the file.
+///      The `files` array carries one entry per uploaded file; the response
+///      echoes the array with a per-entry `upload_id`.
+///   2. POST /api/v2/file?upload_id=… — raw binary body of the file. Repeated
+///      once per file, using the matching upload_id from step 1.
+///
+/// `file_paths` is taken in order: index 0 is the primary (STL), additional
+/// entries are extras (textured GLB, alternate format). All-or-nothing on the
+/// primary — if its upload fails the whole call errors. Extra-file failures
+/// are non-fatal: the object is published with whatever uploaded, and the
+/// `warning` field describes which extras dropped so the operator can re-
+/// upload manually from the MMF dashboard.
 ///
 /// Previous implementation used `POST /api/v2/objects` (plural) with
 /// multipart in a single call, which MMF rejects with 405 Method Not
@@ -169,27 +178,42 @@ pub async fn create_object_with_file(
     client: &reqwest::Client,
     access_token: &str,
     input: &CreateObjectInput,
-    file_path: &Path,
+    file_paths: &[&Path],
 ) -> Result<CreateObjectResult> {
-    let bytes = tokio::fs::read(file_path)
-        .await
-        .with_context(|| format!("read file {}", file_path.display()))?;
-    let filename = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("model.stl")
-        .to_string();
-    let byte_count = bytes.len() as u64;
+    if file_paths.is_empty() {
+        return Err(anyhow!("mmf create-object: at least one file required"));
+    }
 
-    // Step 1 — create the object metadata + receive upload_id for the file.
+    // Read every file up-front so step 1 knows the byte counts. MMF needs
+    // exact sizes in the `files` array — it pre-allocates server-side slots.
+    let mut prepared: Vec<(String, Vec<u8>)> = Vec::with_capacity(file_paths.len());
+    for path in file_paths {
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("read file {}", path.display()))?;
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model.stl")
+            .to_string();
+        prepared.push((filename, bytes));
+    }
+
+    // Step 1 — create the object metadata + receive an upload_id per file.
+    let files_meta: Vec<serde_json::Value> = prepared
+        .iter()
+        .map(|(filename, bytes)| {
+            serde_json::json!({
+                "filename": filename,
+                "bytes": bytes.len() as u64,
+            })
+        })
+        .collect();
     let mut body = serde_json::json!({
         "name": input.name,
         "description": input.description,
         "tags": input.tags.join(","),
-        "files": [{
-            "filename": filename,
-            "bytes": byte_count,
-        }],
+        "files": files_meta,
     });
     if let Some(cat) = &input.category {
         body["category"] = serde_json::Value::String(cat.clone());
@@ -221,41 +245,84 @@ pub async fn create_object_with_file(
             other => other.to_string(),
         })
         .ok_or_else(|| anyhow!("mmf create-object: missing id"))?;
-    let upload_id = create_parsed
+    let returned_files = create_parsed
         .files
         .as_ref()
-        .and_then(|files| files.first())
-        .and_then(|f| f.upload_id.clone())
-        .ok_or_else(|| {
-            anyhow!("mmf create-object: missing files[0].upload_id in response: {create_text}")
-        })?;
-
-    // Step 2 — upload the binary file.
-    let upload_resp = client
-        .post(format!("{API_BASE}/file"))
-        .query(&[("upload_id", upload_id.as_str())])
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Content-Type", "application/octet-stream")
-        .header("Content-Disposition", format!("filename=\"{filename}\""))
-        .header("User-Agent", UA)
-        .body(bytes)
-        .timeout(Duration::from_secs(300))
-        .send()
-        .await
-        .context("mmf POST /file (binary upload) failed")?;
-    let upload_status = upload_resp.status();
-    if !upload_status.is_success() {
-        let upload_text = upload_resp.text().await.unwrap_or_default();
+        .ok_or_else(|| anyhow!("mmf create-object: missing files[] in response: {create_text}"))?;
+    if returned_files.len() < prepared.len() {
         return Err(anyhow!(
-            "mmf file upload HTTP {upload_status}: {upload_text}"
+            "mmf create-object: response carried {} files, expected {}: {}",
+            returned_files.len(), prepared.len(), create_text
         ));
     }
+
+    // Step 2 — upload each file's bytes against its matching upload_id.
+    // The PRIMARY upload (index 0) is the only one that hard-fails; extras
+    // collect into a warning so the listing still ships if e.g. only the
+    // GLB upload times out.
+    let mut dropped_extras: Vec<String> = Vec::new();
+    for (idx, (filename, bytes)) in prepared.into_iter().enumerate() {
+        let upload_id = returned_files
+            .get(idx)
+            .and_then(|f| f.upload_id.clone())
+            .ok_or_else(|| {
+                anyhow!(
+                    "mmf create-object: missing files[{idx}].upload_id in response: {create_text}"
+                )
+            })?;
+        let upload_resp = client
+            .post(format!("{API_BASE}/file"))
+            .query(&[("upload_id", upload_id.as_str())])
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Disposition", format!("filename=\"{filename}\""))
+            .header("User-Agent", UA)
+            .body(bytes)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await;
+        match upload_resp {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
+                if idx == 0 {
+                    return Err(anyhow!(
+                        "mmf primary file upload HTTP {status}: {text}"
+                    ));
+                }
+                tracing::warn!(
+                    "mmf extra file upload failed (idx={idx} file={filename}): HTTP {status}: {text}"
+                );
+                dropped_extras.push(filename);
+            }
+            Err(e) => {
+                if idx == 0 {
+                    return Err(anyhow!("mmf primary file upload failed: {e}"));
+                }
+                tracing::warn!(
+                    "mmf extra file upload failed (idx={idx} file={filename}): {e}"
+                );
+                dropped_extras.push(filename);
+            }
+        }
+    }
+
+    let warning = if dropped_extras.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} extra file(s) failed to upload: {}",
+            dropped_extras.len(),
+            dropped_extras.join(", ")
+        ))
+    };
 
     Ok(CreateObjectResult {
         object_id,
         url: create_parsed.url.or(create_parsed.short_url),
         file_attached: true,
-        warning: None,
+        warning,
     })
 }
 

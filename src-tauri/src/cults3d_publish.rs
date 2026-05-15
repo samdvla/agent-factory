@@ -155,13 +155,35 @@ pub async fn handle_publisher_complete_cults3d(
         return;
     };
     let stl_path = PathBuf::from(&asset_path_str);
-    let png_path = stl_path.with_extension("png");
     if !stl_path.exists() {
         fail(format!("stl missing at {}", stl_path.display()));
         return;
     }
-    if !png_path.exists() {
-        fail(format!("preview png missing at {}", png_path.display()));
+
+    // Preview images: the designer renders a textured hero shot plus clay
+    // angles into `preview_pngs` (hero first). Upload the whole set so the
+    // Cults3D listing shows the model from every side. Fall back to the
+    // single thumbnail next to the STL only if `preview_pngs` is empty.
+    let png_path = stl_path.with_extension("png");
+    let mut preview_images: Vec<PathBuf> = publisher_result
+        .get("preview_pngs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .collect()
+        })
+        .unwrap_or_default();
+    if preview_images.is_empty() && png_path.exists() {
+        preview_images.push(png_path.clone());
+    }
+    if preview_images.is_empty() {
+        fail(format!(
+            "no preview images — neither preview_pngs nor {} exist",
+            png_path.display()
+        ));
         return;
     }
 
@@ -170,7 +192,7 @@ pub async fn handle_publisher_complete_cults3d(
     // them as a unit (one release per Cults3D creation). Filter to existing
     // entries that aren't the primary; an empty list means single-file
     // listing (back-compat).
-    let extra_stl_paths: Vec<PathBuf> = publisher_result
+    let mut extra_stl_paths: Vec<PathBuf> = publisher_result
         .get("asset_paths")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -181,10 +203,56 @@ pub async fn handle_publisher_complete_cults3d(
                 .collect()
         })
         .unwrap_or_default();
+    // Also bundle the textured GLB(s) so Cults3D buyers can preview the
+    // PBR-shaded model before downloading — the GLB(s) ride on the SAME
+    // GitHub release as the STL(s) and surface as additional files on the
+    // listing. Prefers the multi-glb list; falls back to the singleton
+    // `glb_path` for non-bundle listings.
+    let glb_extras_from_list: Vec<PathBuf> = publisher_result
+        .get("glb_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && *p != stl_path && !extra_stl_paths.contains(p))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut glb_extras = glb_extras_from_list;
+    if glb_extras.is_empty() {
+        if let Some(p) = publisher_result
+            .get("glb_path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            if p.exists() && p != stl_path && !extra_stl_paths.contains(&p) {
+                glb_extras.push(p);
+            }
+        }
+    }
+    extra_stl_paths.extend(glb_extras);
+    // Optional rigged + animated GLBs from the Meshy rig+anim pass. Only
+    // populated when the designer detected a full-body humanoid figurine.
+    // Cults3D buyers value rigged FBX/GLB as a "import + pose / animate"
+    // upsell, so each goes on the listing as an additional file.
+    for key in ["rigged_glb_path", "animated_glb_path",
+                "walking_glb_path", "running_glb_path"] {
+        if let Some(p) = publisher_result
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            if p.exists() && p != stl_path && !extra_stl_paths.contains(&p) {
+                extra_stl_paths.push(p);
+            }
+        }
+    }
     // Cults3D doesn't publish a hard file-count cap on creations. We mirror
     // Etsy's 5-file ceiling (4 extras) so the same designer-side bundle cap
     // (BUNDLE_MAX_ITEMS=4) doesn't accidentally split into a longer
-    // marketplace list than every other platform.
+    // marketplace list than every other platform. STL extras are kept first
+    // (they're the printable artifact); GLBs fill whatever slots remain.
     const CULTS3D_MAX_EXTRA_FILES: usize = 4;
     let extra_stl_paths: Vec<PathBuf> = extra_stl_paths
         .into_iter()
@@ -224,14 +292,16 @@ pub async fn handle_publisher_complete_cults3d(
 
     let client = reqwest::Client::new();
 
-    // Host the assets at public HTTPS URLs.
+    // Host the assets at public HTTPS URLs. The primary STL, every preview
+    // image, and every bundle extra are committed to the asset repo in one
+    // commit and served from raw.githubusercontent.com.
     let hosted = match asset_host_github::host_listing_assets(
-        &client,
         &github_repo,
         &github_token,
         local_listing_id,
         &stl_path,
-        &png_path,
+        &preview_images,
+        &extra_stl_paths,
     )
     .await
     {
@@ -242,45 +312,27 @@ pub async fn handle_publisher_complete_cults3d(
         }
     };
 
-    // Bundle: upload each extra STL into the SAME GitHub release so all
-    // bundle files share the listing's tag. Per-file failures are
-    // non-fatal — the primary STL is already hosted and the listing can
-    // ship with N-1 items rather than failing entirely. Each successful
-    // URL gets collected into the file_urls list below.
+    // Primary STL first, then bundle extras (Cults3D consumes these as
+    // `fileUrls[]`).
     let mut file_urls: Vec<String> = vec![hosted.file_url.clone()];
-    for (idx, extra) in extra_stl_paths.iter().enumerate() {
-        match asset_host_github::upload_extra_model(
-            &client,
-            &hosted.upload_url,
-            &github_token,
-            local_listing_id,
-            idx,
-            extra,
-        )
-        .await
-        {
-            Ok(extra_url) => file_urls.push(extra_url),
-            Err(e) => {
-                tracing::warn!(
-                    "cults3d bundle: extra STL {} of {} ({}) host failed: {e:#}",
-                    idx + 1,
-                    extra_stl_paths.len(),
-                    extra.display(),
-                );
-            }
-        }
-    }
+    file_urls.extend(hosted.extra_file_urls.iter().cloned());
 
-    // Categorize.
+    // Categorize. Cults3D requires a non-null categoryId (schema `ID!`),
+    // so if the category list can't be fetched we abort with a clear
+    // error rather than sending null and getting a cryptic GraphQL fault.
     let categories = cached_categories(&client, &creds).await;
-    let category_id = categories
+    let Some(category_id) = categories
         .as_deref()
-        .and_then(|cats| cults3d::pick_category(cats, &niche, &tags));
+        .and_then(|cats| cults3d::pick_category(cats, &niche, &tags))
+    else {
+        fail("cults3d: could not resolve a categoryId — category list fetch failed or was empty".into());
+        return;
+    };
 
     let input = cults3d::CreateCreationInput {
         name: title.clone(),
         description,
-        image_urls: vec![hosted.image_url.clone()],
+        image_urls: hosted.image_urls.clone(),
         file_urls: file_urls.clone(),
         currency: "USD".into(),
         download_price: price_usd,
@@ -307,7 +359,7 @@ pub async fn handle_publisher_complete_cults3d(
             .bind(&title)
             .bind(&res.url)
             .bind(&hosted.file_url)
-            .bind(&hosted.image_url)
+            .bind(hosted.image_urls.first().cloned().unwrap_or_default())
             .bind(price_usd)
             .bind(now)
             .bind(&today)
@@ -332,14 +384,9 @@ pub async fn handle_publisher_complete_cults3d(
             });
         }
         Err(e) => {
-            // Don't leave the host release orphaned.
-            asset_host_github::delete_release(
-                &client,
-                &github_repo,
-                &github_token,
-                hosted.release_id,
-            )
-            .await;
+            // The asset files stay committed in the repo; a failed
+            // createCreation leaves them orphaned but harmless (the
+            // operator prunes the asset repo periodically anyway).
             let reason = format!("cults3d createCreation failed: {e:#}");
             if let Err(db_err) = sqlx::query(
                 "INSERT INTO cults3d_publishes \

@@ -132,7 +132,7 @@ def test_generate_happy_path_writes_png(tmp_path, monkeypatch):
     assert path == str(tmp_path / "42-ref.png")
     # Backend model is reported back so the supervisor can stamp the
     # right ledger model on the budget row.
-    assert backend_model == "gemini-3.1-flash-image-preview"
+    assert backend_model == "gemini-3-pro-image-preview"
     assert os.path.exists(path)
     with open(path, "rb") as f:
         assert f.read() == _png_bytes()
@@ -141,7 +141,7 @@ def test_generate_happy_path_writes_png(tmp_path, monkeypatch):
     assert len(captured) == 1
     req = captured[0]
     assert req.method == "POST"
-    assert "gemini-3.1-flash-image-preview" in req.full_url
+    assert "gemini-3-pro-image-preview" in req.full_url
     assert req.get_header("X-goog-api-key") == "ga-test-123"
 
 
@@ -231,13 +231,11 @@ def test_http_error_surfaces_as_gemini_error(tmp_path, monkeypatch):
 
 def test_nanobanana_dispatches_to_gemini_when_key_set(tmp_path, monkeypatch):
     """nanobanana.is_configured() and generate_reference_image() must
-    both prefer the direct Gemini path when GEMINI_IMAGE_API_KEY is
-    present, without requiring the higgsfield CLI."""
+    both route to the Gemini path when GEMINI_IMAGE_API_KEY is present.
+    (Higgsfield CLI fallback was removed when the shop's plan ran out
+    of credits — Gemini is the only backend.)"""
     from designer import nanobanana
     monkeypatch.setenv("GEMINI_IMAGE_API_KEY", "ga-test-123")
-    # Pretend the CLI is missing so the only viable path is Gemini.
-    monkeypatch.setattr(nanobanana, "_cli_available", lambda: False)
-    monkeypatch.setattr(nanobanana, "_auth_ok", lambda: False)
 
     assert nanobanana.is_configured() is True
 
@@ -251,5 +249,5 @@ def test_nanobanana_dispatches_to_gemini_when_key_set(tmp_path, monkeypatch):
             job_id=99, assets_dir=str(tmp_path),
         )
     assert path == str(tmp_path / "99-ref.png")
-    assert backend_model == "gemini-3.1-flash-image-preview"
+    assert backend_model == "gemini-3-pro-image-preview"
     assert os.path.exists(path)

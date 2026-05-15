@@ -1,0 +1,11 @@
+{
+  "name": "agent-factory-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless GLB-to-PNG renderer for marketplace listing previews. Renders one textured hero shot plus untextured clay angles via headless Chromium + three.js.",
+  "main": "render_glb.js",
+  "dependencies": {
+    "puppeteer": "^23.11.1",
+    "three": "0.169.0"
+  }
+}

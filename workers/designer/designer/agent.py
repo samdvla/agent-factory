@@ -5,7 +5,14 @@ import urllib.request
 import urllib.error
 
 MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 600
+# 600 was the old cap and was hitting "Unterminated string at line 7 col 26"
+# truncations once the strategist tuned the designer toward AAA-game-asset
+# detail — the brief_for_image_gen field alone now runs 200+ words. 2000 is
+# generous headroom (Sonnet 4.6 brief responses observed at ~800-1200 tokens
+# under the new aesthetic target); the per-call cost delta is fractions of
+# a cent. Also see _repair_truncated_json below — defense in depth for
+# future drift.
+MAX_TOKENS = 2000
 
 SVG_MODEL = "claude-sonnet-4-6"
 SVG_MAX_TOKENS = 16000
@@ -148,6 +155,29 @@ def _parse_loose_json_object(text: str) -> dict:
                 file=sys.stderr, flush=True,
             )
         except json.JSONDecodeError as second_err:
+            # Last-ditch: if the response hit max_tokens mid-string the
+            # cosmetic repairs above can't help — we need to balance the
+            # unclosed quote + braces. Try the truncation walker. Only
+            # kicks in for "Unterminated string" to avoid masking real
+            # JSON bugs with a recovery shim.
+            if "Unterminated string" in str(first_err):
+                truncated_repair = _repair_truncated_json(body)
+                try:
+                    obj, _end = json.JSONDecoder().raw_decode(truncated_repair)
+                    print(
+                        f"[parse] recovered truncated JSON ({len(body)} chars → "
+                        f"closed at {len(truncated_repair)}); response hit "
+                        "max_tokens and was repaired — bumping MAX_TOKENS may "
+                        "be warranted",
+                        file=sys.stderr, flush=True,
+                    )
+                    if not isinstance(obj, dict):
+                        raise ValueError(
+                            f"expected JSON object, got {type(obj).__name__}"
+                        )
+                    return obj
+                except json.JSONDecodeError:
+                    pass
             point = max(0, first_err.pos - 60)
             snippet = body[point : first_err.pos + 60].replace("\n", " ")
             print(
@@ -159,6 +189,48 @@ def _parse_loose_json_object(text: str) -> dict:
     if not isinstance(obj, dict):
         raise ValueError(f"expected JSON object, got {type(obj).__name__}")
     return obj
+
+
+def _repair_truncated_json(body: str) -> str:
+    """Close the most-recently-opened string and any unclosed `{` / `[`.
+
+    Used when an LLM response hit max_tokens mid-string. We can't recover
+    the tail of the cut-off value, but we CAN close the JSON so the parser
+    accepts the head plus everything before it. The caller decides whether
+    the recovered payload is usable. Mirrors strategist/agent.py — kept
+    duplicated rather than imported because the workers run as separate
+    processes with separate PYTHONPATHs.
+    """
+    in_string = False
+    escape = False
+    stack: list[str] = []  # holds '{' or '['
+    for c in body:
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                stack.append("{")
+            elif c == "[":
+                stack.append("[")
+            elif c == "}":
+                if stack and stack[-1] == "{":
+                    stack.pop()
+            elif c == "]":
+                if stack and stack[-1] == "[":
+                    stack.pop()
+    tail = ""
+    if in_string:
+        tail += '"'
+    for opener in reversed(stack):
+        tail += "}" if opener == "{" else "]"
+    return body + tail
 
 
 def _repair_json_text(text: str) -> str:
@@ -810,6 +882,52 @@ def _image_to_3d_provider() -> str:
     return "tripo"
 
 
+# Brief signals that indicate a full-body humanoid figurine — the only
+# subject Meshy auto-rig can handle (humanoid skeleton, +Z facing). Hit
+# any of these and the designer chains rigging + animation onto the
+# image-to-3D output.
+_HUMANOID_SUBTYPES: frozenset[str] = frozenset({
+    "character", "figurine", "action_figure", "mini", "miniature",
+    "mascot", "creature", "humanoid", "statue",
+})
+_HUMANOID_KEYWORDS: tuple[str, ...] = (
+    "full body", "full-body", "humanoid", "character figure",
+    "action figure", "rpg mini", "tabletop mini", "d&d mini",
+    "anime figurine", "chibi figurine",
+)
+
+
+def _wants_rigging(brief: dict, asset: dict) -> bool:
+    """Return True if the brief describes a full-body humanoid that Meshy
+    auto-rig can handle. False for vases, props, jewelry, terrain, etc.
+    — those would just waste 8 credits on a 422.
+
+    Honors:
+      • brief.supports_rigging — explicit boolean from the strategist
+      • brief.product_subtype  — one of _HUMANOID_SUBTYPES
+      • brief.design_direction / asset.brief_for_image_gen contains a
+        humanoid-figure keyword (full-body / humanoid / mini / etc.)
+    """
+    if not isinstance(brief, dict):
+        return False
+    if brief.get("supports_rigging") is True:
+        return True
+    sub = str(brief.get("product_subtype") or "").strip().lower()
+    if sub in _HUMANOID_SUBTYPES:
+        return True
+    pool: list[str] = []
+    for k in ("design_direction", "niche", "concept"):
+        v = brief.get(k)
+        if isinstance(v, str):
+            pool.append(v.lower())
+    if isinstance(asset, dict):
+        v = asset.get("brief_for_image_gen") or asset.get("concept")
+        if isinstance(v, str):
+            pool.append(v.lower())
+    blob = " ".join(pool)
+    return any(kw in blob for kw in _HUMANOID_KEYWORDS)
+
+
 def _classify_3d_provider_failure(err_str: str) -> str | None:
     """Map a raw 3D-provider error string (e.g. 'Meshy POST ... HTTP 402:
     {"code":"insufficient_credits",...}') to a short, human-readable reason
@@ -873,6 +991,15 @@ class _Image3dTimedOut(Exception):
     same wait and trip the supervisor's outer timeout."""
 
 
+class _Image3dMeshFailed(Exception):
+    """Raised by _run_image_to_3d when the reference image was generated
+    successfully but the chosen mesh provider failed (auth, quota, mesh
+    quality, network). Per the image-first 3D policy the caller MUST
+    NOT silently fall back to text-to-3D in this case — the image
+    exists, so text-to-3D would produce a worse result on the same
+    intent. Surface as a hard 3D failure for the operator to see."""
+
+
 def _looks_like_timeout(err: Exception) -> bool:
     """MeshyError / TripoError use the message 'timed out after Ns' on poll
     timeouts (see meshy.py:120/212, tripo.py:204). Sniff for that so we can
@@ -888,19 +1015,31 @@ def _run_image_to_3d(
     assets_dir: str,
     meshy_key: str,
     tripo_key: str,
-) -> tuple[str, str, str, str, str] | None:
+) -> tuple[str, str, str, str, str, str | None] | None:
     """Run a reference image render → chosen image-to-3D provider. Returns
-    (glb_path, stl_path, preview_png, mesh_model, image_gen_model) on
-    success, or None to signal the caller to fall through to text-to-3D.
-    Raises _Image3dTimedOut when the provider was queued and exhausted
-    its poll budget — the caller should NOT cascade in that case (a
-    second 240s wait would likely repeat the same queue stall and trip
-    the supervisor's outer 900s timeout).
+    (glb_path, stl_path, preview_png, mesh_model, image_gen_model,
+    mesh_task_id) on success. mesh_task_id is the Meshy task id when
+    the provider is Meshy (so the caller can chain rigging via
+    input_task_id), and None for Tripo or when no chainable id exists.
+
+    Returns None ONLY when the reference image step itself was
+    unavailable (nanobanana not configured / no prompt). Per the
+    image-first 3D policy this is the only case where the caller may
+    fall back to text-to-3D.
+
+    Raises:
+      _Image3dTimedOut — provider queued past its poll budget. Caller
+        should skip text-to-3D cascade (a second wait would likely hit
+        the same queue) and let the next cycle retry.
+      _Image3dMeshFailed — image was rendered but the mesh step failed
+        (auth, quota, mesh quality, network). Caller MUST NOT fall back
+        to text-to-3D — the image exists, so text-to-3D would only
+        regress quality on the same intent.
 
     `mesh_model` is the 3D-provider identifier (e.g. tripo-image-to-3d)
     and `image_gen_model` is the image-generator identifier (e.g.
-    gemini-3.1-flash-image-preview). Both feed budget_ledger as
-    separate per-call charges.
+    gemini-3-pro-image-preview). Both feed budget_ledger as separate
+    per-call charges.
     """
     try:
         from . import nanobanana
@@ -924,7 +1063,8 @@ def _run_image_to_3d(
         )
     except Exception as e:
         print(
-            f"[designer] nanobanana failed: {e} — falling back to text-to-3D",
+            f"[designer] nanobanana failed: {e} — image not available, "
+            "falling back to text-to-3D per image-first policy",
             file=sys.stderr, flush=True,
         )
         return None
@@ -943,15 +1083,15 @@ def _run_image_to_3d(
             glb, stl, png = t3d.generate_3d_from_image(
                 tripo_key, ref_path, job_id=job_id, assets_dir=assets_dir
             )
-            return glb, stl, png, "tripo-image-to-3d", image_gen_model
+            return glb, stl, png, "tripo-image-to-3d", image_gen_model, None
         else:
             if not meshy_key:
                 raise RuntimeError("MESHY_API_KEY not set for image-to-3d")
             from . import meshy as m3d
-            glb, stl, png = m3d.generate_3d_from_image(
+            glb, stl, png, mesh_task_id = m3d.generate_3d_from_image(
                 meshy_key, ref_path, job_id=job_id, assets_dir=assets_dir
             )
-            return glb, stl, png, "meshy-image-to-3d", image_gen_model
+            return glb, stl, png, "meshy-image-to-3d", image_gen_model, mesh_task_id
     except Exception as e:
         if _looks_like_timeout(e):
             print(
@@ -960,12 +1100,16 @@ def _run_image_to_3d(
                 file=sys.stderr, flush=True,
             )
             raise _Image3dTimedOut(str(e)) from e
+        # Image already rendered; mesh provider failed. Per image-first
+        # policy do NOT fall back to text-to-3D — the image exists, so
+        # text-to-3D would only regress quality on the same intent.
+        # Surface this as a hard mesh failure for the operator.
         print(
-            f"[designer] image-to-3d ({provider}) failed: {e} — "
-            "falling back to text-to-3D",
+            f"[designer] image-to-3d ({provider}) FAILED with image rendered: {e} — "
+            "NOT falling back to text-to-3D (image-first policy)",
             file=sys.stderr, flush=True,
         )
-        return None
+        raise _Image3dMeshFailed(str(e)) from e
 
 
 def _maybe_higgsfield_enhance(
@@ -1178,7 +1322,10 @@ def _generate_bundle_items(
             else:
                 from . import meshy as m3d
                 if ref_path:
-                    glb, stl, png = m3d.generate_3d_from_image(
+                    # generate_3d_from_image returns a 4-tuple with the
+                    # Meshy task_id (used for rigging chaining elsewhere);
+                    # the bundle path doesn't rig per-item so we drop it.
+                    glb, stl, png, _meshy_task_id = m3d.generate_3d_from_image(
                         meshy_key, ref_path,
                         job_id=sub_job_id, assets_dir=assets_dir,
                     )
@@ -1356,14 +1503,14 @@ def handle(method: str, params: dict) -> dict:
                     import time as _t
                     from . import preview as _preview
                     t0 = _t.time()
-                    angle_paths = _preview.try_render_angles(
+                    angle_paths = _preview.try_render_previews(
                         asset["glb_path"], output_dir=assets_dir,
                         job_id=job_id, resolution=768,
                     )
                     if angle_paths:
-                        # Prepend angle renders to the existing preview list
-                        # (bundle path already populated preview_pngs with each
-                        # item's primary thumbnail).
+                        # Lead with the textured hero + clay angles of the
+                        # primary model; keep each bundle item's own
+                        # thumbnail after them.
                         asset["preview_pngs"] = angle_paths + asset.get(
                             "preview_pngs", []
                         )
@@ -1395,6 +1542,7 @@ def handle(method: str, params: dict) -> dict:
 
                 i23 = None
                 image3d_timed_out = False
+            image3d_mesh_failed_reason: str | None = None
             if not bundle_done and nb_available and (tripo_key or meshy_key):
                 try:
                     i23 = _run_image_to_3d(
@@ -1411,13 +1559,20 @@ def handle(method: str, params: dict) -> dict:
                     # timeout. Cycle ends cleanly and the next one gets a
                     # fresh slot at the provider.
                     image3d_timed_out = True
+                except _Image3dMeshFailed as e:
+                    # Image was rendered but the mesh provider failed. Per
+                    # image-first 3D policy we never silently fall back to
+                    # text-to-3D in this case — text-to-3D would only
+                    # regress quality on the same intent. Surface as a hard
+                    # mesh failure for the operator to see in the alert.
+                    image3d_mesh_failed_reason = str(e)
 
             if bundle_done:
                 # Bundle path already populated asset, model_used, svg_glyph.
                 # Skip strategy-1/2.
                 pass
             elif i23 is not None:
-                glb_path, stl_path, preview_png, model_used, image_gen_model = i23
+                glb_path, stl_path, preview_png, model_used, image_gen_model, mesh_task_id = i23
                 # Two provider charges: the reference image render +
                 # the image-to-3D task.
                 provider_calls.append({"model": image_gen_model, "calls": 1})
@@ -1427,6 +1582,67 @@ def handle(method: str, params: dict) -> dict:
                     f"(billed: {image_gen_model} + {model_used})",
                     file=sys.stderr, flush=True,
                 )
+                # Optional rigging + animation pass for full-body humanoid
+                # figurines. +5 rig +3 animation credits ≈ +$0.16. Only
+                # supported by Meshy (Tripo doesn't expose an auto-rig
+                # endpoint we use). Detection: brief.product_subtype or
+                # brief.supports_rigging — see _wants_rigging().
+                #
+                # Operator toggles (Settings → Mesh Generation, wired via
+                # commands.rs::cmd_start) supersede the heuristic:
+                #   MESHY_RIG_ENABLED=false       → never rig
+                #   MESHY_ANIMATION_ENABLED=false → rig only, skip Anim API
+                #   MESHY_TEXTURES_ENABLED=false  → force-skip rig (Meshy
+                #     auto-rig requires a TEXTURED humanoid input; a flat-
+                #     shaded mesh would 422 and waste the rig credit).
+                rig_enabled = (os.environ.get("MESHY_RIG_ENABLED", "true") or "true").strip().lower() != "false"
+                anim_enabled = (os.environ.get("MESHY_ANIMATION_ENABLED", "true") or "true").strip().lower() != "false"
+                textures_on = (os.environ.get("MESHY_TEXTURES_ENABLED", "true") or "true").strip().lower() != "false"
+                wants_rig = _wants_rigging(brief, asset)
+                rig_conditions = {
+                    "rig_enabled": rig_enabled,
+                    "textures_on": textures_on,
+                    "is_meshy_image": model_used == "meshy-image-to-3d",
+                    "has_mesh_task_id": bool(mesh_task_id),
+                    "has_meshy_key": bool(meshy_key),
+                    "wants_rig": wants_rig,
+                }
+                rig_assets: dict | None = None
+                if all(rig_conditions.values()):
+                    try:
+                        from . import meshy as m3d
+                        rig_assets = m3d.rig_and_animate(
+                            meshy_key,
+                            input_task_id=mesh_task_id,
+                            job_id=job_id,
+                            assets_dir=assets_dir,
+                            skip_animation=not anim_enabled,
+                        )
+                        provider_calls.append({"model": "meshy-rigging", "calls": 1})
+                        if anim_enabled:
+                            provider_calls.append({"model": "meshy-animation", "calls": 1})
+                    except Exception as e:
+                        # Rigging/animation is a value-add upsell — never
+                        # let it kill an otherwise-good static listing.
+                        # 422 (non-humanoid) is the most common failure
+                        # and is fine to ignore quietly; surface other
+                        # errors so we notice systemic regressions.
+                        print(
+                            f"[designer] rig+anim failed (job_id={job_id}): {e} "
+                            "— shipping static listing only",
+                            file=sys.stderr, flush=True,
+                        )
+                else:
+                    # Diagnostic: surface WHICH gate failed so the operator
+                    # can see why a humanoid character didn't get rigged
+                    # without grepping through worker stderr.
+                    failed = [k for k, v in rig_conditions.items() if not v]
+                    print(
+                        f"[designer] job_id={job_id} rig+anim SKIPPED — "
+                        f"failed gates: {failed} "
+                        f"(model_used={model_used!r}, niche={brief.get('niche')!r})",
+                        file=sys.stderr, flush=True,
+                    )
                 preview_png = _maybe_higgsfield_enhance(
                     preview_png, brief, job_id, assets_dir,
                     elapsed_sec=_time_handle.time() - _handle_t0,
@@ -1436,30 +1652,39 @@ def handle(method: str, params: dict) -> dict:
                 asset["preview_png"] = preview_png
                 asset["dimensions"] = "3D printable (.stl + .glb, image-to-3D)"
                 svg_glyph = f"stl ✓ ({model_used.split('-')[0]} img→3d)"
-                # Multi-angle previews: render 5 camera angles off the GLB so
-                # the Etsy listing can show the model from every side, not
-                # just one ambiguous thumbnail. 768px is plenty — Etsy renders
-                # listing photos at ~570px and the rasterizer is pure-Python,
-                # so cutting from 1024 to 768 halves the wall-clock cost.
-                # Falls back silently to the single thumbnail when the mesh
-                # is degenerate / unrenderable.
+                if rig_assets:
+                    asset["rigged_glb_path"] = rig_assets.get("rigged_glb")
+                    asset["animated_glb_path"] = rig_assets.get("animation_glb")
+                    asset["walking_glb_path"] = rig_assets.get("walking_glb")
+                    asset["running_glb_path"] = rig_assets.get("running_glb")
+                    asset["dimensions"] = (
+                        "3D printable (.stl + .glb, image-to-3D, rigged + animated)"
+                    )
+                    svg_glyph = f"stl ✓ ({model_used.split('-')[0]} img→3d, rigged)"
+                # Listing previews: a textured hero render of the GLB plus
+                # untextured clay angles, so the listing shows the model
+                # from every side instead of one ambiguous thumbnail. Uses
+                # the bundled headless three.js renderer (real PBR), falling
+                # back to the pure-Python clay rasterizer when Node/Chromium
+                # is unavailable. Falls back to the single API thumbnail
+                # only if both render paths fail.
                 try:
                     import time as _t
                     from . import preview as _preview
                     t0 = _t.time()
-                    print(f"[designer] job_id={job_id} rendering 5 angle previews…", file=sys.stderr, flush=True)
-                    angle_paths = _preview.try_render_angles(
+                    print(f"[designer] job_id={job_id} rendering listing previews…", file=sys.stderr, flush=True)
+                    angle_paths = _preview.try_render_previews(
                         glb_path, output_dir=assets_dir, job_id=job_id, resolution=768,
                     )
                     print(
-                        f"[designer] job_id={job_id} angle previews done "
+                        f"[designer] job_id={job_id} previews done "
                         f"({len(angle_paths)} files, {_t.time()-t0:.1f}s)",
                         file=sys.stderr, flush=True,
                     )
                 except Exception as e:
-                    print(f"[designer] angle render import failed: {e}", file=sys.stderr, flush=True)
+                    print(f"[designer] preview render import failed: {e}", file=sys.stderr, flush=True)
                     angle_paths = []
-                asset["preview_pngs"] = angle_paths + [preview_png] if angle_paths else [preview_png]
+                asset["preview_pngs"] = angle_paths if angle_paths else [preview_png]
             elif image3d_timed_out:
                 # Image-to-3D timed out — provider was queued. Skip the
                 # text-to-3D cascade (a second 240s wait would likely hit
@@ -1473,6 +1698,24 @@ def handle(method: str, params: dict) -> dict:
                 asset["asset_path"] = None
                 model_used = MODEL
                 svg_glyph = "3d timeout (provider queued)"
+            elif image3d_mesh_failed_reason is not None:
+                # Image rendered but mesh provider failed. Per image-first
+                # 3D policy we do NOT fall back to text-to-3D — text-to-3D
+                # would only regress quality on the same intent. Surface
+                # the mesh failure to the operator so they can see the
+                # underlying provider issue (auth/quota/quality).
+                pretty = (
+                    _classify_3d_provider_failure(image3d_mesh_failed_reason)
+                    or image3d_mesh_failed_reason
+                )
+                print(
+                    f"[designer] job_id={job_id} image-to-3d mesh step failed: {pretty} "
+                    "— NOT falling back to text-to-3D (image-first policy)",
+                    file=sys.stderr, flush=True,
+                )
+                asset["asset_path"] = None
+                model_used = MODEL
+                svg_glyph = "3d failed (mesh step)"
             else:
                 # Text-to-3D fallback. Provider selection is EXCLUSIVE —
                 # whatever IMAGE_TO_3D_PROVIDER is set to (default 'tripo')
@@ -1532,22 +1775,22 @@ def handle(method: str, params: dict) -> dict:
                             from . import preview as _preview
                             t0 = _t.time()
                             print(
-                                f"[designer] job_id={job_id} rendering 5 angle previews…",
+                                f"[designer] job_id={job_id} rendering listing previews…",
                                 file=sys.stderr, flush=True,
                             )
-                            angle_paths = _preview.try_render_angles(
+                            angle_paths = _preview.try_render_previews(
                                 glb_path, output_dir=assets_dir, job_id=job_id, resolution=768,
                             )
                             print(
-                                f"[designer] job_id={job_id} angle previews done "
+                                f"[designer] job_id={job_id} previews done "
                                 f"({len(angle_paths)} files, {_t.time()-t0:.1f}s)",
                                 file=sys.stderr, flush=True,
                             )
                         except Exception as e:
-                            print(f"[designer] angle render import failed: {e}", file=sys.stderr, flush=True)
+                            print(f"[designer] preview render import failed: {e}", file=sys.stderr, flush=True)
                             angle_paths = []
                         asset["preview_pngs"] = (
-                            angle_paths + [preview_png] if angle_paths else [preview_png]
+                            angle_paths if angle_paths else [preview_png]
                         )
                     except Exception as e:
                         raw_err = str(e)

@@ -333,6 +333,47 @@ pub fn extract_extra_asset_paths(
         .unwrap_or_default()
 }
 
+/// Extract the textured GLB(s) the designer produced alongside the STL(s).
+/// These ride along in the buyer's digital-download bundle so they can preview
+/// the colored, textured model in any GLB viewer (Windows 3D Viewer, Blender,
+/// Sketchfab, browser model-viewer) before slicing/printing — the STL alone
+/// only shows topology, which under-sells the work.
+///
+/// Filtering mirrors `extract_extra_asset_paths`: drop non-existent / primary
+/// duplicates / non-strings. Caller is responsible for keeping the combined
+/// extras + GLB count within `ETSY_MAX_DIGITAL_FILES - 1`.
+pub fn extract_extra_glb_paths(
+    result: &serde_json::Value,
+    primary: &Path,
+    already_included: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut from_list: Vec<PathBuf> = result
+        .get("glb_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && p != primary && !already_included.contains(p))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Single-listing fallback: when `glb_paths` isn't a list, the designer
+    // still emits the singular `glb_path` on every image-to-3D cycle.
+    if from_list.is_empty() {
+        if let Some(p) = result
+            .get("glb_path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            if p.exists() && p != *primary && !already_included.contains(&p) {
+                from_list.push(p);
+            }
+        }
+    }
+    from_list
+}
+
 /// Build the upload filename for an Etsy digital asset.
 ///
 /// Rank 1 keeps the legacy `agent-factory-asset-{job}.stl` form so anything
@@ -622,7 +663,37 @@ pub async fn handle_publisher_complete(
     // primary (already covered by svg_path), and cap at Etsy's per-listing
     // file ceiling. Single listings → empty extras → behaves identically to
     // the pre-bundle code path.
-    let extra_svg_paths = extract_extra_asset_paths(result, &svg_path);
+    let mut extra_svg_paths = extract_extra_asset_paths(result, &svg_path);
+    // Also bundle the textured GLB(s) so the buyer can preview the colored,
+    // PBR-shaded model before printing — the STL alone reads as a topology
+    // ghost in most viewers and under-sells the work. We cap the combined
+    // total at ETSY_MAX_DIGITAL_FILES - 1 (primary STL = rank 1).
+    let glb_extras = extract_extra_glb_paths(result, &svg_path, &extra_svg_paths);
+    let remaining = ETSY_MAX_DIGITAL_FILES
+        .saturating_sub(1)
+        .saturating_sub(extra_svg_paths.len());
+    extra_svg_paths.extend(glb_extras.into_iter().take(remaining));
+
+    // Optional rigged + animated GLBs from the Meshy rig+anim pass.
+    // Only present when the designer detected a full-body humanoid
+    // figurine. Etsy buyers value these as a "import into Blender / UE
+    // and animate" upsell, so we ship them as additional digital files
+    // (separate ranks → separate filenames in the buyer's Downloads).
+    let rig_extras: Vec<PathBuf> = ["rigged_glb_path", "animated_glb_path",
+                                    "walking_glb_path", "running_glb_path"]
+        .iter()
+        .filter_map(|k| {
+            result
+                .get(k)
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists() && *p != *svg_path && !extra_svg_paths.contains(p))
+        })
+        .collect();
+    let remaining = ETSY_MAX_DIGITAL_FILES
+        .saturating_sub(1)
+        .saturating_sub(extra_svg_paths.len());
+    extra_svg_paths.extend(rig_extras.into_iter().take(remaining));
 
     // Pinterest source image. The publisher emits this path on every
     // 3D-listing cycle; we don't pre-validate existence here because the

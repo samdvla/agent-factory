@@ -9,7 +9,7 @@ use crate::myminifactory;
 use crate::secrets;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_DAILY_CAP: i64 = 5;
 
@@ -135,8 +135,46 @@ pub async fn handle_publisher_complete_mmf(
         price_usd: price,
     };
 
+    // Bundle the textured GLB alongside the STL — MMF's create-object API
+    // supports an N-entry `files` array, so the buyer's download package
+    // carries both the printable STL and the PBR-shaded GLB preview. The
+    // STL stays index 0 (primary; hard-fail if its upload errors). The GLB
+    // ships best-effort: if its upload fails the listing still publishes
+    // with the STL plus a `warning` describing what dropped.
+    let glb_candidate: Option<PathBuf> = publisher_result
+        .get("glb_path")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .filter(|p| p.exists() && *p != file_path);
+    // Optional rigged + animated GLBs from the Meshy rig+anim pass. Only
+    // present when the designer detected a full-body humanoid figurine.
+    // MMF's create-object accepts an N-entry files array, so they ride
+    // alongside the printable STL + textured GLB.
+    let rig_candidates: Vec<PathBuf> = ["rigged_glb_path", "animated_glb_path",
+                                        "walking_glb_path", "running_glb_path"]
+        .iter()
+        .filter_map(|k| {
+            publisher_result
+                .get(k)
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| {
+                    p.exists()
+                        && *p != file_path
+                        && glb_candidate.as_ref().map_or(true, |g| g != p)
+                })
+        })
+        .collect();
+    let mut upload_paths: Vec<&Path> = vec![file_path.as_path()];
+    if let Some(ref glb) = glb_candidate {
+        upload_paths.push(glb.as_path());
+    }
+    for p in &rig_candidates {
+        upload_paths.push(p.as_path());
+    }
+
     let now = chrono::Utc::now().timestamp();
-    match myminifactory::create_object_with_file(&client, &access_token, &input, &file_path).await {
+    match myminifactory::create_object_with_file(&client, &access_token, &input, &upload_paths).await {
         Ok(res) => {
             if let Err(e) = sqlx::query(
                 "INSERT INTO mmf_publishes \

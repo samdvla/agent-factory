@@ -1,33 +1,40 @@
 //! Gumroad API v2 client.
 //!
 //! Base URL: https://api.gumroad.com/v2/
-//! Auth: `access_token` either as a query param or `Authorization: Bearer`.
-//! Get tokens at https://gumroad.com/settings/advanced → "Create access token"
-//! (or via OAuth app).
+//! Auth: `Authorization: Bearer <access_token>`. Tokens come from
+//! https://gumroad.com/settings/advanced -> "Create access token".
 //!
-//! Gumroad's public API around product creation has been historically
-//! conservative — `POST /v2/products` is supported but file upload usually
-//! requires a separate multi-step flow:
+//! Gumroad's modern API v2 supports programmatic product creation, file
+//! upload and cover images. The flow this client implements mirrors what
+//! the Gumroad web UI does:
 //!
-//!   1. POST /v2/products (name, price_cents, description)
-//!   2. Upload file via the older internal `links/{id}/upload` flow, which
-//!      isn't officially documented.
+//!   1. Upload each product file with the S3 multipart presign flow —
+//!      `POST /v2/files/presign` for presigned part URLs, `PUT` the bytes
+//!      to each, then `POST /v2/files/complete` for the seller-owned URL.
+//!   2. POST /v2/products with `files[]` referencing those URLs (or
+//!      PUT /v2/products/:id when attaching files to an existing product).
+//!   3. POST /v2/products/:id/covers with a public image URL to attach a
+//!      preview image.
 //!
-//! To stay robust, this integration:
-//!   - Always creates the product via the documented endpoint
-//!   - Attempts the file-attach call; on failure, marks the publish as
-//!     `published_without_file` (the product is live but empty — operator
-//!     needs to attach the file manually). UI surfaces this clearly.
+//! Products are created as drafts — Gumroad's API always does this. The
+//! operator publishes from the dashboard after review (same review gate
+//! we use for Etsy).
 //!
-//! Rate limits: ~600 req/15min. We rely on the per-day cap.
+//! Rate limits: ~600 req/15min. We rely on the per-day cap upstream.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
 
 const API_BASE: &str = "https://api.gumroad.com/v2";
 const UA: &str = "agent-factory/1.0";
+
+/// S3 multipart part size Gumroad's presign endpoint chunks by (100 MB).
+/// Our 3D assets are well under one part, but we slice generically so a
+/// large textured GLB still uploads correctly.
+const PART_SIZE: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Creds {
@@ -39,9 +46,17 @@ pub struct CreateProductInput {
     pub name: String,
     pub description: String,
     pub price_usd: f64,
-    /// Gumroad needs a URL — for digital downloads we use a placeholder; the
-    /// actual file is attached via a separate call.
-    pub product_type: String, // "digital"
+    pub tags: Vec<String>,
+}
+
+/// A file that has been uploaded via the presign flow and is ready to be
+/// referenced from a product's `files[]` array.
+#[derive(Debug, Clone)]
+pub struct UploadedFile {
+    /// Canonical seller-owned URL returned by POST /v2/files/complete.
+    pub url: String,
+    /// Buyer-facing label for the download.
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -49,8 +64,6 @@ pub struct CreateProductResult {
     pub product_id: String,
     pub edit_url: Option<String>,
     pub short_url: Option<String>,
-    pub file_attached: bool,
-    pub warning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +93,35 @@ struct ProductInner {
     edit_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PresignResp {
+    success: bool,
+    upload_id: Option<String>,
+    key: Option<String>,
+    file_url: Option<String>,
+    parts: Option<Vec<PresignPart>>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PresignPart {
+    part_number: i64,
+    presigned_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompleteResp {
+    success: bool,
+    file_url: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlainResp {
+    success: bool,
+    message: Option<String>,
+}
+
 /// Lightweight auth ping: GET /v2/user. Returns the account email (or name
 /// fallback) for the settings UI to display.
 pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
@@ -107,34 +149,178 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
     Ok(u.email.or(u.name).or(u.user_id).unwrap_or_else(|| "gumroad".into()))
 }
 
-/// Create a Gumroad product + attempt to attach the file in one call. The
-/// file-attach step is best-effort — if it fails the product is still
-/// created (just empty) and we mark `file_attached: false` so the UI can
-/// nudge the operator to upload manually.
-pub async fn create_product_with_file(
+/// Upload one file to the seller's Gumroad storage via the S3 presign
+/// flow, returning the canonical file URL to reference from `files[]`.
+///
+/// This is the most network-heavy call in the integration: presign, then
+/// one PUT per 100 MB part, then complete. For our STL/GLB assets that's
+/// presign + one PUT + complete.
+pub async fn upload_product_file(
     client: &reqwest::Client,
     creds: &Creds,
-    input: &CreateProductInput,
     file_path: &Path,
-) -> Result<CreateProductResult> {
-    // Step 1: create the product.
-    let price_cents = (input.price_usd * 100.0).round() as i64;
-    let create_resp = client
-        .post(format!("{API_BASE}/products"))
+) -> Result<String> {
+    let bytes = tokio::fs::read(file_path)
+        .await
+        .with_context(|| format!("read file {}", file_path.display()))?;
+    if bytes.is_empty() {
+        return Err(anyhow!("file {} is empty", file_path.display()));
+    }
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("download.bin")
+        .to_string();
+
+    // Step 1: presign.
+    let presign_resp = client
+        .post(format!("{API_BASE}/files/presign"))
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("User-Agent", UA)
-        .form(&[
-            ("name", input.name.as_str()),
-            ("price", &price_cents.to_string()),
-            ("description", input.description.as_str()),
-            ("product_type", input.product_type.as_str()),
-        ])
+        .json(&json!({ "filename": filename, "file_size": bytes.len() }))
         .timeout(Duration::from_secs(60))
         .send()
         .await
+        .context("gumroad POST /files/presign failed")?;
+    let status = presign_resp.status();
+    let text = presign_resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("gumroad /files/presign HTTP {status}: {text}"));
+    }
+    let presign: PresignResp =
+        serde_json::from_str(&text).with_context(|| format!("parse presign JSON: {text}"))?;
+    if !presign.success {
+        return Err(anyhow!(
+            "gumroad /files/presign success=false: {}",
+            presign.message.unwrap_or_else(|| text.clone())
+        ));
+    }
+    let upload_id = presign
+        .upload_id
+        .ok_or_else(|| anyhow!("gumroad presign: missing upload_id"))?;
+    let key = presign
+        .key
+        .ok_or_else(|| anyhow!("gumroad presign: missing key"))?;
+    let parts = presign.parts.unwrap_or_default();
+    if parts.is_empty() {
+        return Err(anyhow!("gumroad presign: no parts returned"));
+    }
+
+    // Step 2: PUT each part to its presigned S3 URL. The presigned URL
+    // carries its own auth — we must NOT add the Gumroad bearer header here.
+    let mut completed_parts: Vec<serde_json::Value> = Vec::with_capacity(parts.len());
+    for part in &parts {
+        let idx = (part.part_number - 1).max(0) as usize;
+        let start = idx.saturating_mul(PART_SIZE);
+        if start >= bytes.len() {
+            return Err(anyhow!(
+                "gumroad presign part {} starts past end of file",
+                part.part_number
+            ));
+        }
+        let end = start.saturating_add(PART_SIZE).min(bytes.len());
+        let chunk = bytes[start..end].to_vec();
+        let put_resp = client
+            .put(&part.presigned_url)
+            .body(chunk)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await
+            .with_context(|| format!("gumroad S3 PUT part {} failed", part.part_number))?;
+        let put_status = put_resp.status();
+        if !put_status.is_success() {
+            let body = put_resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "gumroad S3 PUT part {} HTTP {put_status}: {body}",
+                part.part_number
+            ));
+        }
+        let etag = put_resp
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("gumroad S3 PUT part {}: missing ETag", part.part_number))?;
+        completed_parts.push(json!({ "part_number": part.part_number, "etag": etag }));
+    }
+
+    // Step 3: complete the multipart upload.
+    let complete_resp = client
+        .post(format!("{API_BASE}/files/complete"))
+        .header("Authorization", format!("Bearer {}", creds.access_token))
+        .header("User-Agent", UA)
+        .json(&json!({ "upload_id": upload_id, "key": key, "parts": completed_parts }))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .context("gumroad POST /files/complete failed")?;
+    let status = complete_resp.status();
+    let text = complete_resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("gumroad /files/complete HTTP {status}: {text}"));
+    }
+    let complete: CompleteResp =
+        serde_json::from_str(&text).with_context(|| format!("parse complete JSON: {text}"))?;
+    if !complete.success {
+        return Err(anyhow!(
+            "gumroad /files/complete success=false: {}",
+            complete.message.unwrap_or_else(|| text.clone())
+        ));
+    }
+    complete
+        .file_url
+        .or(presign.file_url)
+        .ok_or_else(|| anyhow!("gumroad /files/complete: missing file_url"))
+}
+
+/// Build the JSON `files[]` array from already-uploaded files.
+fn files_json(files: &[UploadedFile]) -> Vec<serde_json::Value> {
+    files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            json!({
+                "url": f.url,
+                "display_name": f.display_name,
+                "position": i,
+            })
+        })
+        .collect()
+}
+
+/// Create a Gumroad product with its files attached in one call.
+///
+/// `files` must already be uploaded via [`upload_product_file`]. The
+/// product is created as a draft (Gumroad API behaviour).
+pub async fn create_product(
+    client: &reqwest::Client,
+    creds: &Creds,
+    input: &CreateProductInput,
+    files: &[UploadedFile],
+) -> Result<CreateProductResult> {
+    if files.is_empty() {
+        return Err(anyhow!("gumroad create-product: at least one file required"));
+    }
+    let price_cents = (input.price_usd * 100.0).round() as i64;
+    let body = json!({
+        "name": input.name,
+        "description": input.description,
+        "price": price_cents,
+        "native_type": "digital",
+        "tags": input.tags,
+        "files": files_json(files),
+    });
+    let resp = client
+        .post(format!("{API_BASE}/products"))
+        .header("Authorization", format!("Bearer {}", creds.access_token))
+        .header("User-Agent", UA)
+        .json(&body)
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
         .context("gumroad POST /products failed")?;
-    let status = create_resp.status();
-    let text = create_resp.text().await.unwrap_or_default();
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(anyhow!("gumroad create-product HTTP {status}: {text}"));
     }
@@ -149,65 +335,81 @@ pub async fn create_product_with_file(
     let product = parsed
         .product
         .ok_or_else(|| anyhow!("gumroad create-product: missing product"))?;
-
-    // Step 2: attempt file attach. Use the (semi-documented) variant_categories
-    // / files endpoint. If Gumroad rejects this (their API around file
-    // attachment is restricted), we surface a warning and call the product
-    // "published_without_file" — the operator can upload via dashboard.
-    let mut file_attached = false;
-    let mut warning = None;
-    match attach_file(client, creds, &product.id, file_path).await {
-        Ok(()) => file_attached = true,
-        Err(e) => {
-            warning = Some(format!(
-                "file attach failed (product created but empty): {e:#}"
-            ));
-        }
-    }
-
     Ok(CreateProductResult {
         product_id: product.id,
         edit_url: product.edit_url,
         short_url: product.short_url,
-        file_attached,
-        warning,
     })
 }
 
-/// Best-effort file attachment via Gumroad's product files endpoint. This is
-/// the most-likely-to-break call in the integration — Gumroad has tightened
-/// public-API write access over the years.
-async fn attach_file(
+/// Replace an existing product's files. Gumroad's PUT /v2/products/:id
+/// treats `files[]` as a full replacement — used by the backfill path to
+/// attach files to products that were created empty by the old, broken
+/// integration.
+pub async fn set_product_files(
     client: &reqwest::Client,
     creds: &Creds,
     product_id: &str,
-    file_path: &Path,
+    files: &[UploadedFile],
 ) -> Result<()> {
-    let bytes = tokio::fs::read(file_path)
-        .await
-        .with_context(|| format!("read file {}", file_path.display()))?;
-    let filename = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("download.bin")
-        .to_string();
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
-        .mime_str("application/octet-stream")?;
-    let form = reqwest::multipart::Form::new().part("file", part);
+    if files.is_empty() {
+        return Err(anyhow!("gumroad set-product-files: at least one file required"));
+    }
     let resp = client
-        .post(format!("{API_BASE}/products/{product_id}/files"))
+        .put(format!("{API_BASE}/products/{product_id}"))
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("User-Agent", UA)
-        .multipart(form)
-        .timeout(Duration::from_secs(180))
+        .json(&json!({ "files": files_json(files) }))
+        .timeout(Duration::from_secs(120))
         .send()
         .await
-        .context("gumroad POST /products/:id/files failed")?;
+        .context("gumroad PUT /products/:id failed")?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(anyhow!("gumroad file attach HTTP {status}: {text}"));
+        return Err(anyhow!("gumroad update-product HTTP {status}: {text}"));
+    }
+    let parsed: PlainResp =
+        serde_json::from_str(&text).with_context(|| format!("parse update JSON: {text}"))?;
+    if !parsed.success {
+        return Err(anyhow!(
+            "gumroad update-product success=false: {}",
+            parsed.message.unwrap_or_else(|| text.clone())
+        ));
+    }
+    Ok(())
+}
+
+/// Attach a cover (preview) image to a product from a public image URL.
+/// Gumroad downloads the URL server-side and stores its own copy, so the
+/// source URL only needs to be reachable for the duration of this call.
+pub async fn add_cover(
+    client: &reqwest::Client,
+    creds: &Creds,
+    product_id: &str,
+    image_url: &str,
+) -> Result<()> {
+    let resp = client
+        .post(format!("{API_BASE}/products/{product_id}/covers"))
+        .header("Authorization", format!("Bearer {}", creds.access_token))
+        .header("User-Agent", UA)
+        .json(&json!({ "url": image_url }))
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .context("gumroad POST /products/:id/covers failed")?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("gumroad add-cover HTTP {status}: {text}"));
+    }
+    let parsed: PlainResp =
+        serde_json::from_str(&text).with_context(|| format!("parse cover JSON: {text}"))?;
+    if !parsed.success {
+        return Err(anyhow!(
+            "gumroad add-cover success=false: {}",
+            parsed.message.unwrap_or_else(|| text.clone())
+        ));
     }
     Ok(())
 }

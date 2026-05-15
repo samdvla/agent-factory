@@ -429,11 +429,16 @@ ETSY_STL_MAX_BYTES = 16 * 1024 * 1024
 ETSY_FILE_MAX_BYTES = 15 * 1024 * 1024
 
 
-class StlTooLargeError(Exception):
+class StlTooLargeError(TripoError):
     """Raised when ensure_stl_under_cap can't decimate the mesh below the
     Etsy upload cap. The designer cycle should abort cleanly instead of
     handing an oversized STL to the publisher (which would just reject it
-    with ETSY_ASSET_TOO_LARGE)."""
+    with ETSY_ASSET_TOO_LARGE).
+
+    Subclasses TripoError so meshy.py's `except _tripo.TripoError` clause
+    catches it (was previously `except Exception`-only catch upstream;
+    making the hierarchy explicit prevents an oversized STL from leaking
+    to the publisher when callers catch TripoError specifically)."""
 
 
 def _decimate_glb_in_place(glb_path: str, target_ratio: float) -> bool:

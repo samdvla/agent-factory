@@ -20,7 +20,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.agent-factory/assets/**",
+          "$HOME/.agent-factory/steer-assets/**"
+        ]
+      }
     }
   },
   "bundle": {

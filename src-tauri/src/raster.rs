@@ -86,6 +86,47 @@ pub fn rasterize_print_sibling(svg_path: &Path, target_px: u32) -> Result<std::p
     Ok(print_path)
 }
 
+/// Ensure `src` is a real PNG, returning a path to a guaranteed-PNG file.
+///
+/// The designer pipeline has historically written WebP bytes into files
+/// with a `.png` extension. Gumroad's cover endpoint rejects WebP
+/// ("Cover must be an image (JPEG, PNG, GIF)"), so before handing a hero
+/// render to a marketplace we decode it (the `image` crate sniffs the
+/// real format, ignoring the extension) and, if it isn't already a true
+/// PNG, transcode it to a `<stem>.cover.png` sibling flattened onto white.
+/// If `src` is already a real PNG it's returned unchanged.
+pub fn ensure_real_png(src: &Path) -> Result<std::path::PathBuf> {
+    let bytes = std::fs::read(src).with_context(|| format!("read {}", src.display()))?;
+    // A real PNG starts with the 8-byte signature.
+    const PNG_SIG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if bytes.starts_with(PNG_SIG) {
+        return Ok(src.to_path_buf());
+    }
+    let decoded = image::load_from_memory(&bytes)
+        .with_context(|| format!("decode image {}", src.display()))?;
+    // Flatten onto white so a transparent render reads cleanly as a cover.
+    let rgba = decoded.to_rgba8();
+    let mut canvas = image::RgbImage::from_pixel(
+        rgba.width(),
+        rgba.height(),
+        image::Rgb([255, 255, 255]),
+    );
+    for (x, y, px) in rgba.enumerate_pixels() {
+        let a = px[3] as u32;
+        let blend = |fg: u8| -> u8 { ((fg as u32 * a + 255 * (255 - a)) / 255) as u8 };
+        canvas.put_pixel(x, y, image::Rgb([blend(px[0]), blend(px[1]), blend(px[2])]));
+    }
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("path has no stem: {:?}", src))?;
+    let out = src.with_file_name(format!("{stem}.cover.png"));
+    canvas
+        .save_with_format(&out, image::ImageFormat::Png)
+        .with_context(|| format!("write transcoded png {}", out.display()))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +224,40 @@ mod tests {
             std::fs::metadata(&second).unwrap().modified().unwrap(),
             written_at,
             "second call should not rewrite the file",
+        );
+    }
+
+    #[test]
+    fn test_ensure_real_png_passes_through_real_png() {
+        let dir = tempdir().expect("tempdir");
+        let p = dir.path().join("hero.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]))
+            .save_with_format(&p, image::ImageFormat::Png)
+            .expect("write png");
+        let out = ensure_real_png(&p).expect("ensure ok");
+        assert_eq!(out, p, "a real PNG should be returned unchanged");
+    }
+
+    #[test]
+    fn test_ensure_real_png_transcodes_non_png() {
+        let dir = tempdir().expect("tempdir");
+        // A JPEG written with a misleading .png extension — the same shape
+        // as the WebP-in-.png hero renders the designer pipeline emits.
+        let p = dir.path().join("hero.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([200, 100, 50]))
+            .save_with_format(&p, image::ImageFormat::Jpeg)
+            .expect("write jpeg");
+        assert!(
+            !std::fs::read(&p).unwrap().starts_with(PNG_MAGIC),
+            "fixture must not be a real PNG despite its extension"
+        );
+
+        let out = ensure_real_png(&p).expect("ensure ok");
+        assert_ne!(out, p, "non-PNG should be transcoded to a new file");
+        assert_eq!(out.file_name().unwrap().to_str().unwrap(), "hero.cover.png");
+        assert!(
+            std::fs::read(&out).unwrap().starts_with(PNG_MAGIC),
+            "transcoded output must be a real PNG"
         );
     }
 }

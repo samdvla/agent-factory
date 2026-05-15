@@ -359,7 +359,7 @@ pub async fn cmd_tripo_status() -> Result<TripoStatus, String> {
     Ok(TripoStatus { key_present, balance })
 }
 
-// ─── Google AI (nanobanana / Gemini 2.5 Flash Image) ─────────────────────
+// ─── Google AI (nanobanana / Gemini 3 Pro Image) ─────────────────────────
 
 #[derive(Serialize)]
 pub struct GoogleAiStatus {
@@ -545,13 +545,14 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
     } else {
         Some(("GOOGLE_API_KEY".into(), google_key))
     };
-    // Direct Google AI Studio image-generation key. When set, the
-    // designer's nanobanana dispatcher prefers the direct Gemini path
-    // (gemini-3.1-flash-image-preview at ~$0.067/image) over the
-    // Higgsfield CLI's nano_banana_pro bundle. This is the cheapest
-    // route once a Higgsfield plan is depleted. Key lives in secrets
-    // under `gemini_image_api_key`; get one at
-    // https://aistudio.google.com/apikey.
+    // Direct Google AI Studio image-generation key. The designer's
+    // nanobanana module thin-delegates to this path — Gemini is the
+    // ONLY reference-image backend now (the Higgsfield CLI fallback
+    // was removed when the shop's Higgsfield plan ran out of credits).
+    // Default model is gemini-3-pro-image-preview at ~$0.134/image,
+    // chosen because mesh quality is upper-bounded by ref-image PBR
+    // fidelity. Key lives in secrets under `gemini_image_api_key`;
+    // get one at https://aistudio.google.com/apikey.
     let gemini_image_key = secrets::get("gemini_image_api_key")
         .ok().flatten().unwrap_or_default();
     let gemini_image_env: Option<(String, String)> = if gemini_image_key.is_empty() {
@@ -594,6 +595,36 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
         "UI_SANDBOX_MODE".into(),
         if ui_sandbox_value { "true".into() } else { "false".into() },
     );
+    // Mesh-generation operator toggles — supersede any heuristic in the
+    // designer / meshy submit path. Default ON (we want textured + rigged
+    // + animated humanoid figurines on premium plans). Operator can flip
+    // any of them OFF in Settings → Mesh Generation to cut Meshy credit
+    // spend, e.g. textures-only ($0.40 saved per humanoid by skipping
+    // rig+anim) or zero-cost preview (textures off → ~$0.20 saved per
+    // job, GLB ships flat-shaded). Re-snapshotted at supervisor start;
+    // toggling without restart keeps the prior value (same coarse
+    // contract as the other env flags above).
+    fn _bool_secret(key: &str) -> bool {
+        secrets::get(key)
+            .ok().flatten()
+            .map(|v| !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true)
+    }
+    let textures_on = _bool_secret("meshy_textures_enabled");
+    let rig_on = _bool_secret("meshy_rig_enabled");
+    let animation_on = _bool_secret("meshy_animation_enabled");
+    let textures_env: (String, String) = (
+        "MESHY_TEXTURES_ENABLED".into(),
+        if textures_on { "true".into() } else { "false".into() },
+    );
+    let rig_env: (String, String) = (
+        "MESHY_RIG_ENABLED".into(),
+        if rig_on { "true".into() } else { "false".into() },
+    );
+    let animation_env: (String, String) = (
+        "MESHY_ANIMATION_ENABLED".into(),
+        if animation_on { "true".into() } else { "false".into() },
+    );
     // Resolve the absolute path to the `workers/` dir. The Tauri dev binary
     // runs with CWD=src-tauri (cargo's package root), so relative
     // "workers/foo" would resolve to src-tauri/workers/foo and fail with
@@ -613,6 +644,9 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
         let character_pool_env = character_pool_env.clone();
         let image_to_3d_env = image_to_3d_env.clone();
         let ui_sandbox_env = ui_sandbox_env.clone();
+        let textures_env = textures_env.clone();
+        let rig_env = rig_env.clone();
+        let animation_env = animation_env.clone();
         move |role: &str, worker_dir: &str| {
             let mut env = vec![
                 api_key_env.clone(),
@@ -620,6 +654,9 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
                 character_pool_env.clone(),
                 image_to_3d_env.clone(),
                 ui_sandbox_env.clone(),
+                textures_env.clone(),
+                rig_env.clone(),
+                animation_env.clone(),
                 ("PYTHONPATH".into(), workers_root.join(worker_dir).to_string_lossy().into_owned()),
             ];
             if let Some(ref u) = effective_base_url {
@@ -2492,17 +2529,51 @@ pub struct JobAssetInfo {
     pub glb_data_base64: Option<String>,
     /// Sibling PNG preview, base64, when one exists alongside the asset.
     pub png_data_base64: Option<String>,
+    // ── Rigged + animated variants (Meshy rig+anim pass output) ──────
+    // Only present when the designer detected a full-body humanoid and
+    // routed the cycle through Meshy's rigging + animation endpoints
+    // (workers/designer/designer/meshy.py::rig_and_animate). The Asset3D
+    // modal exposes a Variant toggle so the operator can swap between
+    // static / rigged / walking / running / animated previews without
+    // leaving the inspector.
+    pub rigged_glb_path: Option<String>,
+    pub rigged_glb_data_base64: Option<String>,
+    pub walking_glb_path: Option<String>,
+    pub walking_glb_data_base64: Option<String>,
+    pub running_glb_path: Option<String>,
+    pub running_glb_data_base64: Option<String>,
+    pub animated_glb_path: Option<String>,
+    pub animated_glb_data_base64: Option<String>,
+    /// nanobanana reference image (the still photo Meshy turned into the
+    /// 3D mesh). Saved by workers/designer/designer/nanobanana.py at
+    /// `<assets_dir>/<job_id>-ref.png`. Surfaced in the inspector so the
+    /// operator can compare "what we asked for" vs "what Meshy made of it".
+    pub ref_image_path: Option<String>,
+    pub ref_image_data_base64: Option<String>,
+    /// The full enriched prompt sent to Gemini for that ref image (brief
+    /// + studio-reference wrapping from ref_prompt.py). Written as a
+    /// sidecar at `<assets_dir>/<job_id>-ref-prompt.txt`. Lets the
+    /// operator iterate prompt wording against the actual outputs.
+    pub ref_prompt: Option<String>,
 }
 
-// Cap on the file size we'll base64-encode and ship through the Tauri IPC for
-// inline 3D preview. Trade-off: bigger cap → modal can render larger meshes
-// (Tripo/Meshy busts and props commonly land in the 20-40 MB range with
-// detailed sculpts), but each preview open serializes ~1.33× the file size
-// through JSON IPC. 50 MB → ~67 MB base64 transfer; sub-second on this Mac.
-// If this ever becomes a UX problem, the better fix is to switch the
-// frontend to Tauri's `convertFileSrc()` so the WebView loads the file
-// directly from disk instead of through IPC — that scales to GB-class assets.
+// Cap on the file size we'll base64-encode and ship through the Tauri IPC.
+// Asset3DModal now uses Tauri's asset protocol (convertFileSrc) for the
+// model-viewer src and download links — the WebView streams 3D assets
+// directly from disk without going through JSON IPC at all. This cap
+// only affects (a) PNGs we still inline as a fallback when there's no
+// renderable GLB, and (b) historical callers that haven't migrated yet.
+// Kept at 50 MB — well above the largest PNG we generate (~5 MB) but
+// small enough that any accidental large-payload regression fails fast
+// and visibly instead of wedging the IPC channel for tens of seconds.
 const MAX_INLINE_BYTES: u64 = 50 * 1024 * 1024;
+// The point at which inlining a GLB into the IPC response becomes
+// counter-productive. Above this size we skip the base64 even though
+// it's under MAX_INLINE_BYTES — the frontend's asset-protocol path is
+// dramatically faster for big GLBs and we'd just be doing two reads.
+// PNGs and STLs aren't subject to this — they're either small (PNG)
+// or downloaded as-is (STL).
+const MAX_INLINE_GLB_BYTES: u64 = 8 * 1024 * 1024;
 
 fn classify(path: &std::path::Path) -> &'static str {
     let ext = path
@@ -2523,6 +2594,84 @@ fn read_b64(path: &std::path::Path) -> Option<String> {
     use base64::Engine;
     let bytes = std::fs::read(path).ok()?;
     Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Look up a sibling rig/animation variant of the primary asset.
+/// Designer's Meshy rig+anim pass writes files at `<job>.rigged.glb`,
+/// `<job>.walking.glb`, `<job>.running.glb`, `<job>.animated.glb` next
+/// to the primary `<job>.stl` / `<job>.glb`. Returns (path_str, b64).
+/// The path is always returned when the file exists; the b64 is ONLY
+/// returned for tiny GLBs (<= MAX_INLINE_GLB_BYTES) — the modal prefers
+/// the asset-protocol streaming path for everything bigger.
+fn read_rig_variant(
+    primary: &std::path::Path,
+    suffix: &str,
+) -> (Option<String>, Option<String>) {
+    let stem = primary.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if stem.is_empty() {
+        return (None, None);
+    }
+    let dir = primary.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let candidate = dir.join(format!("{stem}.{suffix}.glb"));
+    if !candidate.exists() {
+        return (None, None);
+    }
+    let path_str = Some(candidate.display().to_string());
+    let b64 = std::fs::metadata(&candidate)
+        .ok()
+        .filter(|m| m.len() <= MAX_INLINE_GLB_BYTES)
+        .and_then(|_| read_b64(&candidate));
+    (path_str, b64)
+}
+
+/// Look up the enriched-prompt sidecar that gemini_image writes next to
+/// the ref PNG at `<job>-ref-prompt.txt`. Returns the file contents or
+/// None when missing (the file is best-effort; the worker logs a
+/// warning rather than failing the cycle if the disk write blows up,
+/// so the absence here is benign).
+fn read_ref_prompt(primary: &std::path::Path) -> Option<String> {
+    let stem = primary.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if stem.is_empty() {
+        return None;
+    }
+    let dir = primary.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let candidate = dir.join(format!("{stem}-ref-prompt.txt"));
+    if !candidate.exists() {
+        return None;
+    }
+    // Cap the read at 64 KiB — the prompt is ~3 KB today and even a 10×
+    // bloated variant would fit. Anything larger is almost certainly a
+    // stale unrelated file with our naming pattern and we'd rather skip
+    // it than dump megabytes into the inspector payload.
+    let meta = std::fs::metadata(&candidate).ok()?;
+    if meta.len() > 64 * 1024 {
+        return None;
+    }
+    std::fs::read_to_string(&candidate).ok()
+}
+
+
+/// Look up the nanobanana reference image saved by
+/// workers/designer/designer/nanobanana.py at `<job>-ref.png` next to
+/// the primary asset (note hyphen separator vs the dot-separated rig
+/// variants — the two files come from different writers and historical
+/// naming differs).
+fn read_ref_image(primary: &std::path::Path) -> (Option<String>, Option<String>) {
+    let stem = primary.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if stem.is_empty() {
+        return (None, None);
+    }
+    let dir = primary.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let candidate = dir.join(format!("{stem}-ref.png"));
+    if !candidate.exists() {
+        return (None, None);
+    }
+    let path_str = Some(candidate.display().to_string());
+    let b64 = std::fs::metadata(&candidate)
+        .ok()
+        .filter(|m| m.len() <= MAX_INLINE_BYTES)
+        .and_then(|_| read_b64(&candidate));
+    (path_str, b64)
 }
 
 #[tauri::command]
@@ -2546,6 +2695,17 @@ pub async fn cmd_read_job_asset(
         data_base64: String::new(),
         glb_data_base64: None,
         png_data_base64: None,
+        rigged_glb_path: None,
+        rigged_glb_data_base64: None,
+        walking_glb_path: None,
+        walking_glb_data_base64: None,
+        running_glb_path: None,
+        running_glb_data_base64: None,
+        animated_glb_path: None,
+        animated_glb_data_base64: None,
+        ref_image_path: None,
+        ref_image_data_base64: None,
+        ref_prompt: None,
     };
     let Some((Some(result_json),)) = row else { return Ok(info) };
     let value: serde_json::Value = match serde_json::from_str(&result_json) {
@@ -2569,19 +2729,26 @@ pub async fn cmd_read_job_asset(
     info.path = Some(path.display().to_string());
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     info.bytes = meta.len();
-    if meta.len() <= MAX_INLINE_BYTES {
+    // Only inline tiny GLBs; everything else gets streamed via the asset
+    // protocol on the frontend (Asset3DModal calls convertFileSrc(path)).
+    // STL stays inline up to MAX_INLINE_BYTES because the only consumer
+    // is the download link, and STL is the printable artifact buyers
+    // expect to grab quickly.
+    let inline_cap = if kind == "glb" { MAX_INLINE_GLB_BYTES } else { MAX_INLINE_BYTES };
+    if meta.len() <= inline_cap {
         if let Some(b) = read_b64(&path) {
             info.data_base64 = b;
         }
     }
     // For STL jobs, also surface the sibling GLB so <model-viewer> can render
-    // a preview (model-viewer doesn't support STL natively).
+    // a preview (model-viewer doesn't support STL natively). Path always
+    // returned; b64 only for tiny GLBs.
     if kind == "stl" {
         let glb_path = path.with_extension("glb");
         if glb_path.exists() {
             info.glb_path = Some(glb_path.display().to_string());
             if let Ok(m) = std::fs::metadata(&glb_path) {
-                if m.len() <= MAX_INLINE_BYTES {
+                if m.len() <= MAX_INLINE_GLB_BYTES {
                     info.glb_data_base64 = read_b64(&glb_path);
                 }
             }
@@ -2596,6 +2763,23 @@ pub async fn cmd_read_job_asset(
             }
         }
     }
+    // Rigged + animated variants (Meshy rig+anim pass output, when present).
+    let (rp, rb) = read_rig_variant(&path, "rigged");
+    info.rigged_glb_path = rp;
+    info.rigged_glb_data_base64 = rb;
+    let (wp, wb) = read_rig_variant(&path, "walking");
+    info.walking_glb_path = wp;
+    info.walking_glb_data_base64 = wb;
+    let (rnp, rnb) = read_rig_variant(&path, "running");
+    info.running_glb_path = rnp;
+    info.running_glb_data_base64 = rnb;
+    let (ap, ab) = read_rig_variant(&path, "animated");
+    info.animated_glb_path = ap;
+    info.animated_glb_data_base64 = ab;
+    let (refp, refb) = read_ref_image(&path);
+    info.ref_image_path = refp;
+    info.ref_image_data_base64 = refb;
+    info.ref_prompt = read_ref_prompt(&path);
     Ok(info)
 }
 
@@ -2612,6 +2796,17 @@ pub async fn cmd_read_listing_asset(listing_id: i64) -> Result<JobAssetInfo, Str
         data_base64: String::new(),
         glb_data_base64: None,
         png_data_base64: None,
+        rigged_glb_path: None,
+        rigged_glb_data_base64: None,
+        walking_glb_path: None,
+        walking_glb_data_base64: None,
+        running_glb_path: None,
+        running_glb_data_base64: None,
+        animated_glb_path: None,
+        animated_glb_data_base64: None,
+        ref_image_path: None,
+        ref_image_data_base64: None,
+        ref_prompt: None,
     };
     let home = std::env::var("HOME").unwrap_or_default();
     let mock = PathBuf::from(home).join(".agent-factory").join("publisher_output.json");
@@ -2644,7 +2839,8 @@ pub async fn cmd_read_listing_asset(listing_id: i64) -> Result<JobAssetInfo, Str
     info.path = Some(path.display().to_string());
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     info.bytes = meta.len();
-    if meta.len() <= MAX_INLINE_BYTES {
+    let inline_cap = if kind == "glb" { MAX_INLINE_GLB_BYTES } else { MAX_INLINE_BYTES };
+    if meta.len() <= inline_cap {
         if let Some(b) = read_b64(&path) {
             info.data_base64 = b;
         }
@@ -2654,7 +2850,7 @@ pub async fn cmd_read_listing_asset(listing_id: i64) -> Result<JobAssetInfo, Str
         if glb_path.exists() {
             info.glb_path = Some(glb_path.display().to_string());
             if let Ok(m) = std::fs::metadata(&glb_path) {
-                if m.len() <= MAX_INLINE_BYTES {
+                if m.len() <= MAX_INLINE_GLB_BYTES {
                     info.glb_data_base64 = read_b64(&glb_path);
                 }
             }
@@ -2668,6 +2864,23 @@ pub async fn cmd_read_listing_asset(listing_id: i64) -> Result<JobAssetInfo, Str
             }
         }
     }
+    // Rigged + animated variants (Meshy rig+anim pass output, when present).
+    let (rp, rb) = read_rig_variant(&path, "rigged");
+    info.rigged_glb_path = rp;
+    info.rigged_glb_data_base64 = rb;
+    let (wp, wb) = read_rig_variant(&path, "walking");
+    info.walking_glb_path = wp;
+    info.walking_glb_data_base64 = wb;
+    let (rnp, rnb) = read_rig_variant(&path, "running");
+    info.running_glb_path = rnp;
+    info.running_glb_data_base64 = rnb;
+    let (ap, ab) = read_rig_variant(&path, "animated");
+    info.animated_glb_path = ap;
+    info.animated_glb_data_base64 = ab;
+    let (refp, refb) = read_ref_image(&path);
+    info.ref_image_path = refp;
+    info.ref_image_data_base64 = refb;
+    info.ref_prompt = read_ref_prompt(&path);
     Ok(info)
 }
 
@@ -3940,6 +4153,177 @@ pub async fn cmd_gumroad_list_publishes(
             published_at: r.10,
         })
         .collect())
+}
+
+#[derive(Serialize, Default)]
+pub struct GumroadBackfillResult {
+    pub checked: i64,
+    pub fixed: i64,
+    pub skipped_missing_assets: i64,
+    pub errors: i64,
+    pub details: Vec<String>,
+}
+
+/// Recover (stl_path, glb_paths) for a local listing by scanning completed
+/// publisher jobs for the one whose result carries this listing_id. The
+/// publisher job's `result_json` is the only place the per-listing asset
+/// paths are persisted. The cover image is derived by the caller as the
+/// `<stl-stem>.png` hero render.
+async fn lookup_listing_assets(
+    pool: &SqlitePool,
+    local_listing_id: i64,
+) -> Option<(String, Vec<String>)> {
+    let candidates: Vec<(String,)> = sqlx::query_as(
+        "SELECT result_json FROM jobs WHERE agent_role = 'publisher' AND status = 'done' \
+         AND result_json LIKE ? ORDER BY id DESC",
+    )
+    .bind(format!("%{local_listing_id}%"))
+    .fetch_all(pool)
+    .await
+    .ok()?;
+    for (rj,) in candidates {
+        let v: Value = match serde_json::from_str(&rj) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("listing_id").and_then(|x| x.as_i64()) != Some(local_listing_id) {
+            continue;
+        }
+        let stl = v.get("asset_path").and_then(|x| x.as_str())?.to_string();
+        let glb: Vec<String> = v
+            .get("glb_path")
+            .and_then(|x| x.as_str())
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default();
+        return Some((stl, glb));
+    }
+    None
+}
+
+/// Backfill files onto Gumroad products that the old (broken) integration
+/// created empty — every row in state `published_no_file`. Re-uploads the
+/// listing's STL/GLB through the presign flow, attaches them to the
+/// existing product, and adds a cover image. Rows whose source assets are
+/// no longer on disk are reported as skipped (the operator must delete the
+/// empty draft or re-run the listing).
+#[tauri::command]
+pub async fn cmd_gumroad_backfill_files(
+    state: State<'_, Arc<AppState>>,
+) -> Result<GumroadBackfillResult, String> {
+    let creds = crate::gumroad_publish::creds_from_secrets()
+        .ok_or_else(|| "gumroad credentials missing (set gumroad_access_token)".to_string())?;
+
+    let rows: Vec<(i64, Option<i64>, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, local_listing_id, gumroad_product_id, title FROM gumroad_publishes \
+         WHERE project_id = ? AND state = 'published_no_file' ORDER BY id",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let client = reqwest::Client::new();
+    let mut result = GumroadBackfillResult::default();
+
+    for (row_id, local_listing_id, product_id, title) in rows {
+        result.checked += 1;
+        let Some(product_id) = product_id else {
+            result.errors += 1;
+            result
+                .details
+                .push(format!("{title}: no gumroad_product_id on record"));
+            continue;
+        };
+        let Some(lid) = local_listing_id else {
+            result.errors += 1;
+            result
+                .details
+                .push(format!("{title}: no local_listing_id on record"));
+            continue;
+        };
+
+        let Some((stl_str, glb_strs)) = lookup_listing_assets(&state.pool, lid).await
+        else {
+            result.skipped_missing_assets += 1;
+            result.details.push(format!(
+                "{title}: no publisher job result found for listing {lid}"
+            ));
+            continue;
+        };
+        let stl = PathBuf::from(&stl_str);
+        if !stl.exists() {
+            result.skipped_missing_assets += 1;
+            result.details.push(format!(
+                "{title}: STL no longer on disk ({}) — delete the empty Gumroad draft or re-publish",
+                stl.display()
+            ));
+            continue;
+        }
+        let glb: Vec<PathBuf> = glb_strs
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.exists() && *p != stl)
+            .collect();
+        // Cover = the <stl-stem>.png hero render (same convention as Etsy).
+        let cover = Some(stl.with_extension("png"));
+
+        let uploaded = match crate::gumroad_publish::upload_listing_files(
+            &client, &creds, &title, &stl, &glb,
+        )
+        .await
+        {
+            Ok(u) => u,
+            Err(e) => {
+                result.errors += 1;
+                result.details.push(format!("{title}: {e}"));
+                continue;
+            }
+        };
+        if let Err(e) =
+            crate::gumroad::set_product_files(&client, &creds, &product_id, &uploaded.files).await
+        {
+            result.errors += 1;
+            result.details.push(format!("{title}: attach failed: {e:#}"));
+            continue;
+        }
+        let mut warnings = uploaded.warnings;
+        if let Some(w) = crate::gumroad_publish::attach_cover_best_effort(
+            &client,
+            &creds,
+            &product_id,
+            lid,
+            cover.as_deref(),
+        )
+        .await
+        {
+            warnings.push(w);
+        }
+        let warning = if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join("; "))
+        };
+        if let Err(e) = sqlx::query(
+            "UPDATE gumroad_publishes SET state = 'published', warning = ?, error = NULL \
+             WHERE id = ?",
+        )
+        .bind(warning.as_deref())
+        .bind(row_id)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!("gumroad backfill UPDATE failed for {row_id}: {e}");
+        }
+        result.fixed += 1;
+        let suffix = warning
+            .as_deref()
+            .map(|w| format!(" (warning: {w})"))
+            .unwrap_or_default();
+        result
+            .details
+            .push(format!("{title}: files attached{suffix}"));
+    }
+    Ok(result)
 }
 
 #[tauri::command]

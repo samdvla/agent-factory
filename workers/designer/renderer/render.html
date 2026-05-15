@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>html,body{margin:0;background:#f2f2f2;overflow:hidden}</style>
+<!-- three.js is served locally by render_glb.js out of node_modules/three,
+     so the renderer never depends on a CDN at render time. -->
+<script type="importmap">
+{"imports":{
+  "three":"/three/build/three.module.js",
+  "three/addons/":"/three/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const SIZE = 1200;
+const glbUrl = new URLSearchParams(location.search).get('glb');
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(SIZE, SIZE, false);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f2f2);
+
+// Soft studio lighting: procedural environment for PBR + a key light.
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(1.2, 2.0, 1.6);
+scene.add(key);
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+
+const camera = new THREE.PerspectiveCamera(34, 1, 0.01, 1000);
+let radius = 3;
+let model = null;
+
+// Flat untextured "clay" material for non-hero shots.
+const clayMat = new THREE.MeshStandardMaterial({
+  color: 0xd9d4cc, roughness: 0.82, metalness: 0.0 });
+const origMats = new Map();
+
+new GLTFLoader().load(glbUrl, (gltf) => {
+  model = gltf.scene;
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.sub(center);              // re-center at origin
+  scene.add(model);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  radius = (maxDim / (2 * Math.tan(Math.PI * camera.fov / 360))) * 1.4;
+  window.__ready = true;
+}, undefined, (err) => { window.__error = String(err && err.message || err); });
+
+// Swap every mesh to flat clay (on=true) or restore original textures.
+window.setClay = function (on) {
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    if (on) {
+      if (!origMats.has(o)) origMats.set(o, o.material);
+      o.material = clayMat;
+    } else if (origMats.has(o)) {
+      o.material = origMats.get(o);
+    }
+  });
+};
+
+// Position the camera at (yaw, pitch) and return the framed PNG.
+window.shoot = function (yawDeg, pitchDeg) {
+  const yaw = yawDeg * Math.PI / 180, pitch = pitchDeg * Math.PI / 180;
+  camera.position.set(
+    radius * Math.cos(pitch) * Math.sin(yaw),
+    radius * Math.sin(pitch),
+    radius * Math.cos(pitch) * Math.cos(yaw),
+  );
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+  return canvas.toDataURL('image/png');
+};
+</script>
+</body>
+</html>

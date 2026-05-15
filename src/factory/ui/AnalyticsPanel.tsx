@@ -138,26 +138,29 @@ function AnalyticsPanelImpl({ alwaysOpen = false }: { alwaysOpen?: boolean }) {
                 const net = c.net_usd;
                 const netCls = net >= 0 ? "is-gain" : "is-loss";
                 const nicheRaw = c.niche ?? "—";
-                const niche =
-                  nicheRaw.length > 28 ? nicheRaw.slice(0, 27) + "…" : nicheRaw;
                 return (
-                  <div key={c.cycle_id} className="analytics-row">
+                  <div
+                    key={c.cycle_id}
+                    className="analytics-row"
+                    title={`${c.cycle_id}\nrev $${c.revenue_usd.toFixed(2)} · cost $${c.total_cost_usd.toFixed(2)}\n${c.contributor_count} contributor${c.contributor_count === 1 ? "" : "s"}`}
+                  >
                     <CycleThumb listingId={c.local_listing_id} />
-                    <span className="analytics-cid" title={c.cycle_id}>
-                      {c.cycle_id.slice(0, 8)}
-                    </span>
-                    <span className="analytics-niche" title={c.niche ?? ""}>
-                      {niche}
-                    </span>
-                    <span className="analytics-num">
-                      ${c.revenue_usd.toFixed(2)} rev
-                    </span>
-                    <span className="analytics-num">
-                      ${c.total_cost_usd.toFixed(2)} cost
-                    </span>
-                    <span className={`analytics-net ${netCls}`}>
-                      {net >= 0 ? "+" : ""}${net.toFixed(2)}
-                    </span>
+                    <div className="analytics-niche-stack">
+                      <span className="analytics-niche" title={c.niche ?? ""}>
+                        {nicheRaw}
+                      </span>
+                      <span className="analytics-cid">
+                        {c.cycle_id.slice(0, 8)}
+                      </span>
+                    </div>
+                    <div className="analytics-money-stack">
+                      <span className={`analytics-net ${netCls}`}>
+                        {net >= 0 ? "+" : ""}${net.toFixed(2)}
+                      </span>
+                      <span className="analytics-num">
+                        ${c.revenue_usd.toFixed(2)} · ${c.total_cost_usd.toFixed(2)}
+                      </span>
+                    </div>
                     <span
                       className="analytics-contrib"
                       title={`${c.contributor_count} contributor${

@@ -78,10 +78,20 @@ pub async fn handle_publisher_complete_sketchfab(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let asset_path_str = publisher_result
+    // Prefer the textured GLB (image-to-3D renders bake PBR materials —
+    // baseColorTexture + normal + roughness) so the Sketchfab viewer shows
+    // a colored, lit turntable instead of a flat-shaded STL silhouette.
+    // Falls back to the STL when no GLB sibling was produced (text-to-3D
+    // cycles, or older listings before the GLB-on-disk pivot).
+    let glb_path_str = publisher_result
+        .get("glb_path")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let stl_path_str = publisher_result
         .get("asset_path")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let asset_path_str = glb_path_str.clone().or(stl_path_str);
     let publisher_price = publisher_result
         .get("price_usd")
         .and_then(|v| v.as_f64());

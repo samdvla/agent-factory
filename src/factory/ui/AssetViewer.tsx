@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { api, type JobAssetInfo } from "../../api";
 
 interface Props {
@@ -55,8 +56,14 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
     };
   }, [jobId, preloaded]);
 
-  const glbDataUrl = useMemo(() => {
+  // Prefer streaming the GLB from disk via Tauri's asset protocol — this
+  // is what makes the auto-rotating thumbnail work for jobs whose GLB is
+  // over the 8 MB inline cap (90 MB+ Meshy outputs). Falls back to the
+  // inline base64 only when no on-disk path was returned.
+  const glbSrc = useMemo(() => {
     if (!info) return null;
+    const path = info.kind === "glb" ? info.path : info.glb_path;
+    if (path) return convertFileSrc(path);
     const b = info.kind === "glb" ? info.data_base64 : info.glb_data_base64;
     return b ? `data:model/gltf-binary;base64,${b}` : null;
   }, [info]);
@@ -66,8 +73,9 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
     return `data:model/stl;base64,${info.data_base64}`;
   }, [info]);
 
-  const pngDataUrl = useMemo(() => {
+  const pngSrc = useMemo(() => {
     if (!info) return null;
+    if (info.kind === "png" && info.path) return convertFileSrc(info.path);
     const b = info.kind === "png" ? info.data_base64 : info.png_data_base64;
     return b ? `data:image/png;base64,${b}` : null;
   }, [info]);
@@ -90,30 +98,30 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
   // thumbnail; the wrapper (ActivityFeed.JobAssetPreview) tells a quick
   // tap from a drag and opens the fullscreen modal only on a tap.
   if (info.kind === "glb" || info.kind === "stl") {
+    // Compact thumbnails (activity-feed cards) cheap out on shadow + use a
+    // softer auto-rotate cadence so the small viewport stays smooth even on
+    // a 90 MB GLB. Full-size review keeps the higher-quality settings.
+    const shadow = compact ? "0" : "1";
+    const exposure = compact ? "0.95" : "1.0";
+    const rotateDelay = compact ? "0" : "3000";
+    const rotateSpeed = compact ? "20deg" : "30deg";
     return (
       <div className={`asset-viewer asset-viewer--3d${compact ? " is-compact" : ""}`}>
-        {glbDataUrl ? (
-          // model-viewer is a custom element — TS needs the cast.
-          // @ts-expect-error custom-element JSX
-          <model-viewer
-            src={glbDataUrl}
-            alt="3D asset preview"
-            camera-controls
-            auto-rotate
-            camera-orbit="0deg 75deg 105%"
-            shadow-intensity="1"
-            exposure="1.0"
-            interaction-prompt="none"
-            style={{
-              width: "100%",
-              height: `${height}px`,
-              background: "#1a1d23",
-              display: "block",
-            }}
+        {glbSrc ? (
+          <Glb3dThumb
+            src={glbSrc}
+            posterSrc={pngSrc}
+            height={height}
+            shadow={shadow}
+            exposure={exposure}
+            rotateDelay={rotateDelay}
+            rotateSpeed={rotateSpeed}
+            bytes={info.bytes}
+            compact={!!compact}
           />
-        ) : pngDataUrl ? (
+        ) : pngSrc ? (
           <img
-            src={pngDataUrl}
+            src={pngSrc}
             alt="3D asset thumbnail (no GLB available)"
             style={{
               width: "100%",
@@ -147,18 +155,18 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
               ↓ STL
             </a>
           )}
-          {glbDataUrl && (
+          {glbSrc && (
             <a
-              href={glbDataUrl}
+              href={glbSrc}
               download={`asset-${jobId}.glb`}
               className="asset-viewer-dl"
             >
               ↓ GLB
             </a>
           )}
-          {pngDataUrl && (
+          {pngSrc && (
             <a
-              href={pngDataUrl}
+              href={pngSrc}
               download={`asset-${jobId}.png`}
               className="asset-viewer-dl"
             >
@@ -170,11 +178,11 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
     );
   }
 
-  if (info.kind === "png" && pngDataUrl) {
+  if (info.kind === "png" && pngSrc) {
     return (
       <div className={`asset-viewer asset-viewer--png${compact ? " is-compact" : ""}`}>
         <img
-          src={pngDataUrl}
+          src={pngSrc}
           alt="Asset preview"
           style={{ maxWidth: "100%", maxHeight: `${height}px`, objectFit: "contain" }}
         />
@@ -193,6 +201,149 @@ export default function AssetViewer({ jobId, preloaded, compact }: Props) {
     <div className="asset-viewer asset-viewer--svg">
       <span className="asset-viewer-kind">SVG</span>
       <span className="asset-viewer-bytes">{fmtBytes(info.bytes)}</span>
+    </div>
+  );
+}
+
+/**
+ * GLB thumbnail with a progress overlay + fade-in. Avoids the visible
+ * stutter where model-viewer reveals a half-loaded mesh frame-by-frame
+ * over a 90 MB GLB streaming via the asset protocol. We listen to
+ * model-viewer's native `progress` / `load` events and:
+ *   - hide the canvas (opacity 0) until `load` fires,
+ *   - show a thin gradient progress bar pinned to the bottom edge with
+ *     the current % (so the user knows it's working, not broken),
+ *   - keep the PNG poster (Meshy's preview render) visible behind so the
+ *     tile never goes blank during the stream.
+ */
+function Glb3dThumb({
+  src,
+  posterSrc,
+  height,
+  shadow,
+  exposure,
+  rotateDelay,
+  rotateSpeed,
+  bytes,
+  compact,
+}: {
+  src: string;
+  posterSrc: string | null;
+  height: number;
+  shadow: string;
+  exposure: string;
+  rotateDelay: string;
+  rotateSpeed: string;
+  bytes: number;
+  compact: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
+
+  useEffect(() => {
+    setProgress(0);
+    setLoaded(false);
+    setErrored(false);
+  }, [src]);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const mv = root.querySelector("model-viewer");
+    if (!mv) return;
+    const onProgress = (e: Event) => {
+      const ce = e as CustomEvent<{ totalProgress?: number }>;
+      const pct = ce.detail?.totalProgress;
+      if (typeof pct === "number") setProgress(pct);
+    };
+    const onLoad = () => {
+      setProgress(1);
+      setLoaded(true);
+    };
+    const onError = () => setErrored(true);
+    mv.addEventListener("progress", onProgress);
+    mv.addEventListener("load", onLoad);
+    mv.addEventListener("error", onError);
+    return () => {
+      mv.removeEventListener("progress", onProgress);
+      mv.removeEventListener("load", onLoad);
+      mv.removeEventListener("error", onError);
+    };
+  }, [src]);
+
+  const showOverlay = !loaded && !errored;
+  const pct = Math.max(2, Math.round(progress * 100));
+
+  return (
+    <div
+      ref={containerRef}
+      className={`asset-viewer-3d-stage${compact ? " is-compact" : ""}`}
+      style={{ position: "relative", width: "100%", height: `${height}px` }}
+    >
+      {posterSrc && !loaded && (
+        <img
+          src={posterSrc}
+          alt=""
+          aria-hidden
+          className="asset-viewer-3d-poster"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            background: "#1a1d23",
+            opacity: 0.55,
+            filter: "blur(1px)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      {/* @ts-expect-error custom-element JSX */}
+      <model-viewer
+        src={src}
+        alt="3D asset preview"
+        camera-controls
+        auto-rotate
+        auto-rotate-delay={rotateDelay}
+        rotation-per-second={rotateSpeed}
+        camera-orbit="0deg 75deg 105%"
+        shadow-intensity={shadow}
+        exposure={exposure}
+        interaction-prompt="none"
+        reveal="auto"
+        loading="eager"
+        style={{
+          width: "100%",
+          height: "100%",
+          background: posterSrc ? "transparent" : "#1a1d23",
+          display: "block",
+          opacity: loaded ? 1 : 0,
+          transition: "opacity 220ms ease",
+        }}
+      />
+      {showOverlay && (
+        <div className="asset-viewer-3d-progress" aria-hidden>
+          <div className="asset-viewer-3d-progress-label">
+            Loading {fmtBytes(bytes)} · {pct}%
+          </div>
+          <div className="asset-viewer-3d-progress-track">
+            <div
+              className="asset-viewer-3d-progress-fill"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {errored && (
+        <div className="asset-viewer-3d-progress is-error" aria-hidden>
+          <div className="asset-viewer-3d-progress-label">
+            Preview failed — tap to inspect
+          </div>
+        </div>
+      )}
     </div>
   );
 }

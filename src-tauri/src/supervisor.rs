@@ -225,7 +225,15 @@ async fn run_worker_loop(
                         let job_id = job.id;
 
                         match worker.request("process_job", req).await {
-                            Ok(result) => {
+                            Ok(mut result) => {
+                                // Scrub third-party IP/trademark terms from
+                                // listing copy before it is persisted or fans
+                                // out to any marketplace — rights-holder
+                                // takedowns (e.g. Games Workshop on Cults3D)
+                                // act on titles, descriptions and tags.
+                                if role == "publisher" {
+                                    crate::ip_sanitize::sanitize_publisher_result(&mut result);
+                                }
                                 if let Err(e) = queue::complete(pool, job_id, result.clone()).await {
                                     tracing::error!("complete failed: {e}");
                                 }

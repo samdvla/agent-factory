@@ -467,6 +467,32 @@ def test_loose_parser_surfaces_response_preview():
         assert "Sure, here" in msg, f"expected response preview in error, got: {msg!r}"
 
 
+def test_loose_parser_recovers_truncated_brief():
+    """Regression: alert tray was showing 'Unterminated string starting at:
+    line 7 column 26 (char NNN)' across designer jobs #2163-#2196 — every
+    brief_for_image_gen value was getting cut off mid-string because the
+    AAA-game-asset detail target made Claude write longer briefs than the
+    old 600-token cap could fit. The parser must salvage the truncated
+    response (close the open quote + brace) rather than fail the whole job."""
+    from designer.agent import _parse_loose_json_object
+    truncated = (
+        '{\n'
+        '  "niche": "fantasy figurines",\n'
+        '  "design_direction": "stylized realism",\n'
+        '  "asset": {\n'
+        '    "asset_type": "stl",\n'
+        '    "asset_name": "Bull-headed warrior",\n'
+        '    "brief_for_image_gen": "Bull-headed warrior deity, heroic upright stance, '
+        'massive crescent-blade glaive raised in one hand, off-hand clutching a glyph-tablet'
+        # NOTE: response cuts off here — no closing quote, no closing }
+    )
+    obj = _parse_loose_json_object(truncated)
+    # Outer object recovered; the head of brief_for_image_gen survived
+    assert obj["niche"] == "fantasy figurines"
+    assert obj["asset"]["asset_name"] == "Bull-headed warrior"
+    assert "Bull-headed warrior deity" in obj["asset"]["brief_for_image_gen"]
+
+
 def test_image_to_3d_provider_defaults_to_tripo(monkeypatch):
     from designer.agent import _image_to_3d_provider
 
@@ -536,7 +562,7 @@ def test_designer_routes_to_image_to_3d_when_eligible(tmp_path, monkeypatch):
         calls["nano"] += 1
         # Mirror the production tuple shape: (path, backend_model). Tests
         # don't care which backend ran but the agent code unpacks both.
-        return ref_path, "gemini-3.1-flash-image-preview"
+        return ref_path, "gemini-3-pro-image-preview"
 
     def fake_tripo_img(api_key, image_path, *, job_id, assets_dir, **kw):
         calls["tripo_img"] += 1
@@ -578,7 +604,7 @@ def test_designer_routes_to_image_to_3d_when_eligible(tmp_path, monkeypatch):
     assert result["model"] == MODEL
     provider_models = [c["model"] for c in result["provider_calls"]]
     assert "tripo-image-to-3d" in provider_models
-    assert "gemini-3.1-flash-image-preview" in provider_models
+    assert "gemini-3-pro-image-preview" in provider_models
 
 
 def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatch):
@@ -604,11 +630,13 @@ def test_designer_routes_to_meshy_image_when_provider_meshy(tmp_path, monkeypatc
         calls["nano"] += 1
         # Mirror the production tuple shape: (path, backend_model). Tests
         # don't care which backend ran but the agent code unpacks both.
-        return ref_path, "gemini-3.1-flash-image-preview"
+        return ref_path, "gemini-3-pro-image-preview"
 
     def fake_meshy_img(api_key, image_path, *, job_id, assets_dir, **kw):
         calls["meshy_img"] += 1
-        return glb_path, stl_path, png_path
+        # 4-tuple: (glb, stl, png, mesh_task_id) — task_id lets the
+        # designer chain rigging via input_task_id.
+        return glb_path, stl_path, png_path, "fake-meshy-task"
 
     def fake_tripo_any(*a, **kw):
         calls["tripo_any"] += 1
@@ -798,7 +826,7 @@ def test_designer_skips_text_fallback_when_image3d_timed_out(tmp_path, monkeypat
         calls["nano"] += 1
         # Mirror the production tuple shape: (path, backend_model). Tests
         # don't care which backend ran but the agent code unpacks both.
-        return ref_path, "gemini-3.1-flash-image-preview"
+        return ref_path, "gemini-3-pro-image-preview"
 
     from designer import tripo as tripo_mod
 
@@ -925,10 +953,14 @@ def test_designer_credit_failure_surfaces_friendly_message(tmp_path, monkeypatch
     assert "credit" in result.get("ticker_text", "").lower()
 
 
-def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkeypatch):
+def test_designer_does_not_cascade_to_text_when_mesh_fails_with_image(tmp_path, monkeypatch):
     """Image-to-3D errored for a NON-timeout reason (auth, bad payload,
-    network) → the text-to-3D fallback still runs. The timeout-skip path
-    must NOT swallow other recoverable errors."""
+    network) AFTER the reference image was rendered → per the image-first
+    3D policy the designer must NOT silently fall back to text-to-3D.
+    Text-to-3D would only regress quality on the same intent. Surface a
+    hard mesh failure so the operator sees the underlying provider issue.
+    Text-to-3D remains the fallback ONLY when image generation itself
+    failed (see test_designer_falls_back_to_text_to_3d_when_nano_blocked)."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -940,16 +972,11 @@ def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkey
     monkeypatch.setattr(urllib.request, "urlopen", fake)
 
     ref_path = str(tmp_path / "1002-ref.png")
-    glb_path = str(tmp_path / "1002.glb")
-    stl_path = str(tmp_path / "1002.stl")
-    png_path = str(tmp_path / "1002.png")
     calls = {"nano": 0, "tripo_img": 0, "tripo_text": 0}
 
     def fake_nano(api_key, prompt, *, job_id, assets_dir, **kw):
         calls["nano"] += 1
-        # Mirror the production tuple shape: (path, backend_model). Tests
-        # don't care which backend ran but the agent code unpacks both.
-        return ref_path, "gemini-3.1-flash-image-preview"
+        return ref_path, "gemini-3-pro-image-preview"
 
     from designer import tripo as tripo_mod
 
@@ -957,9 +984,12 @@ def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkey
         calls["tripo_img"] += 1
         raise tripo_mod.TripoError("HTTP 400: bad payload format")
 
-    def fake_tripo_text(api_key, prompt, *, job_id, assets_dir, **kw):
+    def fake_tripo_text(*a, **kw):
         calls["tripo_text"] += 1
-        return glb_path, stl_path, png_path
+        raise AssertionError(
+            "text-to-3D must NOT run when image rendered + mesh failed "
+            "— image-first 3D policy"
+        )
 
     from designer import nanobanana as nano_mod
     monkeypatch.setattr(nano_mod, "is_configured", lambda: True)
@@ -971,15 +1001,10 @@ def test_designer_still_cascades_on_non_timeout_image3d_failure(tmp_path, monkey
 
     assert calls["nano"] == 1
     assert calls["tripo_img"] == 1
-    assert calls["tripo_text"] == 1
-    assert result["ok"] is True
-    assert result["asset"]["asset_path"] == stl_path
-    assert result["model"] == MODEL
-    # Image-to-3D failed and we cascaded to text-to-3D, so the ledger
-    # should reflect both an attempted ref render + the final text-to-3D
-    # mesh task. The supervisor uses these entries to bill each call.
-    provider_models = [c["model"] for c in result["provider_calls"]]
-    assert "tripo-text-to-model" in provider_models
+    assert calls["tripo_text"] == 0
+    # 3D-only shop hard-fails when nothing made it to disk.
+    assert result["ok"] is False
+    assert "no asset" in result.get("error", "").lower()
 
 
 # ────────────────────────────────────────────────────────────────────────

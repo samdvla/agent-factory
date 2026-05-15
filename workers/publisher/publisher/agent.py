@@ -91,6 +91,46 @@ def handle(method: str, params: dict) -> dict:
             asset_paths = [p for p in raw_paths if isinstance(p, str) and p]
     if not asset_paths and isinstance(asset_path, str) and asset_path:
         asset_paths = [asset_path]
+    # GLB siblings — the designer renders a textured GLB next to every STL
+    # via image-to-3D (Tripo/Meshy with PBR). Surfacing these to the Rust
+    # supervisor lets each marketplace upload the textured preview alongside
+    # the STL: Sketchfab uses GLB as the viewer asset (textures show in the
+    # turntable), and Etsy/Cults3D/MMF/Gumroad bundle the GLB as an extra
+    # digital file so buyers can preview the colored model before purchase.
+    glb_path: str | None = (
+        asset.get("glb_path") if isinstance(asset, dict) else None
+    )
+    glb_paths: list[str] = []
+    if isinstance(asset, dict):
+        raw_glbs = asset.get("glb_paths")
+        if isinstance(raw_glbs, list):
+            glb_paths = [p for p in raw_glbs if isinstance(p, str) and p]
+    if not glb_paths and isinstance(glb_path, str) and glb_path:
+        glb_paths = [glb_path]
+    # Optional rigged + animated GLBs from the designer's Meshy rig+anim
+    # pass. Only present for full-body humanoid figurines; surfaced to
+    # the supervisor so each marketplace publisher can ship them as
+    # extra digital files alongside the static .stl/.glb. The rigged
+    # GLB is the same geometry with a humanoid skeleton; animation_glb
+    # is a single preset action; walking_/running_glb are the freebies
+    # bundled with the rigging task.
+    rigged_glb_path: str | None = (
+        asset.get("rigged_glb_path") if isinstance(asset, dict) else None
+    )
+    animated_glb_path: str | None = (
+        asset.get("animated_glb_path") if isinstance(asset, dict) else None
+    )
+    walking_glb_path: str | None = (
+        asset.get("walking_glb_path") if isinstance(asset, dict) else None
+    )
+    running_glb_path: str | None = (
+        asset.get("running_glb_path") if isinstance(asset, dict) else None
+    )
+    extra_glbs: list[str] = [
+        p for p in (rigged_glb_path, animated_glb_path, walking_glb_path, running_glb_path)
+        if isinstance(p, str) and p
+    ]
+    has_rigging = bool(rigged_glb_path)
     # Bundle metadata passed through verbatim so the supervisor's listing
     # title / description templates can render it (e.g. "(3-Piece Set)").
     bundle_meta = (
@@ -121,8 +161,15 @@ def handle(method: str, params: dict) -> dict:
         "status": "live",
         "asset_path": asset_path,
         "asset_paths": asset_paths,
+        "glb_path": glb_path,
+        "glb_paths": glb_paths,
         "bundle_size": len(asset_paths) if len(asset_paths) >= 2 else 1,
         "pinterest_pin_path": record_pin_path,
+        "rigged_glb_path": rigged_glb_path,
+        "animated_glb_path": animated_glb_path,
+        "walking_glb_path": walking_glb_path,
+        "running_glb_path": running_glb_path,
+        "has_rigging": has_rigging,
     }
 
     # Write a local audit record. The Rust supervisor handles real Etsy publishing.
@@ -153,6 +200,8 @@ def handle(method: str, params: dict) -> dict:
         ) or payload.get("asset_brief", ""),
         "asset_path": asset_path,
         "asset_paths": asset_paths,
+        "glb_path": glb_path,
+        "glb_paths": glb_paths,
         "bundle_size": len(asset_paths) if len(asset_paths) >= 2 else 1,
         "brief": brief if isinstance(brief, dict) else {},
     }
@@ -176,9 +225,17 @@ def handle(method: str, params: dict) -> dict:
         "niche": niche,
         "asset_path": asset_path,
         "asset_paths": asset_paths,
+        "glb_path": glb_path,
+        "glb_paths": glb_paths,
         "bundle_size": len(asset_paths) if len(asset_paths) >= 2 else 1,
         "preview_pngs": preview_pngs,
         "pinterest_pin_path": record_pin_path,
+        "rigged_glb_path": rigged_glb_path,
+        "animated_glb_path": animated_glb_path,
+        "walking_glb_path": walking_glb_path,
+        "running_glb_path": running_glb_path,
+        "extra_glb_paths": extra_glbs,
+        "has_rigging": has_rigging,
         "product_type": product_type,  # supervisor uses this to route to POD or direct-Etsy
         "job_id": job_id,
         "handoff": {

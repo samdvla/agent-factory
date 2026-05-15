@@ -45,8 +45,10 @@ pub struct CreateCreationInput {
     pub download_price: f64,
     /// Cults3D license code, e.g. "cults_cu" (Cults Common Use).
     pub license_code: String,
-    /// Opaque base64-encoded category id from `categories` query.
-    pub category_id: Option<String>,
+    /// Opaque base64-encoded category id from the `categories` query.
+    /// Cults3D's `createCreation` declares this as `ID!` — it is mandatory,
+    /// so the caller must resolve one (or abort) before building this input.
+    pub category_id: String,
     pub sub_category_ids: Vec<String>,
     pub tag_names: Vec<String>,
     pub locale: String,
@@ -227,7 +229,7 @@ mutation CreateDesign(
   $imageUrls: [String!]!,
   $fileUrls: [String!]!,
   $locale: LocaleEnum!,
-  $categoryId: ID,
+  $categoryId: ID!,
   $subCategoryIds: [ID!],
   $downloadPrice: Float!,
   $currency: CurrencyEnum!,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, type EtsyStatus } from "../../api";
+import { api, type EtsyStatus, type GumroadBackfillResult } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 import { useFactoryStore } from "../state/factoryStore";
 import { ISO_THEMES, ISO_THEME_NAMES, mapAppThemeToIso } from "../svg/iso/themes";
@@ -927,6 +927,153 @@ function ImageTo3dProviderSection() {
             <span className="shop-focus-btn-sub">{o.sub}</span>
           </button>
         ))}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MeshGenerationToggleSection: textures / rig / animation overrides    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Operator overrides for Meshy 6 mesh generation. Each toggle SUPERSEDES
+ * any heuristic in the designer / meshy submit path:
+ *   - Textures: forces enable_pbr + should_texture off when disabled.
+ *     Saves ~$0.20 per image-to-3D call (30 → 20 credits) and skips the
+ *     text-to-3D refine stage entirely. GLB ships flat-shaded.
+ *   - Rigging: gates rig_and_animate. When off, no humanoid character
+ *     ever gets rigged regardless of the brief. Skipping saves 5 credits
+ *     per humanoid (~$0.10).
+ *   - Animation: when on, the +3-credit Animation Library call fires
+ *     after rigging. When off, rigging still happens (and the free
+ *     walking + running loops bundled with the rigging task are still
+ *     downloaded), but the operator-chosen action is skipped.
+ *
+ * Implicit dependency: Meshy auto-rig requires a textured input, so
+ * disabling textures auto-disables rigging at the worker. The UI
+ * surfaces this with a sub-text note; we don't hard-disable the toggle
+ * because the operator may want to flip textures back on later.
+ *
+ * Wired through src-tauri/src/commands.rs::cmd_start as
+ * MESHY_TEXTURES_ENABLED / MESHY_RIG_ENABLED / MESHY_ANIMATION_ENABLED
+ * env vars; takes effect on the next supervisor start (matches the
+ * coarse contract of the other env-flag-backed settings).
+ */
+function MeshGenerationToggleSection() {
+  const [textures, setTextures] = useState(true);
+  const [rig, setRig] = useState(true);
+  const [animation, setAnimation] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      api.getSecret("meshy_textures_enabled"),
+      api.getSecret("meshy_rig_enabled"),
+      api.getSecret("meshy_animation_enabled"),
+    ]).then(([t, r, a]) => {
+      // Default ON when the secret is absent or anything other than
+      // "false" — matches the Rust _bool_secret helper.
+      setTextures(!(t && t.toLowerCase() === "false"));
+      setRig(!(r && r.toLowerCase() === "false"));
+      setAnimation(!(a && a.toLowerCase() === "false"));
+    }).catch(() => {});
+  }, []);
+
+  const flip = async (
+    key: "meshy_textures_enabled" | "meshy_rig_enabled" | "meshy_animation_enabled",
+    cur: boolean,
+    setLocal: (v: boolean) => void,
+  ) => {
+    const next = !cur;
+    setSavingKey(key);
+    try {
+      await api.setSecret(key, next ? "true" : "false");
+      setLocal(next);
+    } catch (e) {
+      console.warn(`${key} save failed`, e);
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Mesh generation</div>
+      <div className="settings-helper" style={{ marginBottom: 12 }}>
+        Operator-locked overrides for Meshy 6. Each toggle supersedes the
+        designer's per-job heuristic. Changes take effect on the next
+        supervisor restart.
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Textures (PBR)</span>
+          <span className="settings-helper">
+            ON: Meshy 6 image-to-3D ships with full PBR maps (base color,
+            normal, roughness, emission) — 30 credits per call. OFF: skips
+            texturing and the text-to-3D refine stage — 20 credits, GLB
+            ships flat-shaded.
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${textures ? " is-on" : ""}`}
+          onClick={() => flip("meshy_textures_enabled", textures, setTextures)}
+          disabled={savingKey !== null}
+        >
+          {savingKey === "meshy_textures_enabled" ? "…" : textures ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Auto-rigging</span>
+          <span className="settings-helper">
+            ON: full-body humanoid characters get a rigged GLB + free
+            walking/running loops — 5 credits per character. OFF: never
+            rig regardless of the brief.{" "}
+            {!textures && (
+              <em style={{ color: "rgba(245, 166, 35, 0.85)" }}>
+                Textures are off, so rigging is auto-disabled (Meshy's
+                auto-rig requires a textured input).
+              </em>
+            )}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${rig ? " is-on" : ""}`}
+          onClick={() => flip("meshy_rig_enabled", rig, setRig)}
+          disabled={savingKey !== null}
+        >
+          {savingKey === "meshy_rig_enabled" ? "…" : rig ? "ON" : "OFF"}
+        </button>
+      </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Animation</span>
+          <span className="settings-helper">
+            ON: after rigging, fire one preset Animation Library action
+            (default: Idle) — 3 credits per character. OFF: rig only,
+            skip the Animation API call. Free walking + running loops
+            from the rigging task still ship either way.{" "}
+            {!rig && (
+              <em style={{ color: "rgba(255, 255, 255, 0.5)" }}>
+                Rigging is off, so this setting has no effect.
+              </em>
+            )}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`settings-toggle${animation ? " is-on" : ""}`}
+          onClick={() => flip("meshy_animation_enabled", animation, setAnimation)}
+          disabled={savingKey !== null}
+        >
+          {savingKey === "meshy_animation_enabled" ? "…" : animation ? "ON" : "OFF"}
+        </button>
       </div>
     </section>
   );
@@ -2194,6 +2341,8 @@ function GumroadSection() {
     todayCount: 0,
   });
   const [capDraft, setCapDraft] = useState<string>("");
+  const [backfillState, setBackfillState] = useState<"idle" | "running" | "done">("idle");
+  const [backfillResult, setBackfillResult] = useState<GumroadBackfillResult | null>(null);
 
   const reload = async () => {
     try {
@@ -2242,15 +2391,33 @@ function GumroadSection() {
     setStatus((s) => ({ ...s, dailyCap: n }));
   };
 
+  const handleBackfill = async () => {
+    setBackfillState("running");
+    setBackfillResult(null);
+    try {
+      const r = await api.gumroadBackfillFiles();
+      setBackfillResult(r);
+    } catch (e) {
+      setBackfillResult({
+        checked: 0,
+        fixed: 0,
+        skipped_missing_assets: 0,
+        errors: 1,
+        details: [String(e)],
+      });
+    }
+    setBackfillState("done");
+  };
+
   return (
     <section className="settings-section">
       <div className="settings-section-title">Gumroad publishing</div>
       <div className="settings-helper" style={{ marginBottom: 8 }}>
-        Cross-list every 3D asset to Gumroad as a paid digital product. Heads
-        up: Gumroad's file-attach API is restricted — if it rejects the upload,
-        we still create the product (state shows as{" "}
-        <code>published_no_file</code>) and you upload the file once via their
-        dashboard. AI disclosure added automatically.
+        Cross-list every 3D asset to Gumroad as a paid digital product. The STL
+        and textured GLB upload via Gumroad's presign flow and the first
+        preview render is attached as the cover image. Products land as Gumroad
+        drafts — publish from their dashboard after review. AI disclosure added
+        automatically.
       </div>
 
       <div className="settings-field-row">
@@ -2344,6 +2511,48 @@ function GumroadSection() {
           Save
         </button>
       </div>
+
+      <div className="settings-field-row">
+        <div className="settings-field-label-col">
+          <span className="settings-field-label">Backfill missing files</span>
+          <span className="settings-helper">
+            Re-uploads the STL/GLB and cover image onto Gumroad products that an
+            earlier broken integration created empty. Listings whose source
+            assets are no longer on disk are reported as skipped.
+          </span>
+        </div>
+        <button
+          type="button"
+          className="settings-cred-save"
+          onClick={handleBackfill}
+          disabled={!status.credsPresent || backfillState === "running"}
+        >
+          {backfillState === "running" ? "Backfilling…" : "Run backfill"}
+        </button>
+      </div>
+      {backfillState === "done" && backfillResult && (
+        <div className="settings-helper">
+          <div
+            style={{
+              color:
+                backfillResult.errors > 0
+                  ? "var(--accent-bad)"
+                  : "var(--accent-ok)",
+            }}
+          >
+            Checked {backfillResult.checked} · fixed {backfillResult.fixed} ·
+            skipped {backfillResult.skipped_missing_assets} · errors{" "}
+            {backfillResult.errors}
+          </div>
+          {backfillResult.details.length > 0 && (
+            <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+              {backfillResult.details.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -3652,6 +3861,7 @@ export default function SettingsModal({
           <MeshySection />
           <TripoSection />
           <ImageTo3dProviderSection />
+          <MeshGenerationToggleSection />
           <HiggsfieldSection />
           </>}
 

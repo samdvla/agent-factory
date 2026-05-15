@@ -45,6 +45,7 @@ const ROLE_FILTERS: Array<{ id: string | null; label: string }> = [
   { id: "cfo", label: "CFO" },
   { id: "orchestrator", label: "Strategy" },
   { id: "si", label: "Tuner" },
+  { id: "strategist", label: "Strategist" },
 ];
 
 const RATING_FILTERS: Array<{ id: RatingFilter; label: string }> = [
@@ -63,6 +64,7 @@ const ROLE_COLORS: Record<string, string> = {
   cfo: "#ff8a93",
   orchestrator: "#5fd4f0",
   si: "#9b8cff",
+  strategist: "#d4a5ff",
 };
 
 function roleColor(role: string): string {
@@ -447,14 +449,29 @@ function OrchestratorOutput({ result }: { result: any }) {
 }
 
 function SiOutput({ result }: { result: any }) {
-  const role = result?.role_tweaked ?? result?.target_role ?? "—";
-  const rationale = result?.rationale ?? "";
+  const role: string | null =
+    result?.role_tweaked ?? result?.target_role ?? null;
+  const rationale: string = result?.rationale ?? "";
+  const ticker: string = result?.ticker_text ?? "";
+  const skipped = !role && /skipp?ed/i.test(ticker);
   return (
     <div className="af-body">
       <div className="af-meta">
-        <span>tweaked {role}</span>
+        {skipped ? (
+          <span>skipped this cycle</span>
+        ) : role ? (
+          <span>tweaked {role}</span>
+        ) : (
+          <span>no-op</span>
+        )}
       </div>
-      {rationale && <div className="af-rationale">{rationale}</div>}
+      {rationale ? (
+        <div className="af-rationale">{rationale}</div>
+      ) : ticker && skipped ? (
+        <div className="af-rationale is-dim">
+          Nothing to tune this round — outcomes don't yet justify a prompt change.
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -592,7 +609,7 @@ function JobCard({
         <CfoOutput result={result} />
       ) : row.agent_role === "orchestrator" ? (
         <OrchestratorOutput result={result} />
-      ) : row.agent_role === "si" ? (
+      ) : row.agent_role === "si" || row.agent_role === "strategist" ? (
         <SiOutput result={result} />
       ) : row.agent_role === "pod" ? (
         <PodOutput result={result} />
