@@ -121,10 +121,25 @@ def render(glb_path: str, *, output_dir: str, job_id: int,
 
     tex = sorted(glob.glob(os.path.join(output_dir, f"{job_id}-tex-*.png")))
     clay = sorted(glob.glob(os.path.join(output_dir, f"{job_id}-clay-*.png")))
-    paths = tex + clay
-    if not paths:
+    if not tex and not clay:
         raise RenderError("renderer produced no PNGs")
-    return paths
+
+    # Promote the textured hero to the conventional `{job_id}.png` path.
+    # Gumroad's cover image and Etsy's primary listing image both read
+    # `<asset>.png` — pointing that at the high-res textured hero (instead
+    # of the lower-res provider thumbnail the designer wrote there) makes
+    # every marketplace lead with the same render. The rename also keeps
+    # the hero from being uploaded twice on Etsy (primary == preview[0]).
+    if tex:
+        hero = os.path.join(output_dir, f"{job_id}.png")
+        try:
+            shutil.move(tex[0], hero)
+        except OSError as e:
+            print(f"[glb_render] could not promote hero to {hero}: {e}",
+                  file=sys.stderr, flush=True)
+            hero = tex[0]
+        return [hero] + clay
+    return clay
 
 
 def try_render(glb_path: str | None, *, output_dir: str, job_id: int,
