@@ -164,6 +164,46 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
     Ok(parsed.username)
 }
 
+/// Pull the banned word(s) out of a Sketchfab 400 body. Sketchfab's content
+/// filter responds e.g. `{"detail":{"description":["This input is not allowed
+/// because it contains the following: cracked."]}}`.
+fn extract_banned_words(error_body: &str) -> Vec<String> {
+    const MARKER: &str = "contains the following:";
+    let Some(idx) = error_body.find(MARKER) else {
+        return Vec::new();
+    };
+    let tail = &error_body[idx + MARKER.len()..];
+    // The word list runs until the JSON string closes.
+    let segment = tail.split('"').next().unwrap_or(tail);
+    segment
+        .split(',')
+        .map(|w| w.trim().trim_end_matches('.').trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Remove every case variant of `word` from `text`, then tidy doubled
+/// spaces. Used to scrub Sketchfab-banned words before a retry.
+fn scrub_word(text: &str, word: &str) -> String {
+    let titled = {
+        let mut c = word.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => String::new(),
+        }
+    };
+    let mut out = text.to_string();
+    for variant in [word.to_lowercase(), word.to_uppercase(), titled] {
+        if !variant.is_empty() {
+            out = out.replace(&variant, "");
+        }
+    }
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+    out.trim().to_string()
+}
+
 /// Upload a 3D model file (STL/GLB/FBX/OBJ/DAE) via multipart. Returns the
 /// model uid + public URL. If `input.price_usd` is set, also attempts to add
 /// the model to the Sketchfab Store (best-effort).
@@ -182,52 +222,76 @@ pub async fn upload_model(
         .unwrap_or("model.glb")
         .to_string();
 
-    // Sketchfab API caps `name` at 48 chars and `description` at 1024.
-    // Etsy titles run up to 140 chars — without truncation here every
-    // upload fails with HTTP 400 "Ensure this value has at most 48
-    // characters". Trim on a word boundary to avoid awkward mid-word cuts,
-    // and only suffix the ellipsis when we actually had to trim.
-    let name = clamp_name(&input.name, 48);
-    let description = clamp_description(&input.description, 1024);
-    let tags_joined = input.tags.join(" ");
-    let mut form = reqwest::multipart::Form::new()
-        .text("name", name)
-        .text("description", description)
-        .text("tags", tags_joined)
-        .text("isPublished", input.is_published.to_string())
-        .text("isInspectable", "true".to_string())
-        .text("private", "false".to_string());
+    // Sketchfab API caps `name` at 48 chars and `description` at 1024 —
+    // longer values 400. Trim on a word boundary to avoid mid-word cuts.
+    let mut name = clamp_name(&input.name, 48);
+    let mut description = clamp_description(&input.description, 1024);
+    let mut tags: Vec<String> = input.tags.clone();
 
-    if input.price_usd.is_none() {
-        // Free listing — set CC license + downloadable flag.
-        form = form
-            .text(
-                "license",
-                input.free_license.clone().unwrap_or_else(|| "by".into()),
-            )
-            .text("isDownloadable", input.is_downloadable.to_string());
-    }
-    if let Some(cat) = &input.category {
-        form = form.text("categories", cat.clone());
-    }
-    let model_part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
-        .mime_str("application/octet-stream")?;
-    form = form.part("modelFile", model_part);
+    // Sketchfab runs a content word-filter (anti-piracy: "cracked",
+    // "keygen", …) and 400s the upload, naming the offending word in the
+    // error body. Scrub the named word(s) and retry — self-heals against
+    // the whole undocumented banned list without hardcoding it.
+    let text;
+    let mut attempt = 0;
+    loop {
+        let mut form = reqwest::multipart::Form::new()
+            .text("name", name.clone())
+            .text("description", description.clone())
+            .text("tags", tags.join(" "))
+            .text("isPublished", input.is_published.to_string())
+            .text("isInspectable", "true".to_string())
+            .text("private", "false".to_string());
+        if input.price_usd.is_none() {
+            // Free listing — set CC license + downloadable flag.
+            form = form
+                .text(
+                    "license",
+                    input.free_license.clone().unwrap_or_else(|| "by".into()),
+                )
+                .text("isDownloadable", input.is_downloadable.to_string());
+        }
+        if let Some(cat) = &input.category {
+            form = form.text("categories", cat.clone());
+        }
+        let model_part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(filename.clone())
+            .mime_str("application/octet-stream")?;
+        form = form.part("modelFile", model_part);
 
-    let resp = client
-        .post(format!("{API_BASE}/models"))
-        .header("Authorization", creds.auth_header())
-        .header("User-Agent", UA)
-        .multipart(form)
-        .timeout(Duration::from_secs(180))
-        .send()
-        .await
-        .context("sketchfab POST /models failed")?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!("sketchfab upload HTTP {status}: {text}"));
+        let resp = client
+            .post(format!("{API_BASE}/models"))
+            .header("Authorization", creds.auth_header())
+            .header("User-Agent", UA)
+            .multipart(form)
+            .timeout(Duration::from_secs(180))
+            .send()
+            .await
+            .context("sketchfab POST /models failed")?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_success() {
+            text = body;
+            break;
+        }
+        let banned = extract_banned_words(&body);
+        if status == reqwest::StatusCode::BAD_REQUEST && !banned.is_empty() && attempt < 3 {
+            for w in &banned {
+                name = scrub_word(&name, w);
+                description = scrub_word(&description, w);
+                tags = tags
+                    .iter()
+                    .map(|t| scrub_word(t, w))
+                    .filter(|t| !t.trim().is_empty())
+                    .collect();
+            }
+            tracing::warn!(
+                "sketchfab rejected banned word(s) {banned:?} — scrubbed and retrying"
+            );
+            attempt += 1;
+            continue;
+        }
+        return Err(anyhow!("sketchfab upload HTTP {status}: {body}"));
     }
     let parsed: UploadResp =
         serde_json::from_str(&text).with_context(|| format!("parse upload JSON: {text}"))?;

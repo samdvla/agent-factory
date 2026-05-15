@@ -36,6 +36,9 @@ pub mod worker;
 #[cfg(test)]
 mod marketplace_smoke_tests;
 
+#[cfg(test)]
+mod backfill_marketplaces;
+
 use std::sync::Arc;
 use tauri::Manager;
 
