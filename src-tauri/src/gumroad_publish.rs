@@ -18,8 +18,6 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_DAILY_CAP: i64 = 5;
-
 pub fn creds_from_secrets() -> Option<gumroad::Creds> {
     let access_token = secrets::get("gumroad_access_token").ok().flatten().unwrap_or_default();
     if access_token.is_empty() {
@@ -203,24 +201,9 @@ pub async fn handle_publisher_complete_gumroad(
         return;
     };
 
-    let cap: i64 = secrets::get("gumroad_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_DAILY_CAP);
+    // No artificial daily cap — Gumroad imposes no product-count limit, so
+    // publish as fast as the pipeline produces.
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM gumroad_publishes WHERE project_id = ? AND day = ? AND state IN ('published','published_no_file')",
-    )
-    .bind(project_id)
-    .bind(&today)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    if count >= cap {
-        bus.send(SupervisorEvent::GumroadCapped { count, cap });
-        return;
-    }
 
     // Attach the textured GLB alongside the printable STL so the buyer
     // gets the colored model as a bonus download. STL stays primary.

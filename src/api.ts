@@ -282,8 +282,6 @@ export const api = {
   cults3dStatus: (): Promise<Cults3dStatus> => invoke("cmd_cults3d_status"),
   cults3dSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_cults3d_set_enabled", { enabled }),
-  cults3dSetDailyCap: (cap: number): Promise<void> =>
-    invoke("cmd_cults3d_set_daily_cap", { cap }),
   cults3dListPublishes: (limit?: number): Promise<Cults3dPublishRow[]> =>
     invoke("cmd_cults3d_list_publishes", { limit }),
   pinterestVerify: (
@@ -312,8 +310,6 @@ export const api = {
     invoke("cmd_sketchfab_set_enabled", { enabled }),
   sketchfabSetSellOnStore: (sell: boolean): Promise<void> =>
     invoke("cmd_sketchfab_set_sell_on_store", { sell }),
-  sketchfabSetDailyCap: (cap: number): Promise<void> =>
-    invoke("cmd_sketchfab_set_daily_cap", { cap }),
   sketchfabListPublishes: (limit?: number): Promise<SketchfabPublishRow[]> =>
     invoke("cmd_sketchfab_list_publishes", { limit }),
   gumroadVerify: (accessToken: string): Promise<GumroadVerifyOk> =>
@@ -321,8 +317,6 @@ export const api = {
   gumroadStatus: (): Promise<GumroadStatus> => invoke("cmd_gumroad_status"),
   gumroadSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_gumroad_set_enabled", { enabled }),
-  gumroadSetDailyCap: (cap: number): Promise<void> =>
-    invoke("cmd_gumroad_set_daily_cap", { cap }),
   gumroadListPublishes: (limit?: number): Promise<GumroadPublishRow[]> =>
     invoke("cmd_gumroad_list_publishes", { limit }),
   gumroadBackfillFiles: (): Promise<GumroadBackfillResult> =>
@@ -339,8 +333,6 @@ export const api = {
     invoke("cmd_mmf_set_enabled", { enabled }),
   mmfSetSellPaid: (sell: boolean): Promise<void> =>
     invoke("cmd_mmf_set_sell_paid", { sell }),
-  mmfSetDailyCap: (cap: number): Promise<void> =>
-    invoke("cmd_mmf_set_daily_cap", { cap }),
   mmfListPublishes: (limit?: number): Promise<MmfPublishRow[]> =>
     invoke("cmd_mmf_list_publishes", { limit }),
   youtubeVerify: (apiKey: string): Promise<YoutubeVerifyOk> =>
@@ -477,7 +469,6 @@ export type Cults3dStatus = {
   creds_present: boolean;
   asset_host_configured: boolean;
   enabled: boolean;
-  daily_cap: number;
   today_count: number;
 };
 export type Cults3dVerifyOk = { username: string };
@@ -525,7 +516,6 @@ export type SketchfabStatus = {
   creds_present: boolean;
   enabled: boolean;
   sell_on_store: boolean;
-  daily_cap: number;
   today_count: number;
 };
 export type SketchfabVerifyOk = { username: string };
@@ -545,7 +535,6 @@ export type SketchfabPublishRow = {
 export type GumroadStatus = {
   creds_present: boolean;
   enabled: boolean;
-  daily_cap: number;
   today_count: number;
 };
 export type GumroadVerifyOk = { account: string };
@@ -573,7 +562,6 @@ export type MmfStatus = {
   creds_present: boolean;
   enabled: boolean;
   sell_paid: boolean;
-  daily_cap: number;
   today_count: number;
   client_id: string | null;
   oauth_user_id: string | null;

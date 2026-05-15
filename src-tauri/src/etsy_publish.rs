@@ -603,31 +603,10 @@ pub async fn handle_publisher_complete(
         return;
     }
 
-    // Daily cap: count today's etsy_publishes rows for this project.
-    let cap: i64 = crate::secrets::get("daily_listing_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_DAILY_CAP);
+    // No artificial daily cap — Etsy imposes no listing-count limit (it
+    // charges a flat $0.20 per listing, which is tracked on the budget
+    // ledger and bounded by the USD budget caps instead).
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let count: i64 = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM etsy_publishes WHERE project_id = ? AND day = ?",
-    )
-    .bind(project_id)
-    .bind(&today)
-    .fetch_one(pool)
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("etsy_publishes count failed: {e}");
-            0
-        }
-    };
-    if count >= cap {
-        bus.send(SupervisorEvent::EtsyListingCapped { count, cap });
-        return;
-    }
 
     let svg_path = PathBuf::from(&asset_path);
     let png_path = svg_path.with_extension("png");

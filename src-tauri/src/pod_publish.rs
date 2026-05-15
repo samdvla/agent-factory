@@ -43,8 +43,9 @@ pub async fn handle_publisher_complete_pod(
         job_id,
     });
 
-    // Velocity cap: count today's pod_publishes rows and bail before any
-    // Printify calls if we're already at the cap.
+    // Velocity cap KEPT: this is not arbitrary throttling — Etsy
+    // auto-suspends POD shops for volume spikes, so the cap exists to
+    // comply with a marketplace-imposed limit. Override via `pod_daily_cap`.
     let cap: i64 = secrets::get("pod_daily_cap")
         .ok().flatten()
         .and_then(|v| v.parse::<i64>().ok())

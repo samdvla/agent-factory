@@ -1191,7 +1191,7 @@ function GitHubAssetHostSection() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Cults3DSection: API creds + Enable toggle + daily cap                */
+/*  Cults3DSection: API creds + Enable toggle                            */
 /* ------------------------------------------------------------------ */
 
 function Cults3DSection() {
@@ -1203,16 +1203,13 @@ function Cults3DSection() {
     credsPresent: boolean;
     hostConfigured: boolean;
     enabled: boolean;
-    dailyCap: number;
     todayCount: number;
   }>({
     credsPresent: false,
     hostConfigured: false,
     enabled: false,
-    dailyCap: 5,
     todayCount: 0,
   });
-  const [capDraft, setCapDraft] = useState<string>("");
 
   const reload = async () => {
     try {
@@ -1221,10 +1218,8 @@ function Cults3DSection() {
         credsPresent: s.creds_present,
         hostConfigured: s.asset_host_configured,
         enabled: s.enabled,
-        dailyCap: s.daily_cap,
         todayCount: s.today_count,
       });
-      setCapDraft(String(s.daily_cap));
     } catch {
       /* boot */
     }
@@ -1255,13 +1250,6 @@ function Cults3DSection() {
     setStatus((s) => ({ ...s, enabled: next }));
   };
 
-  const handleSaveCap = async () => {
-    const n = parseInt(capDraft, 10);
-    if (!Number.isFinite(n) || n < 0) return;
-    await api.cults3dSetDailyCap(n);
-    setStatus((s) => ({ ...s, dailyCap: n }));
-  };
-
   const canEnable = status.credsPresent && status.hostConfigured;
 
   return (
@@ -1284,7 +1272,7 @@ function Cults3DSection() {
             {" · "}
             {status.hostConfigured ? "Asset host ready" : "Asset host missing"}
             {" · "}
-            {status.todayCount}/{status.dailyCap} published today
+            {status.todayCount} published today
           </span>
         </div>
       </div>
@@ -1364,31 +1352,6 @@ function Cults3DSection() {
         </button>
       </div>
 
-      <div className="settings-field-row">
-        <div className="settings-field-label-col">
-          <span className="settings-field-label">Daily cap</span>
-          <span className="settings-helper">
-            Max Cults3D publishes per UTC day. Default 5 — velocity ceiling to
-            avoid spam-flagging.
-          </span>
-        </div>
-        <input
-          type="number"
-          min={0}
-          max={50}
-          className="settings-cred-input settings-input-number"
-          value={capDraft}
-          onChange={(e) => setCapDraft(e.target.value)}
-        />
-        <button
-          type="button"
-          className="settings-cred-save"
-          onClick={handleSaveCap}
-          disabled={!capDraft.trim()}
-        >
-          Save
-        </button>
-      </div>
     </section>
   );
 }
@@ -2028,7 +1991,7 @@ function TrendSignalsSection() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  MmfSection: API key + Enable + sell-paid + cap                       */
+/*  MmfSection: API key + Enable + sell-paid                             */
 /* ------------------------------------------------------------------ */
 
 function MmfSection() {
@@ -2042,7 +2005,6 @@ function MmfSection() {
     credsPresent: boolean;
     enabled: boolean;
     sellPaid: boolean;
-    dailyCap: number;
     todayCount: number;
     clientId: string | null;
     oauthUserId: string | null;
@@ -2050,12 +2012,10 @@ function MmfSection() {
     credsPresent: false,
     enabled: false,
     sellPaid: false,
-    dailyCap: 5,
     todayCount: 0,
     clientId: null,
     oauthUserId: null,
   });
-  const [capDraft, setCapDraft] = useState<string>("");
 
   const reload = async () => {
     try {
@@ -2064,12 +2024,10 @@ function MmfSection() {
         credsPresent: s.creds_present,
         enabled: s.enabled,
         sellPaid: s.sell_paid,
-        dailyCap: s.daily_cap,
         todayCount: s.today_count,
         clientId: s.client_id,
         oauthUserId: s.oauth_user_id,
       });
-      setCapDraft(String(s.daily_cap));
     } catch {
       /* boot */
     }
@@ -2132,12 +2090,6 @@ function MmfSection() {
     await api.mmfSetSellPaid(next);
     setStatus((s) => ({ ...s, sellPaid: next }));
   };
-  const handleSaveCap = async () => {
-    const n = parseInt(capDraft, 10);
-    if (!Number.isFinite(n) || n < 0) return;
-    await api.mmfSetDailyCap(n);
-    setStatus((s) => ({ ...s, dailyCap: n }));
-  };
 
   const connected = status.credsPresent;
 
@@ -2160,7 +2112,7 @@ function MmfSection() {
               ? `Connected via OAuth${status.oauthUserId ? ` · user ${status.oauthUserId}` : ""}`
               : "Not connected — paste client_id + client_secret below"}
             {" · "}
-            {status.todayCount}/{status.dailyCap} published today
+            {status.todayCount} published today
             {" · "}
             {status.sellPaid ? "Paid listings" : "Free listings"}
           </span>
@@ -2292,36 +2244,12 @@ function MmfSection() {
         </button>
       </div>
 
-      <div className="settings-field-row">
-        <div className="settings-field-label-col">
-          <span className="settings-field-label">Daily cap</span>
-          <span className="settings-helper">
-            Max MMF publishes per UTC day. Default 5.
-          </span>
-        </div>
-        <input
-          type="number"
-          min={0}
-          max={50}
-          className="settings-cred-input settings-input-number"
-          value={capDraft}
-          onChange={(e) => setCapDraft(e.target.value)}
-        />
-        <button
-          type="button"
-          className="settings-cred-save"
-          onClick={handleSaveCap}
-          disabled={!capDraft.trim()}
-        >
-          Save
-        </button>
-      </div>
     </section>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/*  GumroadSection: access token + Enable toggle + cap                   */
+/*  GumroadSection: access token + Enable toggle                         */
 /* ------------------------------------------------------------------ */
 
 function GumroadSection() {
@@ -2332,15 +2260,12 @@ function GumroadSection() {
   const [status, setStatus] = useState<{
     credsPresent: boolean;
     enabled: boolean;
-    dailyCap: number;
     todayCount: number;
   }>({
     credsPresent: false,
     enabled: false,
-    dailyCap: 5,
     todayCount: 0,
   });
-  const [capDraft, setCapDraft] = useState<string>("");
   const [backfillState, setBackfillState] = useState<"idle" | "running" | "done">("idle");
   const [backfillResult, setBackfillResult] = useState<GumroadBackfillResult | null>(null);
 
@@ -2350,10 +2275,8 @@ function GumroadSection() {
       setStatus({
         credsPresent: s.creds_present,
         enabled: s.enabled,
-        dailyCap: s.daily_cap,
         todayCount: s.today_count,
       });
-      setCapDraft(String(s.daily_cap));
     } catch {
       /* boot */
     }
@@ -2382,13 +2305,6 @@ function GumroadSection() {
     const next = !status.enabled;
     await api.gumroadSetEnabled(next);
     setStatus((s) => ({ ...s, enabled: next }));
-  };
-
-  const handleSaveCap = async () => {
-    const n = parseInt(capDraft, 10);
-    if (!Number.isFinite(n) || n < 0) return;
-    await api.gumroadSetDailyCap(n);
-    setStatus((s) => ({ ...s, dailyCap: n }));
   };
 
   const handleBackfill = async () => {
@@ -2426,7 +2342,7 @@ function GumroadSection() {
           <span className="settings-helper">
             {status.credsPresent ? "Token saved" : "No token — verify below"}
             {" · "}
-            {status.todayCount}/{status.dailyCap} published today
+            {status.todayCount} published today
           </span>
         </div>
       </div>
@@ -2489,31 +2405,6 @@ function GumroadSection() {
 
       <div className="settings-field-row">
         <div className="settings-field-label-col">
-          <span className="settings-field-label">Daily cap</span>
-          <span className="settings-helper">
-            Max Gumroad publishes per UTC day. Default 5.
-          </span>
-        </div>
-        <input
-          type="number"
-          min={0}
-          max={50}
-          className="settings-cred-input settings-input-number"
-          value={capDraft}
-          onChange={(e) => setCapDraft(e.target.value)}
-        />
-        <button
-          type="button"
-          className="settings-cred-save"
-          onClick={handleSaveCap}
-          disabled={!capDraft.trim()}
-        >
-          Save
-        </button>
-      </div>
-
-      <div className="settings-field-row">
-        <div className="settings-field-label-col">
           <span className="settings-field-label">Backfill missing files</span>
           <span className="settings-helper">
             Re-uploads the STL/GLB and cover image onto Gumroad products that an
@@ -2558,7 +2449,7 @@ function GumroadSection() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  SketchfabSection: API token + Enable toggle + Sell-on-Store + cap    */
+/*  SketchfabSection: API token + Enable toggle + Sell-on-Store          */
 /* ------------------------------------------------------------------ */
 
 function SketchfabSection() {
@@ -2570,16 +2461,13 @@ function SketchfabSection() {
     credsPresent: boolean;
     enabled: boolean;
     sellOnStore: boolean;
-    dailyCap: number;
     todayCount: number;
   }>({
     credsPresent: false,
     enabled: false,
     sellOnStore: false,
-    dailyCap: 5,
     todayCount: 0,
   });
-  const [capDraft, setCapDraft] = useState<string>("");
 
   const reload = async () => {
     try {
@@ -2588,10 +2476,8 @@ function SketchfabSection() {
         credsPresent: s.creds_present,
         enabled: s.enabled,
         sellOnStore: s.sell_on_store,
-        dailyCap: s.daily_cap,
         todayCount: s.today_count,
       });
-      setCapDraft(String(s.daily_cap));
     } catch {
       /* boot */
     }
@@ -2628,13 +2514,6 @@ function SketchfabSection() {
     setStatus((s) => ({ ...s, sellOnStore: next }));
   };
 
-  const handleSaveCap = async () => {
-    const n = parseInt(capDraft, 10);
-    if (!Number.isFinite(n) || n < 0) return;
-    await api.sketchfabSetDailyCap(n);
-    setStatus((s) => ({ ...s, dailyCap: n }));
-  };
-
   return (
     <section className="settings-section">
       <div className="settings-section-title">Sketchfab publishing</div>
@@ -2651,7 +2530,7 @@ function SketchfabSection() {
           <span className="settings-helper">
             {status.credsPresent ? "Token saved" : "No token — verify below"}
             {" · "}
-            {status.todayCount}/{status.dailyCap} published today
+            {status.todayCount} published today
             {" · "}
             {status.sellOnStore ? "Selling on Store" : "Free downloads (CC BY)"}
           </span>
@@ -2732,30 +2611,6 @@ function SketchfabSection() {
         </button>
       </div>
 
-      <div className="settings-field-row">
-        <div className="settings-field-label-col">
-          <span className="settings-field-label">Daily cap</span>
-          <span className="settings-helper">
-            Max Sketchfab publishes per UTC day. Default 5.
-          </span>
-        </div>
-        <input
-          type="number"
-          min={0}
-          max={50}
-          className="settings-cred-input settings-input-number"
-          value={capDraft}
-          onChange={(e) => setCapDraft(e.target.value)}
-        />
-        <button
-          type="button"
-          className="settings-cred-save"
-          onClick={handleSaveCap}
-          disabled={!capDraft.trim()}
-        >
-          Save
-        </button>
-      </div>
     </section>
   );
 }

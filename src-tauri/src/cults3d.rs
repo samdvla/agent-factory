@@ -8,9 +8,7 @@
 //! accept multipart uploads. Asset hosting is `asset_host_github`.
 //!
 //! Rate limits (publicly stated): ~60 req/30s, ~500 req/day. We don't enforce
-//! this client-side beyond exponential backoff on 429/5xx; the daily cap is
-//! also gated by `cults3d_daily_cap` so the supervisor stops queueing once
-//! we've hit our self-imposed limit.
+//! this client-side beyond exponential backoff on 429/5xx.
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};

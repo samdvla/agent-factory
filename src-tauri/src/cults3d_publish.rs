@@ -21,8 +21,6 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 
-pub const DEFAULT_DAILY_CAP: i64 = 5;
-
 fn creds_from_secrets() -> Option<cults3d::Creds> {
     let username = secrets::get("cults3d_username").ok().flatten().unwrap_or_default();
     let api_key = secrets::get("cults3d_api_key").ok().flatten().unwrap_or_default();
@@ -270,25 +268,9 @@ pub async fn handle_publisher_complete_cults3d(
         return;
     }
 
-    // Daily cap.
-    let cap: i64 = secrets::get("cults3d_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_DAILY_CAP);
+    // No artificial daily cap — Cults3D imposes no listing-count limit, so
+    // publish as fast as the pipeline produces.
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM cults3d_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
-    )
-    .bind(project_id)
-    .bind(&today)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    if count >= cap {
-        bus.send(SupervisorEvent::Cults3dCapped { count, cap });
-        return;
-    }
 
     let client = reqwest::Client::new();
 

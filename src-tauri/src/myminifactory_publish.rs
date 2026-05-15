@@ -11,8 +11,6 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_DAILY_CAP: i64 = 5;
-
 // Personal API key fallback is read-only and not accepted by MMF for
 // writes — the publish path always uses an OAuth access token via
 // `crate::mmf_oauth::ensure_fresh_token` instead.
@@ -107,24 +105,9 @@ pub async fn handle_publisher_complete_mmf(
         .unwrap_or(false);
     let price = if sell_paid { price_usd } else { 0.0 };
 
-    let cap: i64 = secrets::get("mmf_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_DAILY_CAP);
+    // No artificial daily cap — MyMiniFactory imposes no object-count
+    // limit, so publish as fast as the pipeline produces.
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM mmf_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
-    )
-    .bind(project_id)
-    .bind(&today)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    if count >= cap {
-        bus.send(SupervisorEvent::MmfCapped { count, cap });
-        return;
-    }
 
     let category = myminifactory::pick_category(&niche, &tags);
     let input = myminifactory::CreateObjectInput {

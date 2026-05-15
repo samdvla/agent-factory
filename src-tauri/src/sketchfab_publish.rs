@@ -20,8 +20,6 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 
-pub const DEFAULT_DAILY_CAP: i64 = 5;
-
 fn creds_from_secrets() -> Option<sketchfab::Creds> {
     let api_token = secrets::get("sketchfab_api_token").ok().flatten().unwrap_or_default();
     if api_token.is_empty() {
@@ -118,25 +116,8 @@ pub async fn handle_publisher_complete_sketchfab(
         return;
     };
 
-    // Daily cap.
-    let cap: i64 = secrets::get("sketchfab_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_DAILY_CAP);
+    // No artificial daily cap — publish as fast as the pipeline produces.
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sketchfab_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
-    )
-    .bind(project_id)
-    .bind(&today)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    if count >= cap {
-        bus.send(SupervisorEvent::SketchfabCapped { count, cap });
-        return;
-    }
 
     // Selling mode is gated on a separate secret because the account needs
     // Pro+ for the Store. Default: free listing with downloads enabled (CC BY).

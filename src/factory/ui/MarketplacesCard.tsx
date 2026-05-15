@@ -264,7 +264,10 @@ function UniformMarketplaceBody({
   rows: SimpleRow[];
   loading: boolean;
   todayCount: number | null;
-  dailyCap: number | null;
+  /** Optional listing/pin cap. Only Pinterest still carries a cap; the
+   *  product marketplaces dropped theirs, so they omit this prop and the
+   *  cap meter simply doesn't render for them. */
+  dailyCap?: number | null;
   credsPresent: boolean;
 }) {
   const [tab, setTab] = useState<string>(tabs[0]?.id ?? "active");
@@ -289,7 +292,7 @@ function UniformMarketplaceBody({
 
   return (
     <>
-      {credsPresent && todayCount !== null && dailyCap !== null && (
+      {credsPresent && todayCount !== null && dailyCap != null && (
         <div className="mp-today">
           <span className="mp-today-label">today</span>
           <span className="mp-today-count">
@@ -607,7 +610,7 @@ export default function MarketplacesCard() {
     : "disconnected";
   const c3Meta = c3
     ? c3.creds_present
-      ? `${cults3d.rows?.length ?? 0} recent · ${c3.today_count}/${c3.daily_cap} today`
+      ? `${cults3d.rows?.length ?? 0} recent · ${c3.today_count} today`
       : "not connected"
     : "loading…";
 
@@ -618,7 +621,7 @@ export default function MarketplacesCard() {
     : "disconnected";
   const sfMeta = sf
     ? sf.creds_present
-      ? `${sketchfab.rows?.length ?? 0} recent · ${sf.today_count}/${sf.daily_cap} today`
+      ? `${sketchfab.rows?.length ?? 0} recent · ${sf.today_count} today`
       : "not connected"
     : "loading…";
 
@@ -629,7 +632,7 @@ export default function MarketplacesCard() {
     : "disconnected";
   const mmMeta = mm
     ? mm.creds_present
-      ? `${mmf.rows?.length ?? 0} recent · ${mm.today_count}/${mm.daily_cap} today`
+      ? `${mmf.rows?.length ?? 0} recent · ${mm.today_count} today`
       : "not connected"
     : "loading…";
 
@@ -640,7 +643,7 @@ export default function MarketplacesCard() {
     : "disconnected";
   const gmMeta = gm
     ? gm.creds_present
-      ? `${gumroad.rows?.length ?? 0} recent · ${gm.today_count}/${gm.daily_cap} today`
+      ? `${gumroad.rows?.length ?? 0} recent · ${gm.today_count} today`
       : "not connected"
     : "loading…";
 
@@ -706,7 +709,6 @@ export default function MarketplacesCard() {
             }))}
             loading={cults3d.rows === null}
             todayCount={c3?.today_count ?? null}
-            dailyCap={c3?.daily_cap ?? null}
             credsPresent={c3?.creds_present ?? false}
           />
         </MarketplaceRow>
@@ -733,7 +735,6 @@ export default function MarketplacesCard() {
             }))}
             loading={sketchfab.rows === null}
             todayCount={sf?.today_count ?? null}
-            dailyCap={sf?.daily_cap ?? null}
             credsPresent={sf?.creds_present ?? false}
           />
         </MarketplaceRow>
@@ -760,7 +761,6 @@ export default function MarketplacesCard() {
             }))}
             loading={mmf.rows === null}
             todayCount={mm?.today_count ?? null}
-            dailyCap={mm?.daily_cap ?? null}
             credsPresent={mm?.creds_present ?? false}
           />
         </MarketplaceRow>
@@ -787,7 +787,6 @@ export default function MarketplacesCard() {
             }))}
             loading={gumroad.rows === null}
             todayCount={gm?.today_count ?? null}
-            dailyCap={gm?.daily_cap ?? null}
             credsPresent={gm?.creds_present ?? false}
           />
         </MarketplaceRow>

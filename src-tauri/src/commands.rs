@@ -3136,7 +3136,6 @@ pub struct Cults3dStatus {
     pub creds_present: bool,
     pub asset_host_configured: bool,
     pub enabled: bool,
-    pub daily_cap: i64,
     pub today_count: i64,
 }
 
@@ -3185,11 +3184,6 @@ pub async fn cmd_cults3d_status(state: State<'_, Arc<AppState>>) -> Result<Cults
         && secrets::get("github_asset_token").ok().flatten().map(|v| !v.is_empty()).unwrap_or(false);
     let enabled = secrets::get("cults3d_enabled").ok().flatten()
         .map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
-    let daily_cap = secrets::get("cults3d_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(crate::cults3d_publish::DEFAULT_DAILY_CAP);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let today_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM cults3d_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
@@ -3203,17 +3197,8 @@ pub async fn cmd_cults3d_status(state: State<'_, Arc<AppState>>) -> Result<Cults
         creds_present,
         asset_host_configured,
         enabled,
-        daily_cap,
         today_count,
     })
-}
-
-#[tauri::command]
-pub async fn cmd_cults3d_set_daily_cap(cap: i64) -> Result<(), String> {
-    if !(0..=50).contains(&cap) {
-        return Err("cap must be 0..=50".into());
-    }
-    secrets::set("cults3d_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3500,7 +3485,6 @@ pub struct SketchfabStatus {
     pub creds_present: bool,
     pub enabled: bool,
     pub sell_on_store: bool,
-    pub daily_cap: i64,
     pub today_count: i64,
 }
 
@@ -3555,11 +3539,6 @@ pub async fn cmd_sketchfab_status(
         .flatten()
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let daily_cap = secrets::get("sketchfab_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(crate::sketchfab_publish::DEFAULT_DAILY_CAP);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let today_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sketchfab_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
@@ -3573,17 +3552,8 @@ pub async fn cmd_sketchfab_status(
         creds_present,
         enabled,
         sell_on_store,
-        daily_cap,
         today_count,
     })
-}
-
-#[tauri::command]
-pub async fn cmd_sketchfab_set_daily_cap(cap: i64) -> Result<(), String> {
-    if !(0..=50).contains(&cap) {
-        return Err("cap must be 0..=50".into());
-    }
-    secrets::set("sketchfab_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -3741,7 +3711,6 @@ pub struct MmfStatus {
     pub creds_present: bool,
     pub enabled: bool,
     pub sell_paid: bool,
-    pub daily_cap: i64,
     pub today_count: i64,
     /// Echo of client_id so the UI can show "App: XXXX" without exposing
     /// the secret. Empty when the operator hasn't registered an app yet.
@@ -3795,11 +3764,6 @@ pub async fn cmd_mmf_status(state: State<'_, Arc<AppState>>) -> Result<MmfStatus
         .flatten()
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let daily_cap = secrets::get("mmf_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(crate::myminifactory_publish::DEFAULT_DAILY_CAP);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let today_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mmf_publishes WHERE project_id = ? AND day = ? AND state = 'published'",
@@ -3815,7 +3779,6 @@ pub async fn cmd_mmf_status(state: State<'_, Arc<AppState>>) -> Result<MmfStatus
         creds_present,
         enabled,
         sell_paid,
-        daily_cap,
         today_count,
         client_id,
         oauth_user_id,
@@ -3940,14 +3903,6 @@ pub async fn cmd_mmf_last_oauth_error() -> Result<Option<String>, String> {
     secrets::get("mmf_oauth_last_error").map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn cmd_mmf_set_daily_cap(cap: i64) -> Result<(), String> {
-    if !(0..=50).contains(&cap) {
-        return Err("cap must be 0..=50".into());
-    }
-    secrets::set("mmf_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
-}
-
 #[derive(Serialize)]
 pub struct MmfPublishRow {
     pub id: i64,
@@ -4016,7 +3971,6 @@ pub async fn cmd_mmf_list_publishes(
 pub struct GumroadStatus {
     pub creds_present: bool,
     pub enabled: bool,
-    pub daily_cap: i64,
     pub today_count: i64,
 }
 
@@ -4060,11 +4014,6 @@ pub async fn cmd_gumroad_status(
         .flatten()
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let daily_cap = secrets::get("gumroad_daily_cap")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(crate::gumroad_publish::DEFAULT_DAILY_CAP);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let today_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM gumroad_publishes WHERE project_id = ? AND day = ? AND state IN ('published','published_no_file')",
@@ -4077,17 +4026,8 @@ pub async fn cmd_gumroad_status(
     Ok(GumroadStatus {
         creds_present,
         enabled,
-        daily_cap,
         today_count,
     })
-}
-
-#[tauri::command]
-pub async fn cmd_gumroad_set_daily_cap(cap: i64) -> Result<(), String> {
-    if !(0..=50).contains(&cap) {
-        return Err("cap must be 0..=50".into());
-    }
-    secrets::set("gumroad_daily_cap", &cap.to_string()).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
