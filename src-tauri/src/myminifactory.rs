@@ -74,6 +74,9 @@ struct CreateObjectResp {
     /// Per-file upload IDs returned by the create-object call. Step 2 of
     /// the upload flow needs these to address the binary POST.
     files: Option<Vec<CreateObjectFileEntry>>,
+    /// Per-image upload IDs — present when the create-object body carried
+    /// an `images` array. Parallel in shape to `files`.
+    images: Option<Vec<CreateObjectFileEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,6 +168,11 @@ pub async fn verify(client: &reqwest::Client, creds: &Creds) -> Result<String> {
 /// `warning` field describes which extras dropped so the operator can re-
 /// upload manually from the MMF dashboard.
 ///
+/// `image_paths` are preview images (PNG/JPG). MMF renders the object's
+/// gallery from its `images` array — without them the listing has no
+/// picture. They go up via the same declare-then-upload flow as files
+/// (`POST /image?upload_id=…`) and are entirely best-effort.
+///
 /// Previous implementation used `POST /api/v2/objects` (plural) with
 /// multipart in a single call, which MMF rejects with 405 Method Not
 /// Allowed — that route only accepts GET (list objects). The plural-vs-
@@ -179,6 +187,7 @@ pub async fn create_object_with_file(
     access_token: &str,
     input: &CreateObjectInput,
     file_paths: &[&Path],
+    image_paths: &[&Path],
 ) -> Result<CreateObjectResult> {
     if file_paths.is_empty() {
         return Err(anyhow!("mmf create-object: at least one file required"));
@@ -198,6 +207,20 @@ pub async fn create_object_with_file(
             .to_string();
         prepared.push((filename, bytes));
     }
+    // Same for preview images — declared in the create call, then rendered
+    // into the object's gallery.
+    let mut prepared_images: Vec<(String, Vec<u8>)> = Vec::with_capacity(image_paths.len());
+    for path in image_paths {
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("read image {}", path.display()))?;
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("preview.png")
+            .to_string();
+        prepared_images.push((filename, bytes));
+    }
 
     // Step 1 — create the object metadata + receive an upload_id per file.
     let files_meta: Vec<serde_json::Value> = prepared
@@ -215,6 +238,18 @@ pub async fn create_object_with_file(
         "tags": input.tags.join(","),
         "files": files_meta,
     });
+    if !prepared_images.is_empty() {
+        // MMF renders the object's gallery from its `images` array; image
+        // entries use the `size` key (3D files use `bytes`).
+        body["images"] = serde_json::Value::Array(
+            prepared_images
+                .iter()
+                .map(|(filename, bytes)| {
+                    serde_json::json!({ "filename": filename, "size": bytes.len() as u64 })
+                })
+                .collect(),
+        );
+    }
     if let Some(cat) = &input.category {
         body["category"] = serde_json::Value::String(cat.clone());
     }
@@ -308,11 +343,59 @@ pub async fn create_object_with_file(
         }
     }
 
+    // Step 2b — upload each preview image's bytes via the image endpoint.
+    // All best-effort: a missing picture degrades the listing but never
+    // blocks the publish (the 3D files are what matter).
+    let returned_images: &[CreateObjectFileEntry] =
+        create_parsed.images.as_deref().unwrap_or(&[]);
+    for (idx, (filename, bytes)) in prepared_images.into_iter().enumerate() {
+        let Some(upload_id) = returned_images.get(idx).and_then(|f| f.upload_id.clone())
+        else {
+            tracing::warn!("mmf create-object: missing images[{idx}].upload_id");
+            dropped_extras.push(filename);
+            continue;
+        };
+        let lower = filename.to_lowercase();
+        let content_type = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if lower.ends_with(".gif") {
+            "image/gif"
+        } else {
+            "image/png"
+        };
+        let upload_resp = client
+            .post(format!("{API_BASE}/image"))
+            .query(&[("upload_id", upload_id.as_str())])
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Content-Type", content_type)
+            .header("Content-Disposition", format!("filename=\"{filename}\""))
+            .header("User-Agent", UA)
+            .body(bytes)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await;
+        match upload_resp {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
+                tracing::warn!(
+                    "mmf image upload failed (file={filename}): HTTP {status}: {text}"
+                );
+                dropped_extras.push(filename);
+            }
+            Err(e) => {
+                tracing::warn!("mmf image upload failed (file={filename}): {e}");
+                dropped_extras.push(filename);
+            }
+        }
+    }
+
     let warning = if dropped_extras.is_empty() {
         None
     } else {
         Some(format!(
-            "{} extra file(s) failed to upload: {}",
+            "{} extra file/image(s) failed to upload: {}",
             dropped_extras.len(),
             dropped_extras.join(", ")
         ))

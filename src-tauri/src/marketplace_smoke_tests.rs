@@ -201,7 +201,45 @@ async fn mmf_publishes_real_object() {
         matches!(&row, Some((s, _)) if s == "published"),
         "myminifactory publish did not succeed: row={row:?}, events={events:?}"
     );
-    println!("myminifactory OK: {row:?}");
+
+    // Verify the object actually carries preview images — MMF renders no
+    // gallery from the 3D files alone, so a publish with zero images shows
+    // a pictureless listing. Poll the object: MMF may take a moment to
+    // ingest the uploaded image.
+    let object_id: String = sqlx::query_scalar(
+        "SELECT mmf_object_id FROM mmf_publishes WHERE local_listing_id = ?",
+    )
+    .bind(lid)
+    .fetch_one(&pool)
+    .await
+    .expect("mmf_object_id not recorded");
+    let key = crate::secrets::get("mmf_api_key").ok().flatten().unwrap_or_default();
+    let client = reqwest::Client::new();
+    let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+              (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+    let mut image_count = 0usize;
+    for _ in 0..12 {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let url =
+            format!("https://www.myminifactory.com/api/v2/objects/{object_id}?key={key}");
+        if let Ok(resp) = client.get(&url).header("User-Agent", ua).send().await {
+            if let Ok(v) = resp.json::<serde_json::Value>().await {
+                image_count = v
+                    .get("images")
+                    .and_then(|i| i.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                if image_count > 0 {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        image_count > 0,
+        "mmf object {object_id} published with 0 images — the listing has no picture"
+    );
+    println!("myminifactory OK: object {object_id}, {image_count} images");
 }
 
 #[tokio::test]

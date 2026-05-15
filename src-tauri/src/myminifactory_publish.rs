@@ -156,8 +156,28 @@ pub async fn handle_publisher_complete_mmf(
         upload_paths.push(p.as_path());
     }
 
+    // Preview images — MMF renders the object's gallery from these. Without
+    // them the listing has no picture at all (the API exposes no auto-render
+    // from the 3D files). Textured hero first, then clay angles.
+    let image_pathbufs: Vec<PathBuf> = publisher_result
+        .get("preview_pngs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .collect()
+        })
+        .unwrap_or_default();
+    let image_paths: Vec<&Path> = image_pathbufs.iter().map(|p| p.as_path()).collect();
+
     let now = chrono::Utc::now().timestamp();
-    match myminifactory::create_object_with_file(&client, &access_token, &input, &upload_paths).await {
+    match myminifactory::create_object_with_file(
+        &client, &access_token, &input, &upload_paths, &image_paths,
+    )
+    .await
+    {
         Ok(res) => {
             if let Err(e) = sqlx::query(
                 "INSERT INTO mmf_publishes \
