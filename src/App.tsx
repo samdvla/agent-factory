@@ -15,8 +15,14 @@ import { useDemoFloor } from "./hooks/useDemoFloor";
 import { useFactoryStore } from "./factory/state/factoryStore";
 import { mapAppThemeToIso } from "./factory/svg/iso/themes";
 import { api } from "./api";
+import { installWindowGlobals as installRemoteGlobals } from "./remote";
 import "./factory/ui/factory-floor.css";
 import "./App.css";
+
+// Expose remote-mode helpers (window.__af_remote.*) for devtools wiring
+// before a Settings UI lands. Side-effect-only; safe in laptop mode where
+// no localStorage config means every call returns null / throws.
+installRemoteGlobals();
 
 const RAIL_STORAGE_KEY = "agentFactory.rail.collapsed";
 

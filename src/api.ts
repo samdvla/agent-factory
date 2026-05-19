@@ -1,4 +1,28 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isRemoteMode, remoteFetch, remotePost } from "./remote";
+
+/**
+ * When the user has configured a remote mini (window.__af_remote.set or
+ * Settings → Remote factory), read-only endpoints route through HTTP
+ * instead of Tauri's local invoke. Mutating commands still invoke locally
+ * for now — they ship in a later phase 1 slice once a UI confirmation
+ * gate is in place so the laptop can't accidentally double-publish.
+ */
+function remoteOr<T>(path: string, local: () => Promise<T>): Promise<T> {
+  return isRemoteMode() ? remoteFetch<T>(path) : local();
+}
+
+/**
+ * POST variant for mutating actions: when in remote mode, send a JSON body
+ * to the mini's mutating endpoint; otherwise run the local Tauri invoke.
+ */
+function remoteOrPost<T>(
+  path: string,
+  body: unknown,
+  local: () => Promise<T>
+): Promise<T> {
+  return isRemoteMode() ? remotePost<T>(path, body) : local();
+}
 
 export type StatusReport = { running: boolean; project_id: number };
 
@@ -171,17 +195,33 @@ export interface TodayStats {
 }
 
 export const api = {
-  status: () => invoke<StatusReport>("cmd_status"),
-  start: () => invoke<void>("cmd_start_supervisor"),
-  stop: () => invoke<void>("cmd_stop_supervisor"),
+  status: () =>
+    remoteOr<StatusReport>("/api/status", () => invoke<StatusReport>("cmd_status")),
+  start: () =>
+    remoteOrPost<void>("/api/supervisor/start", undefined, () =>
+      invoke<void>("cmd_start_supervisor")
+    ),
+  stop: () =>
+    remoteOrPost<void>("/api/supervisor/stop", undefined, () =>
+      invoke<void>("cmd_stop_supervisor")
+    ),
   setSecret: (key: string, value: string) =>
-    invoke<void>("cmd_set_secret", { key, value }),
+    remoteOrPost<void>("/api/secrets/set", { key, value }, () =>
+      invoke<void>("cmd_set_secret", { key, value })
+    ),
   getSecret: (key: string) =>
-    invoke<string | null>("cmd_get_secret", { key }),
+    remoteOrPost<string | null>("/api/secrets/get", { key }, () =>
+      invoke<string | null>("cmd_get_secret", { key })
+    ),
   enqueue: (agentRole: string, payload: unknown) =>
-    invoke<number>("cmd_enqueue", { args: { agent_role: agentRole, payload } }),
+    remoteOrPost<number>(
+      "/api/enqueue",
+      { agent_role: agentRole, payload },
+      () => invoke<number>("cmd_enqueue", { args: { agent_role: agentRole, payload } })
+    ),
   etsyStartOAuth: () => invoke<OAuthInit>("cmd_etsy_start_oauth"),
-  etsyStatus: () => invoke<EtsyStatus>("cmd_etsy_status"),
+  etsyStatus: () =>
+    remoteOr<EtsyStatus>("/api/etsy/status", () => invoke<EtsyStatus>("cmd_etsy_status")),
   etsyLastError: () => invoke<string | null>("cmd_etsy_last_error"),
   etsyClearLastError: () => invoke<void>("cmd_etsy_clear_last_error"),
   etsyDisconnect: () => invoke<void>("cmd_etsy_disconnect"),
@@ -191,20 +231,37 @@ export const api = {
   etsySetListingCap: (cap: number) =>
     invoke<void>("cmd_etsy_set_listing_cap", { cap }),
   etsyGetListingCap: () => invoke<number>("cmd_etsy_get_listing_cap"),
-  etsyListPublishes: () => invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes"),
+  etsyListPublishes: () =>
+    remoteOr<EtsyPublishRow[]>("/api/etsy/publishes", () =>
+      invoke<EtsyPublishRow[]>("cmd_etsy_list_publishes")
+    ),
   etsyActivateListing: (localListingId: number) =>
-    invoke<ActivateResult>("cmd_etsy_activate_listing", {
-      localListingId,
-    }),
-  etsyKillSwitch: () => invoke<void>("cmd_etsy_kill_switch"),
+    remoteOrPost<ActivateResult>(
+      "/api/etsy/listings/activate",
+      { local_listing_id: localListingId },
+      () =>
+        invoke<ActivateResult>("cmd_etsy_activate_listing", {
+          localListingId,
+        })
+    ),
+  etsyKillSwitch: () =>
+    remoteOrPost<void>("/api/etsy/kill_switch", undefined, () =>
+      invoke<void>("cmd_etsy_kill_switch")
+    ),
   etsyResyncListings: () => invoke<EtsyResyncResult>("cmd_etsy_resync_listings"),
   resyncMarketplace: (marketplace: MarketplaceId): Promise<MarketplaceResyncStats> =>
     invoke("cmd_resync_marketplace", { marketplace }),
   resyncAllMarketplaces: (): Promise<ResyncAllResult> =>
     invoke("cmd_resync_all_marketplaces"),
   listRecentCycles: (limit?: number) =>
-    invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit }),
-  listWealth: () => invoke<AgentWealth[]>("cmd_list_wealth"),
+    remoteOr<CycleSummary[]>(
+      `/api/recent_cycles${limit ? `?limit=${limit}` : ""}`,
+      () => invoke<CycleSummary[]>("cmd_list_recent_cycles", { limit })
+    ),
+  listWealth: () =>
+    remoteOr<AgentWealth[]>("/api/wealth", () =>
+      invoke<AgentWealth[]>("cmd_list_wealth")
+    ),
   listPrompts: () => invoke<Record<string, PromptRow>>("cmd_list_prompts"),
   setPromptOverride: (role: string, system: string) =>
     invoke<void>("cmd_set_prompt_override", { args: { role, system } }),
@@ -213,61 +270,121 @@ export const api = {
   promptHistory: (role: string, limit?: number) =>
     invoke<PromptHistoryEntry[]>("cmd_prompt_history", { role, limit }),
   readAssetSvg: (listingId: number) =>
-    invoke<string | null>("cmd_read_asset_svg", { listingId }),
+    remoteOr<string | null>(
+      `/api/assets/listing_svg?listing_id=${listingId}`,
+      () => invoke<string | null>("cmd_read_asset_svg", { listingId })
+    ),
   etsyListingReviewInfo: (localListingId: number) =>
     invoke<ListingReviewInfo>("cmd_etsy_listing_review_info", {
       localListingId,
     }),
   etsyDiscardDraft: (localListingId: number) =>
-    invoke<void>("cmd_etsy_discard_draft", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/discard",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_discard_draft", { localListingId })
+    ),
   etsyRegenerateDraft: (localListingId: number) =>
-    invoke<void>("cmd_etsy_regenerate_draft", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/regenerate",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_regenerate_draft", { localListingId })
+    ),
   etsyRejectDraft: (localListingId: number, reason?: string | null) =>
-    invoke<void>("cmd_etsy_reject_draft", {
-      localListingId,
-      reason: reason ?? null,
-    }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/reject",
+      { local_listing_id: localListingId, reason: reason ?? null },
+      () =>
+        invoke<void>("cmd_etsy_reject_draft", {
+          localListingId,
+          reason: reason ?? null,
+        })
+    ),
   etsyRestoreRejected: (localListingId: number) =>
-    invoke<void>("cmd_etsy_restore_rejected", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/restore",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_restore_rejected", { localListingId })
+    ),
   etsyCancelRegeneration: (localListingId: number) =>
-    invoke<void>("cmd_etsy_cancel_regeneration", { localListingId }),
+    remoteOrPost<void>(
+      "/api/etsy/listings/cancel_regeneration",
+      { local_listing_id: localListingId },
+      () => invoke<void>("cmd_etsy_cancel_regeneration", { localListingId })
+    ),
   etsyListRejections: (limit?: number) =>
-    invoke<ListingRejectionRow[]>("cmd_etsy_list_rejections", { limit }),
-  budgetStatus: (): Promise<BudgetStatus> => invoke("cmd_budget_status"),
-  startSmokeTest: (): Promise<string> => invoke("cmd_start_smoke_test"),
-  resumeFromSmokeTest: (): Promise<void> => invoke("cmd_resume_from_smoke_test"),
+    remoteOr<ListingRejectionRow[]>(
+      `/api/etsy/rejections${limit ? `?limit=${limit}` : ""}`,
+      () => invoke<ListingRejectionRow[]>("cmd_etsy_list_rejections", { limit })
+    ),
+  budgetStatus: (): Promise<BudgetStatus> =>
+    remoteOr<BudgetStatus>("/api/budget", () => invoke("cmd_budget_status")),
+  startSmokeTest: (): Promise<string> =>
+    remoteOrPost<string>("/api/smoke_test/start", undefined, () =>
+      invoke("cmd_start_smoke_test")
+    ),
+  resumeFromSmokeTest: (): Promise<void> =>
+    remoteOrPost<void>("/api/smoke_test/resume", undefined, () =>
+      invoke("cmd_resume_from_smoke_test")
+    ),
   listRecentJobs: (opts?: {
     limit?: number;
     offset?: number;
     role?: string | null;
     sinceUnix?: number | null;
-  }): Promise<JobRow[]> =>
-    invoke("cmd_list_recent_jobs", {
-      limit: opts?.limit ?? 50,
-      offset: opts?.offset ?? 0,
-      role: opts?.role ?? null,
-      sinceUnix: opts?.sinceUnix ?? null,
-    }),
+  }): Promise<JobRow[]> => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts?.limit ?? 50));
+    params.set("offset", String(opts?.offset ?? 0));
+    if (opts?.role) params.set("role", opts.role);
+    if (opts?.sinceUnix != null) params.set("since_unix", String(opts.sinceUnix));
+    return remoteOr<JobRow[]>(`/api/recent_jobs?${params}`, () =>
+      invoke("cmd_list_recent_jobs", {
+        limit: opts?.limit ?? 50,
+        offset: opts?.offset ?? 0,
+        role: opts?.role ?? null,
+        sinceUnix: opts?.sinceUnix ?? null,
+      })
+    );
+  },
   countRecentJobs: (opts?: {
     role?: string | null;
     sinceUnix?: number | null;
-  }): Promise<number> =>
-    invoke("cmd_count_recent_jobs", {
-      role: opts?.role ?? null,
-      sinceUnix: opts?.sinceUnix ?? null,
-    }),
-  todayStats: (): Promise<TodayStats> => invoke("cmd_today_stats"),
+  }): Promise<number> => {
+    const params = new URLSearchParams();
+    if (opts?.role) params.set("role", opts.role);
+    if (opts?.sinceUnix != null) params.set("since_unix", String(opts.sinceUnix));
+    const qs = params.toString();
+    return remoteOr<number>(`/api/recent_jobs/count${qs ? `?${qs}` : ""}`, () =>
+      invoke("cmd_count_recent_jobs", {
+        role: opts?.role ?? null,
+        sinceUnix: opts?.sinceUnix ?? null,
+      })
+    );
+  },
+  todayStats: (): Promise<TodayStats> =>
+    remoteOr<TodayStats>("/api/today_stats", () => invoke("cmd_today_stats")),
   rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>
-    invoke<void>("cmd_rate_job", {
-      args: { job_id: jobId, rating, note: note ?? null },
-    }),
+    remoteOrPost<void>(
+      "/api/jobs/rate",
+      { job_id: jobId, rating, note: note ?? null },
+      () =>
+        invoke<void>("cmd_rate_job", {
+          args: { job_id: jobId, rating, note: note ?? null },
+        })
+    ),
   readJobSvg: (jobId: number): Promise<string | null> =>
-    invoke("cmd_read_job_svg", { jobId }),
+    remoteOr<string | null>(`/api/assets/job_svg?job_id=${jobId}`, () =>
+      invoke("cmd_read_job_svg", { jobId })
+    ),
   unratedJobCount: (sinceUnix: number): Promise<number> =>
-    invoke("cmd_unrated_job_count", { sinceUnix }),
+    remoteOr<number>(`/api/unrated_jobs_count?since_unix=${sinceUnix}`, () =>
+      invoke("cmd_unrated_job_count", { sinceUnix })
+    ),
   printifyVerify: (apiKey: string): Promise<PrintifyVerifyOk> =>
     invoke("cmd_printify_verify", { apiKey }),
-  printifyStatus: (): Promise<PrintifyStatus> => invoke("cmd_printify_status"),
+  printifyStatus: (): Promise<PrintifyStatus> =>
+    remoteOr<PrintifyStatus>("/api/printify/status", () => invoke("cmd_printify_status")),
   tripoVerify: (apiKey: string): Promise<TripoVerifyOk> =>
     invoke("cmd_tripo_verify", { apiKey }),
   tripoStatus: (): Promise<TripoStatus> => invoke("cmd_tripo_status"),
@@ -279,24 +396,31 @@ export const api = {
   googleStatus: (): Promise<GoogleAiStatus> => invoke("cmd_google_status"),
   cults3dVerify: (username: string, apiKey: string): Promise<Cults3dVerifyOk> =>
     invoke("cmd_cults3d_verify", { username, apiKey }),
-  cults3dStatus: (): Promise<Cults3dStatus> => invoke("cmd_cults3d_status"),
+  cults3dStatus: (): Promise<Cults3dStatus> =>
+    remoteOr<Cults3dStatus>("/api/cults3d/status", () => invoke("cmd_cults3d_status")),
   cults3dSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_cults3d_set_enabled", { enabled }),
   cults3dListPublishes: (limit?: number): Promise<Cults3dPublishRow[]> =>
-    invoke("cmd_cults3d_list_publishes", { limit }),
+    remoteOr<Cults3dPublishRow[]>("/api/cults3d/publishes", () =>
+      invoke("cmd_cults3d_list_publishes", { limit })
+    ),
   pinterestVerify: (
     accessToken: string,
     boardId: string,
   ): Promise<PinterestVerifyOk> =>
     invoke("cmd_pinterest_verify", { accessToken, boardId }),
-  pinterestStatus: (): Promise<PinterestStatus> => invoke("cmd_pinterest_status"),
+  pinterestStatus: (): Promise<PinterestStatus> =>
+    remoteOr<PinterestStatus>("/api/pinterest/status", () => invoke("cmd_pinterest_status")),
   pinterestSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_pinterest_set_enabled", { enabled }),
   pinterestSetDailyCap: (cap: number): Promise<void> =>
     invoke("cmd_pinterest_set_daily_cap", { cap }),
   pinterestDisconnect: (): Promise<void> => invoke("cmd_pinterest_disconnect"),
   pinterestListPins: (limit?: number): Promise<PinterestPinRow[]> =>
-    invoke("cmd_pinterest_list_pins", { limit }),
+    remoteOr<PinterestPinRow[]>(
+      `/api/pinterest/pins${limit ? `?limit=${limit}` : ""}`,
+      () => invoke("cmd_pinterest_list_pins", { limit })
+    ),
   telegramStatus: (): Promise<TelegramStatus> => invoke("cmd_telegram_status"),
   telegramVerify: (botToken: string, chatId: number): Promise<TelegramVerifyOk> =>
     invoke("cmd_telegram_verify", { botToken, chatId }),
@@ -305,25 +429,32 @@ export const api = {
   telegramDisconnect: (): Promise<void> => invoke("cmd_telegram_disconnect"),
   sketchfabVerify: (apiToken: string): Promise<SketchfabVerifyOk> =>
     invoke("cmd_sketchfab_verify", { apiToken }),
-  sketchfabStatus: (): Promise<SketchfabStatus> => invoke("cmd_sketchfab_status"),
+  sketchfabStatus: (): Promise<SketchfabStatus> =>
+    remoteOr<SketchfabStatus>("/api/sketchfab/status", () => invoke("cmd_sketchfab_status")),
   sketchfabSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_sketchfab_set_enabled", { enabled }),
   sketchfabSetSellOnStore: (sell: boolean): Promise<void> =>
     invoke("cmd_sketchfab_set_sell_on_store", { sell }),
   sketchfabListPublishes: (limit?: number): Promise<SketchfabPublishRow[]> =>
-    invoke("cmd_sketchfab_list_publishes", { limit }),
+    remoteOr<SketchfabPublishRow[]>("/api/sketchfab/publishes", () =>
+      invoke("cmd_sketchfab_list_publishes", { limit })
+    ),
   gumroadVerify: (accessToken: string): Promise<GumroadVerifyOk> =>
     invoke("cmd_gumroad_verify", { accessToken }),
-  gumroadStatus: (): Promise<GumroadStatus> => invoke("cmd_gumroad_status"),
+  gumroadStatus: (): Promise<GumroadStatus> =>
+    remoteOr<GumroadStatus>("/api/gumroad/status", () => invoke("cmd_gumroad_status")),
   gumroadSetEnabled: (enabled: boolean): Promise<void> =>
     invoke("cmd_gumroad_set_enabled", { enabled }),
   gumroadListPublishes: (limit?: number): Promise<GumroadPublishRow[]> =>
-    invoke("cmd_gumroad_list_publishes", { limit }),
+    remoteOr<GumroadPublishRow[]>("/api/gumroad/publishes", () =>
+      invoke("cmd_gumroad_list_publishes", { limit })
+    ),
   gumroadBackfillFiles: (): Promise<GumroadBackfillResult> =>
     invoke("cmd_gumroad_backfill_files"),
   mmfVerify: (apiKey: string): Promise<MmfVerifyOk> =>
     invoke("cmd_mmf_verify", { apiKey }),
-  mmfStatus: (): Promise<MmfStatus> => invoke("cmd_mmf_status"),
+  mmfStatus: (): Promise<MmfStatus> =>
+    remoteOr<MmfStatus>("/api/mmf/status", () => invoke("cmd_mmf_status")),
   mmfStartOAuth: (clientId: string, clientSecret: string): Promise<OAuthInit> =>
     invoke("cmd_mmf_start_oauth", { clientId, clientSecret }),
   mmfDisconnect: (): Promise<void> => invoke("cmd_mmf_disconnect"),
@@ -334,7 +465,9 @@ export const api = {
   mmfSetSellPaid: (sell: boolean): Promise<void> =>
     invoke("cmd_mmf_set_sell_paid", { sell }),
   mmfListPublishes: (limit?: number): Promise<MmfPublishRow[]> =>
-    invoke("cmd_mmf_list_publishes", { limit }),
+    remoteOr<MmfPublishRow[]>("/api/mmf/publishes", () =>
+      invoke("cmd_mmf_list_publishes", { limit })
+    ),
   youtubeVerify: (apiKey: string): Promise<YoutubeVerifyOk> =>
     invoke("cmd_youtube_verify", { apiKey }),
   youtubeStatus: (): Promise<YoutubeStatus> => invoke("cmd_youtube_status"),
@@ -347,9 +480,13 @@ export const api = {
   ): Promise<AssetHostVerifyOk> =>
     invoke("cmd_github_asset_host_verify", { repo, token }),
   readJobAsset: (jobId: number): Promise<JobAssetInfo> =>
-    invoke("cmd_read_job_asset", { jobId }),
+    remoteOr<JobAssetInfo>(`/api/assets/job?job_id=${jobId}`, () =>
+      invoke("cmd_read_job_asset", { jobId })
+    ),
   readListingAsset: (listingId: number): Promise<JobAssetInfo> =>
-    invoke("cmd_read_listing_asset", { listingId }),
+    remoteOr<JobAssetInfo>(`/api/assets/listing?listing_id=${listingId}`, () =>
+      invoke("cmd_read_listing_asset", { listingId })
+    ),
   getShopFocus: (): Promise<{ value: string }> => invoke("cmd_get_shop_focus"),
   setShopFocus: (value: string): Promise<void> =>
     invoke("cmd_set_shop_focus", { value }),
@@ -368,17 +505,28 @@ export const api = {
     content: string;
     importance?: AgentMessageImportance | null;
     job_id?: number | null;
-  }): Promise<number> => invoke("cmd_post_agent_message", { args: msg }),
+  }): Promise<number> =>
+    remoteOrPost<number>("/api/agent_messages/post", msg, () =>
+      invoke("cmd_post_agent_message", { args: msg })
+    ),
   listAgentMessages: (opts?: {
     limit?: number;
     role?: string | null;
-  }): Promise<AgentMessageRow[]> =>
-    invoke("cmd_list_agent_messages", {
-      limit: opts?.limit ?? 100,
-      role: opts?.role ?? null,
-    }),
+  }): Promise<AgentMessageRow[]> => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts?.limit ?? 100));
+    if (opts?.role) params.set("role", opts.role);
+    return remoteOr<AgentMessageRow[]>(`/api/agent_messages?${params}`, () =>
+      invoke("cmd_list_agent_messages", {
+        limit: opts?.limit ?? 100,
+        role: opts?.role ?? null,
+      })
+    );
+  },
   agentMessagesSince: (sinceUnix: number): Promise<number> =>
-    invoke("cmd_agent_messages_since", { sinceUnix }),
+    remoteOr<number>(`/api/agent_messages_since?since_unix=${sinceUnix}`, () =>
+      invoke("cmd_agent_messages_since", { sinceUnix })
+    ),
   chatWithAgent: (
     agentId: string,
     history: ChatTurn[],

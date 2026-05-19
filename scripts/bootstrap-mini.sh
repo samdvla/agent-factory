@@ -72,6 +72,20 @@ for d in workers/*/; do
   fi
 done
 
+# --- system-python worker deps ---
+# The Rust supervisor spawns `python3.11 -m <role>` directly (system PATH)
+# rather than activating each worker's uv venv. So the union of every
+# worker's runtime deps also needs to live in the system Python. Without
+# this, designer aborts every cycle on `trimesh not installed` and the
+# mini burns Anthropic + Meshy spend on jobs that can't possibly finish.
+log "installing union of worker runtime deps into system python3.11"
+python3.11 -m pip install --break-system-packages --quiet \
+  "trimesh>=4.0" \
+  "numpy>=1.26" \
+  "Pillow>=10.0" \
+  "fast_simplification>=0.1" \
+  "requests>=2.31"
+
 # --- log + app-support dirs ---
 mkdir -p "$HOME/Library/Logs/agent-factory"
 mkdir -p "$HOME/Library/Application Support/com.agentfactory.app"

@@ -1004,6 +1004,15 @@ pub struct EtsyPublishRow {
 pub async fn cmd_etsy_list_publishes(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<EtsyPublishRow>, String> {
+    etsy_list_publishes_with(&state.pool, state.project_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server. Tauri command above
+/// thin-wraps this.
+pub async fn etsy_list_publishes_with(
+    pool: &sqlx::SqlitePool,
+    pid: i64,
+) -> Result<Vec<EtsyPublishRow>, String> {
     let rows = sqlx::query_as::<
         _,
         (i64, i64, i64, String, String, Option<String>, i64, Option<i64>, Option<i64>),
@@ -1011,8 +1020,8 @@ pub async fn cmd_etsy_list_publishes(
         "SELECT id, local_listing_id, etsy_listing_id, state, title, url, published_at, activated_at, parent_listing_id \
          FROM etsy_publishes WHERE project_id = ? ORDER BY id DESC LIMIT 50",
     )
-    .bind(state.project_id)
-    .fetch_all(&state.pool)
+    .bind(pid)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
     Ok(rows
@@ -2191,11 +2200,20 @@ pub async fn cmd_list_recent_jobs(
     role: Option<String>,
     since_unix: Option<i64>,
 ) -> Result<Vec<JobRow>, String> {
+    list_recent_jobs_with(&state.pool, state.project_id, limit, offset, role, since_unix).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn list_recent_jobs_with(
+    pool: &SqlitePool,
+    project_id: i64,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    role: Option<String>,
+    since_unix: Option<i64>,
+) -> Result<Vec<JobRow>, String> {
     let limit = limit.unwrap_or(50).clamp(1, 500);
     let offset = offset.unwrap_or(0).max(0);
-    // Build the query with optional WHERE filters. We always restrict to
-    // terminal states so the feed only shows things the operator can
-    // meaningfully rate.
     let mut sql = String::from(
         "SELECT j.id, j.agent_role, j.status, j.payload_json, j.result_json, j.error, \
          j.started_at, j.finished_at, j.scheduled_at, \
@@ -2229,7 +2247,7 @@ pub async fn cmd_list_recent_jobs(
             Option<i64>,
         ),
     >(&sql)
-    .bind(state.project_id);
+    .bind(project_id);
     if let Some(r) = role.as_ref() {
         q = q.bind(r);
     }
@@ -2239,7 +2257,7 @@ pub async fn cmd_list_recent_jobs(
     q = q.bind(limit);
     q = q.bind(offset);
 
-    let rows = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
+    let rows = q.fetch_all(pool).await.map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
         .map(|r| JobRow {
@@ -2340,8 +2358,16 @@ pub struct TodayStats {
 /// historical rows.
 #[tauri::command]
 pub async fn cmd_today_stats(state: State<'_, Arc<AppState>>) -> Result<TodayStats, String> {
-    let pool = &state.pool;
-    let pid = state.project_id;
+    today_stats_with(&state.pool, state.project_id).await
+}
+
+/// Same body as cmd_today_stats but callable with a raw pool + project_id.
+/// Used by the HTTP API server (api_server.rs) to mirror the mini's state
+/// to a remote laptop client. Tauri command thin-wraps this.
+pub async fn today_stats_with(
+    pool: &sqlx::SqlitePool,
+    pid: i64,
+) -> Result<TodayStats, String> {
 
     // Budget: sum today's budget_ledger rows. Authoritative source — the
     // budget cap logic also reads from here, so they stay in sync.
@@ -2719,12 +2745,21 @@ pub async fn cmd_read_job_asset(
     state: State<'_, Arc<AppState>>,
     job_id: i64,
 ) -> Result<JobAssetInfo, String> {
+    read_job_asset_with(&state.pool, state.project_id, job_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn read_job_asset_with(
+    pool: &SqlitePool,
+    project_id: i64,
+    job_id: i64,
+) -> Result<JobAssetInfo, String> {
     let row: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
     )
     .bind(job_id)
-    .bind(state.project_id)
-    .fetch_optional(&state.pool)
+    .bind(project_id)
+    .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
     let mut info = JobAssetInfo {
@@ -2934,12 +2969,21 @@ pub async fn cmd_read_job_svg(
     state: State<'_, Arc<AppState>>,
     job_id: i64,
 ) -> Result<Option<String>, String> {
+    read_job_svg_with(&state.pool, state.project_id, job_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn read_job_svg_with(
+    pool: &SqlitePool,
+    project_id: i64,
+    job_id: i64,
+) -> Result<Option<String>, String> {
     let row: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT result_json FROM jobs WHERE id = ? AND project_id = ?",
     )
     .bind(job_id)
-    .bind(state.project_id)
-    .fetch_optional(&state.pool)
+    .bind(project_id)
+    .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
     let Some((Some(result_json),)) = row else { return Ok(None) };

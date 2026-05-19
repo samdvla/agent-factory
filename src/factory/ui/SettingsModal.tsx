@@ -6,6 +6,12 @@ import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/useP
 import { useFactoryStore } from "../state/factoryStore";
 import { ISO_THEMES, ISO_THEME_NAMES, mapAppThemeToIso } from "../svg/iso/themes";
 import type { IsoThemeName } from "../state/types";
+import {
+  getRemoteConfig,
+  setRemoteConfig,
+  remoteHealthCheck,
+  type RemoteConfig,
+} from "../../remote";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                                */
@@ -314,6 +320,224 @@ function getCurrentTheme(): ThemeId {
   } catch {}
   return "claude";
 }
+
+/* ------------------------------------------------------------------ */
+/*  Remote factory (mini server) — phase 1 client mode                   */
+/* ------------------------------------------------------------------ */
+
+function RemoteFactorySection() {
+  const initial = getRemoteConfig();
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [token, setToken] = useState(initial?.token ?? "");
+  const [showToken, setShowToken] = useState(false);
+  const [testState, setTestState] =
+    useState<"idle" | "testing" | "ok" | "fail">("idle");
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  const isActive = !!initial && !!url && !!token;
+
+  const save = (cfg: RemoteConfig | null) => {
+    setRemoteConfig(cfg);
+    // Force the laptop to pick up the new mode (event subscription routes
+    // through Tauri vs SSE at mount time; reload re-runs the hook).
+    window.location.reload();
+  };
+
+  const onTest = async () => {
+    if (!url) return;
+    setTestState("testing");
+    setTestMsg(null);
+    try {
+      const cleanUrl = url.replace(/\/+$/, "");
+      // 1. /healthz (no auth)
+      const h = await fetch(cleanUrl + "/healthz");
+      if (!h.ok) throw new Error(`/healthz returned ${h.status}`);
+      const txt = (await h.text()).trim();
+      if (txt !== "ok") throw new Error(`/healthz body: ${txt}`);
+      // 2. /api/status (auth)
+      if (!token) {
+        setTestState("ok");
+        setTestMsg("Reachable. Add a token to verify auth.");
+        return;
+      }
+      const s = await fetch(cleanUrl + "/api/status", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (s.status === 401) throw new Error("auth failed (401)");
+      if (!s.ok) throw new Error(`/api/status returned ${s.status}`);
+      const data = (await s.json()) as { running: boolean; project_id: number };
+      setTestState("ok");
+      setTestMsg(
+        `Connected · supervisor ${data.running ? "running" : "idle"} · project ${data.project_id}`
+      );
+    } catch (e) {
+      setTestState("fail");
+      setTestMsg(String((e as Error)?.message ?? e));
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Remote factory (mini server)</div>
+      <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0 12px" }}>
+        Point this UI at a remote agent-factory mini. When set, status,
+        revenue, recent cycles, listings, and the live agent event stream
+        all mirror the mini. Leave blank to keep using the local app.
+      </p>
+
+      <label
+        style={{ display: "block", fontSize: 11, opacity: 0.75, margin: "4px 0 4px" }}
+      >
+        Server URL
+      </label>
+      <input
+        type="text"
+        spellCheck={false}
+        placeholder="http://100.110.160.8:7420"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        style={{
+          width: "100%",
+          padding: "6px 8px",
+          fontSize: 12,
+          fontFamily: "ui-monospace, monospace",
+          background: "rgba(0,0,0,0.25)",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 4,
+          color: "#e8e8e8",
+        }}
+      />
+
+      <label
+        style={{ display: "block", fontSize: 11, opacity: 0.75, margin: "10px 0 4px" }}
+      >
+        Bearer token
+      </label>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          type={showToken ? "text" : "password"}
+          spellCheck={false}
+          placeholder="64-char hex from mini's secrets.json"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          style={{
+            flex: 1,
+            padding: "6px 8px",
+            fontSize: 12,
+            fontFamily: "ui-monospace, monospace",
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 4,
+            color: "#e8e8e8",
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => setShowToken((v) => !v)}
+          style={{
+            padding: "6px 10px",
+            fontSize: 11,
+            background: "rgba(255,255,255,0.06)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 4,
+            color: "#ccc",
+            cursor: "pointer",
+          }}
+        >
+          {showToken ? "Hide" : "Show"}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={onTest}
+          disabled={!url || testState === "testing"}
+          style={{
+            padding: "6px 12px",
+            fontSize: 12,
+            background: "rgba(80,180,255,0.18)",
+            border: "1px solid rgba(80,180,255,0.36)",
+            borderRadius: 4,
+            color: "#9ad0ff",
+            cursor: url && testState !== "testing" ? "pointer" : "not-allowed",
+          }}
+        >
+          {testState === "testing" ? "Testing…" : "Test connection"}
+        </button>
+        <button
+          type="button"
+          onClick={() => save({ url: url.trim(), token: token.trim() })}
+          disabled={!url || !token}
+          style={{
+            padding: "6px 12px",
+            fontSize: 12,
+            background: "rgba(120,220,140,0.18)",
+            border: "1px solid rgba(120,220,140,0.36)",
+            borderRadius: 4,
+            color: "#a8e8b6",
+            cursor: url && token ? "pointer" : "not-allowed",
+          }}
+        >
+          Save + connect (reload)
+        </button>
+        {isActive && (
+          <button
+            type="button"
+            onClick={() => save(null)}
+            style={{
+              padding: "6px 12px",
+              fontSize: 12,
+              background: "rgba(255,140,140,0.14)",
+              border: "1px solid rgba(255,140,140,0.36)",
+              borderRadius: 4,
+              color: "#ffb0b0",
+              cursor: "pointer",
+            }}
+          >
+            Disconnect (reload)
+          </button>
+        )}
+      </div>
+
+      {testMsg && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "6px 10px",
+            fontSize: 11,
+            background:
+              testState === "ok"
+                ? "rgba(120,220,140,0.12)"
+                : testState === "fail"
+                ? "rgba(255,140,140,0.12)"
+                : "rgba(255,255,255,0.06)",
+            border: `1px solid ${
+              testState === "ok"
+                ? "rgba(120,220,140,0.32)"
+                : testState === "fail"
+                ? "rgba(255,140,140,0.32)"
+                : "rgba(255,255,255,0.12)"
+            }`,
+            borderRadius: 4,
+            color: testState === "fail" ? "#ffb0b0" : "#e8e8e8",
+          }}
+        >
+          {testMsg}
+        </div>
+      )}
+
+      {isActive && (
+        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8 }}>
+          Currently connected to: <code>{initial?.url}</code>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Quiet the unused-import warning when remoteHealthCheck isn't called above.
+void remoteHealthCheck;
 
 function ThemeSection() {
   const [active, setActive] = useState<ThemeId>(getCurrentTheme);
@@ -3348,6 +3572,7 @@ export default function SettingsModal({
           <div className="settings-pane" key={activeTab}>
 
           {activeTab === "account" && <>
+          <RemoteFactorySection />
           <ThemeSection />
           <IsoThemeSection />
 
