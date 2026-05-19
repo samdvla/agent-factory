@@ -450,14 +450,17 @@ pub async fn activate_listing(
     );
     let access_token = etsy::ensure_fresh_token(client).await?;
     let params = [("state", "active")];
+    // Etsy v3 `updateListing` is PATCH. The old PUT form was deprecated and
+    // has since been removed — a PUT to this path matches no route and Etsy
+    // returns 404 "Resource not found", which is why activation never worked.
     let resp = client
-        .put(&url)
+        .patch(&url)
         .bearer_auth(access_token)
         .header("x-api-key", etsy::api_key_header()?)
         .form(&params)
         .send()
         .await
-        .context("activate listing PUT failed")?;
+        .context("activate listing PATCH failed")?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
