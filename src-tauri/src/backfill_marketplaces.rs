@@ -109,11 +109,19 @@ async fn backfill_all_marketplaces() {
     ];
 
     let mut counts: HashMap<&str, (u32, u32, u32)> = HashMap::new(); // ok, fail, skip
+    // Gumroad hard-caps product creation at 10/day. Once we hit it, stop
+    // attempting Gumroad for the rest of this run — otherwise every model
+    // wastes a full STL+GLB upload before create-product fails. Re-running
+    // the backfill on a later day picks up where Gumroad left off.
+    let mut gumroad_capped = false;
 
     for (i, (lid, mut result)) in models.into_iter().enumerate() {
         // Already on every marketplace? Skip the whole model up front.
         let mut pending = Vec::new();
         for (mp, table) in &markets {
+            if *mp == "gumroad" && gumroad_capped {
+                continue;
+            }
             if already_published(&pool, table, lid).await {
                 counts.entry(mp).or_default().2 += 1;
             } else {
@@ -230,6 +238,24 @@ async fn backfill_all_marketplaces() {
             counts.entry(mp).or_default().0 += if ok { 1 } else { 0 };
             counts.entry(mp).or_default().1 += if ok { 0 } else { 1 };
             println!("    {mp}: {}", if state.is_empty() { "no row".into() } else { state.clone() });
+            // Detect Gumroad's 10-products/day cap and stop attempting it.
+            if mp == "gumroad" && !ok {
+                let err: Option<String> = sqlx::query_scalar(
+                    "SELECT error FROM gumroad_publishes WHERE local_listing_id = ? \
+                     ORDER BY id DESC LIMIT 1",
+                )
+                .bind(lid)
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None);
+                if err.map(|e| e.contains("per day")).unwrap_or(false) {
+                    gumroad_capped = true;
+                    println!(
+                        "    (Gumroad's 10/day cap is spent — skipping Gumroad for \
+                         the rest of this run; re-run tomorrow for the next 10)"
+                    );
+                }
+            }
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)

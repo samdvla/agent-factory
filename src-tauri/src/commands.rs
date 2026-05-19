@@ -26,6 +26,20 @@ fn workers_root_path() -> PathBuf {
     cwd.join("workers")
 }
 
+/// Absolute path to a worker's uv-managed virtualenv interpreter
+/// (`workers/<dir>/.venv`). Workers are spawned through their own venv
+/// rather than a system Python, so a fresh clone is portable: it only
+/// needs `uv` + `uv sync` (see `scripts/setup.sh`), not a specific
+/// Python version with every worker dependency installed globally.
+fn worker_python(workers_root: &std::path::Path, worker_dir: &str) -> PathBuf {
+    let venv = workers_root.join(worker_dir).join(".venv");
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
 pub struct AppState {
     pub pool: SqlitePool,
     pub bus: EventBus,
@@ -213,7 +227,7 @@ pub async fn cmd_printify_verify(api_key: String) -> Result<PrintifyVerifyOk, St
         .await
         .map_err(|e| format!("Printify verify failed: {e}"))?;
     if shops.is_empty() {
-        return Err("Printify account has no connected shops — connect SabiWabiGifts in the Printify dashboard first.".to_string());
+        return Err("Printify account has no connected shops — connect your Etsy shop in the Printify dashboard first.".to_string());
     }
     let etsy = printify::pick_etsy_shop(&shops)
         .ok_or_else(|| format!(
@@ -680,7 +694,9 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
             env.push(higgsfield_env.clone());
             supervisor::AgentSpec {
                 role: role.into(),
-                program: "python3.11".into(),
+                program: worker_python(&workers_root, worker_dir)
+                    .to_string_lossy()
+                    .into_owned(),
                 args: vec!["-m".into(), role.into()],
                 env,
             }
@@ -698,7 +714,9 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
             }
             supervisor::AgentSpec {
                 role: "hello".into(),
-                program: "python3.11".into(),
+                program: worker_python(&workers_root, "hello")
+                    .to_string_lossy()
+                    .into_owned(),
                 args: vec!["-m".into(), "hello".into()],
                 env,
             }
@@ -945,6 +963,28 @@ pub async fn cmd_etsy_get_listing_cap() -> Result<i64, String> {
         .map_err(|e| e.to_string())?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(etsy_publish::DEFAULT_DAILY_CAP))
+}
+
+/// Push the shop title and/or announcement to the live Etsy shop. Pass `None`
+/// for a field to leave it unchanged. Etsy's API cannot set the shop icon,
+/// banner, or About section — those are web-UI only (see `branding/README.md`).
+/// Needs a token with `shops_w`; reconnect Etsy once if this 403s on scope.
+#[tauri::command]
+pub async fn cmd_etsy_update_shop_profile(
+    title: Option<String>,
+    announcement: Option<String>,
+) -> Result<(), String> {
+    let status = etsy::load_status();
+    if !status.connected {
+        return Err("Etsy not connected".into());
+    }
+    let shop_id = status
+        .shop_id
+        .ok_or_else(|| "shop_id missing — reconnect Etsy".to_string())?;
+    let client = reqwest::Client::new();
+    etsy::update_shop(&client, shop_id, title.as_deref(), announcement.as_deref())
+        .await
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[derive(Serialize)]

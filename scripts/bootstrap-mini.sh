@@ -77,6 +77,30 @@ mkdir -p "$HOME/Library/Logs/agent-factory"
 mkdir -p "$HOME/Library/Application Support/com.agentfactory.app"
 mkdir -p "$HOME/Library/LaunchAgents"
 
+# --- harden for headless / always-on operation ---
+# A Mac mini "server" silently drops off the network if it sleeps or
+# reboots into a login screen — the failure we hit on 2026-05-18.
+# pmset needs sudo; if this runs non-interactively over ssh and sudo
+# wants a password, the step is skipped with a warning so the rest of
+# bootstrap still completes.
+log "Configuring power management for always-on operation"
+if sudo -n true 2>/dev/null; then
+  sudo pmset -a sleep 0 displaysleep 0 disksleep 0 womp 1 autorestart 1 powernap 0
+  log "pmset: sleep disabled, wake-on-network + auto-restart enabled"
+else
+  warn "Skipped pmset (needs sudo). Run this once, by hand, on the mini:"
+  warn "  sudo pmset -a sleep 0 displaysleep 0 disksleep 0 womp 1 autorestart 1 powernap 0"
+fi
+
+# These can't be scripted safely — do them once by hand on the mini:
+warn "Manual steps so the mini survives a reboot unattended:"
+warn "  1. System Settings > Users & Groups > enable Automatic login"
+warn "     (the LaunchAgent only starts inside a logged-in session)."
+warn "  2. Disable FileVault, OR rely on auto-login — FileVault halts"
+warn "     boot at the disk-unlock screen with no console attached."
+warn "  3. Tailscale admin console: disable key expiry for this node"
+warn "     so it doesn't silently deauthorize every ~180 days."
+
 # --- fetch Rust deps so the first build is faster ---
 log "cargo fetch (warming the registry)"
 ( cd src-tauri && cargo fetch )

@@ -64,7 +64,16 @@ def _retry_request(req: urllib.request.Request, timeout: int = 60, max_attempts:
                 print(f"[retry] URLError {e} attempt {attempt+1}/{max_attempts}; sleeping {delay}s", file=sys.stderr, flush=True)
                 _time.sleep(delay)
                 continue
-            raise
+            # Final attempt failed at the network layer (timeout, refused,
+            # DNS). The raw URLError str() — "<urlopen error [Errno 60]
+            # ...>" — means nothing to a user, so raise something actionable.
+            _host = getattr(req, "host", "") or "the Claude API"
+            raise ConnectionError(
+                f"couldn't reach the Claude API at {_host} after "
+                f"{max_attempts} tries ({e.reason}). Check your Anthropic API "
+                f"key and internet connection — and if you set an Anthropic "
+                f"bridge in Settings, make sure that bridge host is online."
+            ) from e
     if last_exc:
         raise last_exc
     raise RuntimeError("retry: unreachable")

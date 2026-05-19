@@ -101,6 +101,31 @@ def test_retry_request_does_not_retry_on_4xx(monkeypatch):
     assert calls["n"] == 1, "must call urlopen exactly once for a 4xx"
 
 
+def test_retry_request_wraps_network_failure_in_friendly_error(monkeypatch):
+    """A persistent network-layer failure (timeout / connection refused) must
+    surface as a ConnectionError with an actionable message — not the raw,
+    cryptic '<urlopen error [Errno 60] ...>' that means nothing to a user."""
+    from research.agent import _retry_request
+
+    def _always_times_out(req, timeout=60):
+        raise urllib.error.URLError(TimeoutError("[Errno 60] Operation timed out"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _always_times_out)
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda *_a, **_k: None)
+
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages")
+    try:
+        _retry_request(req, timeout=60)
+    except ConnectionError as e:
+        msg = str(e)
+        assert "couldn't reach the Claude API" in msg, msg
+        assert "api.anthropic.com" in msg, msg
+        assert "Anthropic API key" in msg, msg
+    else:
+        raise AssertionError("expected a friendly ConnectionError, not a raw URLError")
+
+
 def test_retry_request_handles_anthropic_529_overload(monkeypatch):
     """HTTP 529 = Anthropic load-shedding. Earlier we exhausted the 3-attempt
     fast schedule (~7s) inside a single overload event and failed real jobs.

@@ -199,6 +199,7 @@ pub fn run() {
             commands::cmd_etsy_get_enabled,
             commands::cmd_etsy_set_listing_cap,
             commands::cmd_etsy_get_listing_cap,
+            commands::cmd_etsy_update_shop_profile,
             commands::cmd_etsy_list_publishes,
             commands::cmd_etsy_activate_listing,
             commands::cmd_etsy_resync_listings,

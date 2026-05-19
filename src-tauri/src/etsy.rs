@@ -18,7 +18,11 @@ use sha2::{Digest, Sha256};
 use crate::secrets;
 
 pub const REDIRECT_URI: &str = "http://localhost:7330/callback";
-pub const SCOPES: &str = "listings_w listings_r transactions_r feedback_r email_r";
+// `shops_r shops_w` are needed by `update_shop` (the `updateShop` endpoint).
+// Tokens minted before these were added 403 with "lacks scope" — reconnecting
+// Etsy once re-mints the token with the wider grant.
+pub const SCOPES: &str =
+    "listings_w listings_r transactions_r feedback_r email_r shops_r shops_w";
 pub const AUTHORIZE_URL: &str = "https://www.etsy.com/oauth/connect";
 pub const TOKEN_URL: &str = "https://api.etsy.com/v3/public/oauth/token";
 pub const API_BASE: &str = "https://api.etsy.com/v3/application";
@@ -303,6 +307,11 @@ pub fn api_key_header() -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("no etsy_api_keystring stored"))?;
     let secret = secrets::get("etsy_shared_secret")?.unwrap_or_default();
     if secret.is_empty() {
+        tracing::warn!(
+            "etsy_shared_secret is not set — sending a keystring-only x-api-key. \
+             Etsy's listing / receipt / conversation endpoints reject this and \
+             will return 403. Set the shared secret in Settings → Etsy."
+        );
         Ok(keystring)
     } else {
         Ok(format!("{keystring}:{secret}"))
@@ -328,6 +337,60 @@ pub async fn ensure_fresh_token(client: &reqwest::Client) -> anyhow::Result<Stri
     let fresh = refresh(client, &keystring, &refresh_token, TOKEN_URL).await?;
     persist_tokens(&fresh)?;
     Ok(fresh.access_token)
+}
+
+/// Push the shop `title` and/or `announcement` to the live Etsy shop via the
+/// `updateShop` endpoint (`PUT /shops/{shop_id}`).
+///
+/// Etsy's API only exposes these two text fields for shop branding — the shop
+/// icon, banner, and the About-section story/headline are web-UI-only and
+/// cannot be set programmatically (see `branding/README.md`).
+///
+/// Requires the OAuth token to carry `shops_r shops_w`. A token minted before
+/// those scopes were added 403s with "Access token lacks scope" — the shop
+/// must be reconnected once to re-mint the token.
+pub async fn update_shop(
+    client: &reqwest::Client,
+    shop_id: i64,
+    title: Option<&str>,
+    announcement: Option<&str>,
+) -> anyhow::Result<()> {
+    if title.is_none() && announcement.is_none() {
+        return Err(anyhow!("update_shop: nothing to update"));
+    }
+    if let Some(t) = title {
+        // Etsy caps the shop title at 55 characters — fail early with a clear
+        // message rather than surfacing Etsy's generic validation error.
+        if t.chars().count() > 55 {
+            return Err(anyhow!(
+                "shop title is {} chars; Etsy's limit is 55",
+                t.chars().count()
+            ));
+        }
+    }
+    let access_token = ensure_fresh_token(client).await?;
+    let mut params: Vec<(&str, &str)> = Vec::new();
+    if let Some(t) = title {
+        params.push(("title", t));
+    }
+    if let Some(a) = announcement {
+        params.push(("announcement", a));
+    }
+    let url = format!("{API_BASE}/shops/{shop_id}");
+    let resp = client
+        .put(&url)
+        .bearer_auth(access_token)
+        .header("x-api-key", api_key_header()?)
+        .form(&params)
+        .send()
+        .await
+        .context("updateShop PUT failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("updateShop HTTP {status}: {body}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
