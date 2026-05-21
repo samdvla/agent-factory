@@ -122,6 +122,11 @@ pub struct UploadInput {
     /// Whether downloadable in the viewer (free model). For Store models this
     /// is ignored; Store gates downloads behind purchase.
     pub is_downloadable: bool,
+    /// True for mature/NSFW listings. Sketchfab gates the model viewer behind
+    /// an age-confirmation prompt and excludes it from the safe-mode default
+    /// browse feed. Always false for our standard catalog; only set when the
+    /// research brief flagged mature_content.
+    pub is_age_restricted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -241,7 +246,8 @@ pub async fn upload_model(
             .text("tags", tags.join(" "))
             .text("isPublished", input.is_published.to_string())
             .text("isInspectable", "true".to_string())
-            .text("private", "false".to_string());
+            .text("private", "false".to_string())
+            .text("isAgeRestricted", input.is_age_restricted.to_string());
         if input.price_usd.is_none() {
             // Free listing — set CC license + downloadable flag.
             form = form
@@ -355,6 +361,149 @@ async fn create_store_product(
     let parsed: StoreProductResp =
         serde_json::from_str(&text).with_context(|| format!("parse store JSON: {text}"))?;
     Ok(parsed.uid)
+}
+
+// ─── Fab migration eligibility ───────────────────────────────────────────
+//
+// Fab's community-models migration tool only picks up Sketchfab models that
+// satisfy ALL four conditions at crawl time:
+//   1. isPublished == true
+//   2. private == false (i.e. publicly visible)
+//   3. isDownloadable == true (Fab needs the source file)
+//   4. license.slug == "by" (CC BY) or a Sketchfab Standard license
+//
+// Our upload payload sets all four, but Sketchfab can silently drop or
+// normalize fields during multipart ingestion (we already see this with the
+// banned-word filter). The helpers below GET the live model state, PATCH any
+// drift back to the migration-eligible target, and report what was healed.
+
+#[derive(Debug, Clone, Deserialize)]
+struct LicenseObj {
+    slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelGetResp {
+    #[serde(rename = "isPublished")]
+    is_published: Option<bool>,
+    #[serde(rename = "isDownloadable")]
+    is_downloadable: Option<bool>,
+    private: Option<bool>,
+    license: Option<LicenseObj>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EligibilityReport {
+    /// True when the live model already matched the migration target — no
+    /// PATCH was needed.
+    pub already_ok: bool,
+    /// Names of the fields we had to PATCH back to spec.
+    pub healed_fields: Vec<&'static str>,
+}
+
+/// GET the live state of the four Fab-migration-relevant fields, PATCH any
+/// drift to the eligible target (CC BY / public / published / downloadable),
+/// and return what was healed. Returns Err only if the GET or PATCH HTTP call
+/// fails — callers can treat this as best-effort.
+pub async fn ensure_migration_eligible(
+    client: &reqwest::Client,
+    creds: &Creds,
+    uid: &str,
+) -> Result<EligibilityReport> {
+    let resp = client
+        .get(format!("{API_BASE}/models/{uid}"))
+        .header("Authorization", creds.auth_header())
+        .header("User-Agent", UA)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .with_context(|| format!("sketchfab GET /models/{uid}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("sketchfab GET /models/{uid} HTTP {status}: {body}"));
+    }
+    let m: ModelGetResp = serde_json::from_str(&body)
+        .with_context(|| format!("parse model GET JSON: {body}"))?;
+
+    let pub_ok = m.is_published.unwrap_or(false);
+    let dl_ok = m.is_downloadable.unwrap_or(false);
+    let priv_now = m.private.unwrap_or(false);
+    let license_now = m.license.and_then(|l| l.slug);
+
+    let mut to_patch: Vec<(&'static str, String)> = Vec::new();
+    let mut healed: Vec<&'static str> = Vec::new();
+    if !pub_ok {
+        to_patch.push(("isPublished", "true".into()));
+        healed.push("isPublished");
+    }
+    if !dl_ok {
+        to_patch.push(("isDownloadable", "true".into()));
+        healed.push("isDownloadable");
+    }
+    if priv_now {
+        to_patch.push(("private", "false".into()));
+        healed.push("private");
+    }
+    if license_now.as_deref() != Some("by") {
+        to_patch.push(("license", "by".into()));
+        healed.push("license");
+    }
+
+    if !to_patch.is_empty() {
+        let mut form = reqwest::multipart::Form::new();
+        for (k, v) in &to_patch {
+            form = form.text(*k, v.clone());
+        }
+        let resp = client
+            .patch(format!("{API_BASE}/models/{uid}"))
+            .header("Authorization", creds.auth_header())
+            .header("User-Agent", UA)
+            .multipart(form)
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .with_context(|| format!("sketchfab PATCH /models/{uid}"))?;
+        let s = resp.status();
+        let resp_body = resp.text().await.unwrap_or_default();
+        if !s.is_success() {
+            return Err(anyhow!("sketchfab PATCH /models/{uid} HTTP {s}: {resp_body}"));
+        }
+    }
+
+    Ok(EligibilityReport {
+        already_ok: to_patch.is_empty(),
+        healed_fields: healed,
+    })
+}
+
+/// Flip a single model to view-only (isDownloadable=false). Used post-Fab-
+/// migration: once Fab has crawled the CC-BY downloadable model and pulled
+/// it onto the paid Fab listing, we revoke Sketchfab downloads so the free
+/// copy stops undercutting the paid version. The model stays viewable in
+/// the Sketchfab 3D viewer for discovery; only the Download button goes
+/// away. Reversible: re-running `ensure_migration_eligible` re-enables it.
+pub async fn revoke_download(
+    client: &reqwest::Client,
+    creds: &Creds,
+    uid: &str,
+) -> Result<()> {
+    let form = reqwest::multipart::Form::new().text("isDownloadable", "false");
+    let resp = client
+        .patch(format!("{API_BASE}/models/{uid}"))
+        .header("Authorization", creds.auth_header())
+        .header("User-Agent", UA)
+        .multipart(form)
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .with_context(|| format!("sketchfab PATCH /models/{uid}"))?;
+    let s = resp.status();
+    if !s.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("sketchfab PATCH /models/{uid} HTTP {s}: {body}"));
+    }
+    Ok(())
 }
 
 /// Heuristic category picker — Sketchfab's category slugs are stable and

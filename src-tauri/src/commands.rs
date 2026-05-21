@@ -4400,6 +4400,233 @@ pub async fn cmd_sketchfab_list_publishes(
         .collect())
 }
 
+#[derive(Serialize)]
+pub struct SketchfabHealRow {
+    pub uid: String,
+    pub title: String,
+    /// "ok" | "healed:<comma-fields>" | "error:<short>"
+    pub action: String,
+}
+
+#[derive(Serialize)]
+pub struct SketchfabHealReport {
+    pub checked: usize,
+    pub already_ok: usize,
+    pub healed: usize,
+    pub errored: usize,
+    pub samples: Vec<SketchfabHealRow>,
+}
+
+/// Walk every free-route Sketchfab upload we've recorded for this project
+/// and re-assert Fab-migration eligibility (CC BY / public / published /
+/// downloadable). Run this after Fab reports models missing from the
+/// migration tool — Sketchfab's API silently normalizes fields during
+/// upload, and the migration crawler reads the *live* state. Store-route
+/// rows are skipped (the closed Sketchfab Store has its own migration
+/// flow).
+#[tauri::command]
+pub async fn cmd_sketchfab_heal_for_migration(
+    state: State<'_, Arc<AppState>>,
+) -> Result<SketchfabHealReport, String> {
+    let api_token = secrets::get("sketchfab_api_token")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if api_token.is_empty() {
+        return Err("Sketchfab API token not set".into());
+    }
+    let creds = crate::sketchfab::Creds { api_token };
+    let client = reqwest::Client::new();
+
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT sketchfab_uid, title FROM sketchfab_publishes \
+         WHERE project_id = ? AND state = 'published' \
+           AND sketchfab_uid IS NOT NULL AND sketchfab_uid != '' \
+           AND (store_product_id IS NULL OR store_product_id = '')",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("db query: {e}"))?;
+
+    let mut report = SketchfabHealReport {
+        checked: 0,
+        already_ok: 0,
+        healed: 0,
+        errored: 0,
+        samples: Vec::new(),
+    };
+    for (uid, title) in rows {
+        report.checked += 1;
+        let action = match crate::sketchfab::ensure_migration_eligible(&client, &creds, &uid).await
+        {
+            Ok(r) if r.already_ok => {
+                report.already_ok += 1;
+                "ok".to_string()
+            }
+            Ok(r) => {
+                report.healed += 1;
+                format!("healed:{}", r.healed_fields.join(","))
+            }
+            Err(e) => {
+                report.errored += 1;
+                let mut s = format!("error:{e:#}");
+                s.truncate(200);
+                s
+            }
+        };
+        if report.samples.len() < 50 {
+            report.samples.push(SketchfabHealRow { uid, title, action });
+        }
+    }
+    Ok(report)
+}
+
+#[derive(Serialize)]
+pub struct FabPricingRow {
+    pub local_listing_id: Option<i64>,
+    pub sketchfab_uid: String,
+    pub sketchfab_url: Option<String>,
+    pub title: String,
+    /// $ we already charge on Cults3D for the same listing (best price
+    /// signal — Cults3D is our pricing baseline for 3D STL/GLB).
+    pub cults3d_price_usd: Option<f64>,
+    /// $ stamped on the Sketchfab row at upload time. Fallback signal.
+    pub sketchfab_price_usd: Option<f64>,
+    /// Final suggested $ for the Fab listing: Cults3D price if present,
+    /// else the Sketchfab row price, else null (let the user decide).
+    pub suggested_fab_price_usd: Option<f64>,
+}
+
+/// Export a pricing checklist for every Sketchfab listing that has been
+/// migrated to Fab. Fab has no public seller API for pricing, so the
+/// operator has to set prices manually in fab.com/portal/listings — this
+/// command gives them the bulk view (UID, title, URL, suggested price)
+/// so the manual pass is fast.
+#[tauri::command]
+pub async fn cmd_sketchfab_fab_pricing_export(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<FabPricingRow>, String> {
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Option<i64>,
+            String,
+            Option<String>,
+            String,
+            Option<f64>,
+            Option<f64>,
+        ),
+    >(
+        "SELECT s.local_listing_id, s.sketchfab_uid, s.url, s.title, \
+                c.price_usd AS cults_price, s.price_usd AS sf_price \
+         FROM sketchfab_publishes s \
+         LEFT JOIN cults3d_publishes c \
+           ON c.local_listing_id = s.local_listing_id \
+          AND c.state = 'published' \
+         WHERE s.project_id = ? \
+           AND s.state = 'published' \
+           AND s.sketchfab_uid IS NOT NULL AND s.sketchfab_uid != '' \
+           AND (s.store_product_id IS NULL OR s.store_product_id = '') \
+         ORDER BY COALESCE(c.price_usd, s.price_usd, 0) DESC, s.id DESC",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("db query: {e}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(lid, uid, url, title, cults_price, sf_price)| {
+            let suggested = cults_price.or(sf_price);
+            FabPricingRow {
+                local_listing_id: lid,
+                sketchfab_uid: uid,
+                sketchfab_url: url,
+                title,
+                cults3d_price_usd: cults_price,
+                sketchfab_price_usd: sf_price,
+                suggested_fab_price_usd: suggested,
+            }
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+pub struct SketchfabRevokeReport {
+    pub checked: usize,
+    pub revoked: usize,
+    pub errored: usize,
+    pub samples: Vec<SketchfabRevokeRow>,
+}
+
+#[derive(Serialize)]
+pub struct SketchfabRevokeRow {
+    pub uid: String,
+    pub title: String,
+    /// "revoked" | "error:<short>"
+    pub action: String,
+}
+
+/// Post-Fab-migration cleanup: PATCH `isDownloadable=false` on every
+/// migrated Sketchfab model so the free copy stops undercutting the paid
+/// Fab listing. Run AFTER the Fab migration has completed (verify on
+/// fab.com/portal/migration). Sketchfab still shows the model in the
+/// viewer for discovery and embeds a "Buy on Fab" link; only the free
+/// Download button goes away. Reversible — re-running the heal command
+/// would re-enable downloads.
+#[tauri::command]
+pub async fn cmd_sketchfab_revoke_downloads_post_migration(
+    state: State<'_, Arc<AppState>>,
+) -> Result<SketchfabRevokeReport, String> {
+    let api_token = secrets::get("sketchfab_api_token")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if api_token.is_empty() {
+        return Err("Sketchfab API token not set".into());
+    }
+    let creds = crate::sketchfab::Creds { api_token };
+    let client = reqwest::Client::new();
+
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT sketchfab_uid, title FROM sketchfab_publishes \
+         WHERE project_id = ? AND state = 'published' \
+           AND sketchfab_uid IS NOT NULL AND sketchfab_uid != '' \
+           AND (store_product_id IS NULL OR store_product_id = '')",
+    )
+    .bind(state.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("db query: {e}"))?;
+
+    let mut report = SketchfabRevokeReport {
+        checked: 0,
+        revoked: 0,
+        errored: 0,
+        samples: Vec::new(),
+    };
+    for (uid, title) in rows {
+        report.checked += 1;
+        let action = match crate::sketchfab::revoke_download(&client, &creds, &uid).await {
+            Ok(()) => {
+                report.revoked += 1;
+                "revoked".to_string()
+            }
+            Err(e) => {
+                report.errored += 1;
+                let mut s = format!("error:{e:#}");
+                s.truncate(200);
+                s
+            }
+        };
+        if report.samples.len() < 50 {
+            report.samples.push(SketchfabRevokeRow { uid, title, action });
+        }
+    }
+    Ok(report)
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Chat-with-agent — lets the operator have a conversation with any role's
 // persona. Goes through the same bridge proxy the workers use (so credits

@@ -93,6 +93,15 @@ pub async fn handle_publisher_complete_sketchfab(
     let publisher_price = publisher_result
         .get("price_usd")
         .and_then(|v| v.as_f64());
+    // Mature listings stay on Sketchfab but MUST NOT be made
+    // Fab-migration-eligible — Fab's TOS forbids NSFW and migrating one
+    // would risk a SabiWabiGifts seller account ban that blows up the
+    // whole Etsy + Fab funnel. We still upload the model (Sketchfab
+    // permits age-restricted content) but skip the post-upload heal.
+    let mature_content = publisher_result
+        .get("mature_content")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let fail = |reason: String| {
         bus.send(SupervisorEvent::SketchfabPublishFailed {
@@ -139,12 +148,46 @@ pub async fn handle_publisher_complete_sketchfab(
         price_usd,
         is_published: true,
         is_downloadable: !sell_on_store,
+        is_age_restricted: mature_content,
     };
 
     let client = reqwest::Client::new();
     let now = chrono::Utc::now().timestamp();
     match sketchfab::upload_model(&client, &creds, &model_path, &input).await {
         Ok(res) => {
+            // Fab's community-models migration tool only picks up free,
+            // public, published, CC-BY, downloadable models. Re-assert those
+            // four flags via GET+PATCH right after upload — Sketchfab can
+            // silently normalize fields during multipart ingestion, and the
+            // migration crawler reads the *live* state, not what we POSTed.
+            // Store-route uploads skip this: Store products are ineligible
+            // for the community migration, and we warn instead.
+            if sell_on_store {
+                tracing::warn!(
+                    "sketchfab {} uploaded via Store route — NOT Fab-migration-eligible. \
+                     Disable `sketchfab_sell_on_store` to make new uploads migration-ready.",
+                    res.uid,
+                );
+            } else if mature_content {
+                tracing::warn!(
+                    "sketchfab {} flagged mature_content — skipping Fab-migration heal. \
+                     Fab prohibits NSFW; keeping this listing off the Fab on-ramp.",
+                    res.uid,
+                );
+            } else {
+                match sketchfab::ensure_migration_eligible(&client, &creds, &res.uid).await {
+                    Ok(report) if report.already_ok => {}
+                    Ok(report) => tracing::warn!(
+                        "sketchfab {} drifted off Fab-migration state — healed {:?}",
+                        res.uid,
+                        report.healed_fields,
+                    ),
+                    Err(e) => tracing::warn!(
+                        "sketchfab {} Fab-migration verify failed (non-fatal): {e:#}",
+                        res.uid,
+                    ),
+                }
+            }
             if let Err(e) = sqlx::query(
                 "INSERT INTO sketchfab_publishes \
                  (project_id, local_listing_id, sketchfab_uid, store_product_id, title, url, \

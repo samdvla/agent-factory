@@ -237,6 +237,12 @@ def handle(method: str, params: dict) -> dict:
         "extra_glb_paths": extra_glbs,
         "has_rigging": has_rigging,
         "product_type": product_type,  # supervisor uses this to route to POD or direct-Etsy
+        # Mature-content flag flows from research brief → publisher result.
+        # The Rust supervisor uses this to gate marketplace fan-out: when
+        # true, skips Etsy / POD / Pinterest / MMF (their TOS prohibits
+        # mature/NSFW), and the Sketchfab path skips the Fab-migration heal
+        # so Epic doesn't pull a TOS-violating listing onto Fab.
+        "mature_content": bool(brief.get("mature_content")) if isinstance(brief, dict) else False,
         "job_id": job_id,
         "handoff": {
             "to_role": "cfo",

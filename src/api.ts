@@ -439,6 +439,12 @@ export const api = {
     remoteOr<SketchfabPublishRow[]>("/api/sketchfab/publishes", () =>
       invoke("cmd_sketchfab_list_publishes", { limit })
     ),
+  sketchfabHealForMigration: (): Promise<SketchfabHealReport> =>
+    invoke("cmd_sketchfab_heal_for_migration"),
+  sketchfabFabPricingExport: (): Promise<FabPricingRow[]> =>
+    invoke("cmd_sketchfab_fab_pricing_export"),
+  sketchfabRevokeDownloadsPostMigration: (): Promise<SketchfabRevokeReport> =>
+    invoke("cmd_sketchfab_revoke_downloads_post_migration"),
   gumroadVerify: (accessToken: string): Promise<GumroadVerifyOk> =>
     invoke("cmd_gumroad_verify", { accessToken }),
   gumroadStatus: (): Promise<GumroadStatus> =>
@@ -679,6 +685,39 @@ export type SketchfabPublishRow = {
   error: string | null;
   warning: string | null;
   published_at: number;
+};
+export type SketchfabHealRow = {
+  uid: string;
+  title: string;
+  /** "ok" | "healed:<fields>" | "error:<short>" */
+  action: string;
+};
+export type SketchfabHealReport = {
+  checked: number;
+  already_ok: number;
+  healed: number;
+  errored: number;
+  samples: SketchfabHealRow[];
+};
+export type FabPricingRow = {
+  local_listing_id: number | null;
+  sketchfab_uid: string;
+  sketchfab_url: string | null;
+  title: string;
+  cults3d_price_usd: number | null;
+  sketchfab_price_usd: number | null;
+  suggested_fab_price_usd: number | null;
+};
+export type SketchfabRevokeRow = {
+  uid: string;
+  title: string;
+  action: string;
+};
+export type SketchfabRevokeReport = {
+  checked: number;
+  revoked: number;
+  errored: number;
+  samples: SketchfabRevokeRow[];
 };
 export type GumroadStatus = {
   creds_present: boolean;

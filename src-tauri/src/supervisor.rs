@@ -637,7 +637,17 @@ async fn run_worker_loop(
                                     let product_type = result.get("product_type")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
-                                    let route_to_pod = pod_enabled && product_type == "sticker";
+                                    // mature_content gates the marketplace fan-out. Etsy /
+                                    // Printify (POD) / Pinterest / MyMiniFactory / Fab all
+                                    // prohibit mature listings, so we hard-skip those when the
+                                    // brief was flagged mature. Sketchfab / Cults3D / Gumroad
+                                    // still publish (they permit age-restricted content). The
+                                    // Sketchfab path then skips the Fab-migration heal so
+                                    // Epic's Fab crawler doesn't pull a TOS-violating asset.
+                                    let mature_content = result.get("mature_content")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let route_to_pod = pod_enabled && product_type == "sticker" && !mature_content;
                                     let is_3d = matches!(product_type, "stl_file" | "3d_model");
 
                                     if route_to_pod {
@@ -656,7 +666,7 @@ async fn run_worker_loop(
                                             )
                                             .await;
                                         });
-                                    } else {
+                                    } else if !mature_content {
                                         let real_enabled = crate::secrets::get("real_etsy_enabled")
                                             .ok().flatten()
                                             .map(|v| v.eq_ignore_ascii_case("true"))
@@ -676,6 +686,10 @@ async fn run_worker_loop(
                                                 .await;
                                             });
                                         }
+                                    } else {
+                                        tracing::warn!(
+                                            "skipping Etsy publish for mature-content listing — TOS prohibits NSFW figurines"
+                                        );
                                     }
 
                                     // Parallel Cults3D fan-out for 3D assets. Runs alongside
@@ -746,11 +760,12 @@ async fn run_worker_loop(
                                     }
 
                                     // Parallel MyMiniFactory fan-out. Same pattern.
+                                    // MMF has restrictive content policy — skip mature.
                                     let mmf_enabled = crate::secrets::get("mmf_enabled")
                                         .ok().flatten()
                                         .map(|v| v.eq_ignore_ascii_case("true"))
                                         .unwrap_or(false);
-                                    if is_3d && mmf_enabled {
+                                    if is_3d && mmf_enabled && !mature_content {
                                         let bus_for_mmf = bus.clone();
                                         let pool_for_mmf = pool.clone();
                                         let project_id_for_mmf = project_id;

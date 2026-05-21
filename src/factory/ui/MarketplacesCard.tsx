@@ -445,6 +445,135 @@ function useSketchfab() {
   return { status, rows };
 }
 
+/** Sketchfab → Fab pipeline action panel. Three operations:
+ *  - Heal for Fab migration: re-asserts CC-BY / public / published /
+ *    downloadable on every free Sketchfab upload so they show up in Fab's
+ *    migration tool. Run before opening fab.com/portal/migration.
+ *  - Export Fab pricing: dumps a CSV checklist (title, Sketchfab URL,
+ *    suggested price from Cults3D) so the operator can power through
+ *    fab.com/portal/listings setting prices on each migrated listing.
+ *    Fab has no public seller API for pricing.
+ *  - Revoke Sketchfab downloads post-migration: flips isDownloadable=false
+ *    after Fab has crawled and migrated each model, so the free Sketchfab
+ *    copy stops undercutting the paid Fab listing. Reversible. */
+function SketchfabFabHealAction({ credsPresent }: { credsPresent: boolean }) {
+  const [busy, setBusy] = useState<null | "heal" | "export" | "revoke">(null);
+  const [summary, setSummary] = useState<string | null>(null);
+
+  const runHeal = useCallback(async () => {
+    setBusy("heal");
+    setSummary(null);
+    try {
+      const r = await api.sketchfabHealForMigration();
+      setSummary(
+        `heal: ${r.checked} checked · ${r.already_ok} ok · ${r.healed} healed · ${r.errored} errored`,
+      );
+    } catch (e: unknown) {
+      setSummary(`heal failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const runExport = useCallback(async () => {
+    setBusy("export");
+    setSummary(null);
+    try {
+      const rows = await api.sketchfabFabPricingExport();
+      const header =
+        "title,sketchfab_uid,sketchfab_url,cults3d_price_usd,sketchfab_price_usd,suggested_fab_price_usd";
+      const esc = (v: unknown) => {
+        const s = v == null ? "" : String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const body = rows
+        .map((r) =>
+          [
+            esc(r.title),
+            esc(r.sketchfab_uid),
+            esc(r.sketchfab_url ?? ""),
+            esc(r.cults3d_price_usd ?? ""),
+            esc(r.sketchfab_price_usd ?? ""),
+            esc(r.suggested_fab_price_usd ?? ""),
+          ].join(","),
+        )
+        .join("\n");
+      const csv = `${header}\n${body}\n`;
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `fab-pricing-${stamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setSummary(`export: ${rows.length} rows · fab-pricing-${stamp}.csv`);
+    } catch (e: unknown) {
+      setSummary(`export failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const runRevoke = useCallback(async () => {
+    if (
+      !confirm(
+        "Flip all migrated Sketchfab models to view-only? Only run AFTER Fab migration has completed on fab.com/portal/migration. Reversible via Heal.",
+      )
+    ) {
+      return;
+    }
+    setBusy("revoke");
+    setSummary(null);
+    try {
+      const r = await api.sketchfabRevokeDownloadsPostMigration();
+      setSummary(
+        `revoke: ${r.checked} checked · ${r.revoked} revoked · ${r.errored} errored`,
+      );
+    } catch (e: unknown) {
+      setSummary(`revoke failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  if (!credsPresent) return null;
+  return (
+    <div className="mp-extra-action">
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={runHeal}
+        className="mp-action-btn"
+        title="Re-assert CC-BY / public / published / downloadable on every Sketchfab listing so they show up in fab.com/portal/migration."
+      >
+        {busy === "heal" ? "Healing…" : "Heal for Fab migration"}
+      </button>
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={runExport}
+        className="mp-action-btn"
+        title="Download CSV of migrated listings with suggested Fab prices. Fab has no public pricing API — use this as a manual checklist at fab.com/portal/listings."
+      >
+        {busy === "export" ? "Exporting…" : "Export Fab pricing CSV"}
+      </button>
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={runRevoke}
+        className="mp-action-btn"
+        title="After Fab migration completes, flip Sketchfab downloads off so the free copy stops undercutting the paid Fab listing."
+      >
+        {busy === "revoke" ? "Revoking…" : "Revoke Sketchfab downloads"}
+      </button>
+      {summary && <span className="mp-action-summary">{summary}</span>}
+    </div>
+  );
+}
+
 /* ─── MMF ───────────────────────────────────────────────────────────────── */
 
 function useMmf() {
@@ -737,6 +866,7 @@ export default function MarketplacesCard() {
             todayCount={sf?.today_count ?? null}
             credsPresent={sf?.creds_present ?? false}
           />
+          <SketchfabFabHealAction credsPresent={sf?.creds_present ?? false} />
         </MarketplaceRow>
 
         <MarketplaceRow

@@ -8001,6 +8001,43 @@ button.etsy-pill {
   font-style: italic;
 }
 
+/* Footer action row inside a marketplace body (e.g. Sketchfab → "Heal
+   for Fab migration"). Sits below the listing table; deliberately
+   understated so it doesn't compete with the per-row links. */
+.mp-extra-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 6px 4px;
+  margin-top: 6px;
+  border-top: 1px dashed var(--glass-border);
+}
+.mp-action-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--ink-1);
+  cursor: pointer;
+}
+.mp-action-btn:hover:not(:disabled) {
+  border-color: var(--ink-2);
+}
+.mp-action-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.mp-action-summary {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
 /* Today / daily-cap meter at the top of each simple marketplace body. */
 .mp-today {
   display: grid;

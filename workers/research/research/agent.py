@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -442,6 +443,14 @@ JSON_SHAPE = (
     "modular dungeon set = ['corner tile', 'straight wall', 'door tile', "
     "'floor tile']. Default null for single-item niches — bundles 3-6× our "
     "Tripo/Meshy cost so don't emit one unless the niche truly is a set.>\",\n"
+    '  "mature_content": <true|false — set true when the niche involves '
+    "nudity, semi-nudity, pinup, erotic, NSFW, lewd, ecchi, fetish, suggestive "
+    "swimwear/lingerie focus, or any content that violates Etsy / Pinterest / "
+    "Printify / Fab community standards. The downstream router uses this flag "
+    "to send mature listings ONLY to platforms that permit them (Sketchfab "
+    "with age-restricted flag, Cults3D, Gumroad) and skip Etsy / Fab / "
+    "Pinterest / Printify / MyMiniFactory. Be honest — under-flagging risks "
+    'the SabiWabiGifts Etsy shop being banned. Default false.>,\n'
     '  "rationale": "<one sentence reasoning>"\n'
     "}"
 )
@@ -506,6 +515,47 @@ def _infer_ip_risk(niche: str | None) -> str:
         if kw in n:
             return "mythology"
     return "none"
+
+
+# Keyword backstop for mature-content classification. Routes a listing only
+# to platforms that permit mature content (Sketchfab age-restricted, Cults3D,
+# Gumroad) and skips Etsy / Fab / Pinterest / Printify / MMF. Under-flagging
+# is the dangerous failure mode — false negatives risk a SabiWabiGifts Etsy
+# ban, false positives just route a tame listing to fewer marketplaces.
+MATURE_CONTENT_KEYWORDS = (
+    "nude", "nudity", "naked", "topless", "bottomless",
+    "semi-nude", "semi nude", "seminude",
+    "pinup", "pin-up", "pin up",
+    "nsfw", "lewd", "ecchi", "hentai",
+    "erotic", "erotica", "sensual", "seductive",
+    "fetish", "bdsm", "kink",
+    "lingerie", "boudoir", "bikini-clad",
+    "suggestive", "risqué", "risque",
+    "adult-only", "adult only", "18+", "mature-only", "mature only",
+)
+
+
+def _infer_mature_content(
+    niche: str | None,
+    design_direction: str | None = None,
+    keywords: list | None = None,
+) -> bool:
+    """True when any of the niche, design_direction, or keywords mention
+    mature-content terms. Conservative — biased toward catching false
+    negatives because the cost of missing one (Etsy ban) >> cost of false
+    positive (one fewer marketplace)."""
+    haystacks: list[str] = []
+    if isinstance(niche, str):
+        haystacks.append(niche.lower())
+    if isinstance(design_direction, str):
+        haystacks.append(design_direction.lower())
+    if isinstance(keywords, list):
+        haystacks.extend(k.lower() for k in keywords if isinstance(k, str))
+    for hay in haystacks:
+        for kw in MATURE_CONTENT_KEYWORDS:
+            if kw in hay:
+                return True
+    return False
 
 # Default product when the model omits product_type (older briefs, etc.).
 # Stickers are the only POD product with positive margin at our $12 retail
@@ -633,6 +683,18 @@ def _normalize_brief(brief: dict) -> None:
             brief["ip_risk"] = declared
     else:
         brief["ip_risk"] = inferred
+    # Mature-content classification. Same pattern as IP risk: the model self-
+    # declares, but a keyword backstop overrides false → true on obvious
+    # signals. Under-flagging risks Etsy / Fab takedowns and a SabiWabiGifts
+    # ban; over-flagging just routes a safe listing to fewer marketplaces, so
+    # we bias toward the keyword check winning.
+    declared_mc = brief.get("mature_content")
+    inferred_mc = _infer_mature_content(
+        brief.get("niche"),
+        brief.get("design_direction"),
+        brief.get("keywords"),
+    )
+    brief["mature_content"] = bool(inferred_mc or (declared_mc is True))
 
 
 def build_demand_brief_prompt(
@@ -814,6 +876,13 @@ def build_demand_brief_prompt(
         user = (
             f'The strategy lead picked this niche to pursue: "{seed_text}" — rationale: "{rat_text}". '
             f"Build a Demand Brief for it.{pt_clause}{trend_block} "
+            f'\n\nHARD CONSTRAINT: the `niche` field in your JSON output MUST be '
+            f'exactly "{seed_text}" — copy it verbatim, do not rewrite, sanitize, '
+            "soften, or substitute it. If the topic feels uncomfortable, your job "
+            "is still to produce the brief for the niche as written; platform "
+            "policy and mature-content gating happen downstream, not here. The "
+            "rest of the brief (keywords, design_direction, ip_risk, etc.) must "
+            "be built around this exact niche.\n\n"
             f"Return JSON only with the shape {JSON_SHAPE}"
         )
     else:
@@ -944,6 +1013,28 @@ def process_job(job_id: int, payload: dict) -> dict:
         # so the model can't quietly override the rotation pick.
         if product_type_preference in VALID_PRODUCT_TYPES:
             brief["product_type"] = product_type_preference
+        # Same defensive lock on `niche` — without this, Claude's training-side
+        # safety can silently swap the operator's pick (e.g. "semi-nude anime
+        # swordmaiden pinup" → "Skitarii cybernetic warrior monk") and the
+        # rewrite would flow downstream to the Designer. Force the seed back
+        # in. If the model also drifted the design_direction away from the
+        # seed (token-overlap check), log a clear warning — the downstream
+        # design will be off-niche even though the field is locked, and the
+        # operator should know.
+        if niche_seed:
+            returned_niche = brief.get("niche", "") or ""
+            seed_tokens = {t for t in re.findall(r"[a-z0-9]+", niche_seed.lower()) if len(t) > 2}
+            ret_tokens = {t for t in re.findall(r"[a-z0-9]+", returned_niche.lower()) if len(t) > 2}
+            overlap = len(seed_tokens & ret_tokens)
+            if returned_niche.strip() and returned_niche.strip() != niche_seed.strip():
+                drift_severity = "drift" if overlap >= 2 else "SWAP"
+                print(
+                    f"[research] job_id={job_id} niche {drift_severity}: model "
+                    f"returned {returned_niche!r} for seed {niche_seed!r} "
+                    f"(token overlap={overlap}) — locking back to seed",
+                    file=sys.stderr, flush=True,
+                )
+            brief["niche"] = niche_seed
         # Defensive .get() — _normalize_brief filled these but be explicit.
         comp = brief.get("competition", "medium")
         pb = brief.get("price_band_usd") or [3, 15]
