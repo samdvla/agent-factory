@@ -227,22 +227,6 @@ PRODUCT_MATERIALS = {
     "3d_model": ["GLB file", "STL file", "digital download", "3D asset"],
 }
 
-# Per-product-type ceilings. All digital sales are capped at GLOBAL_PRICE_CEILING_USD
-# (operator policy: $3-$15 across the catalog for an unproven shop). Physical
-# POD types (mug, tee) keep their higher ceilings because they include real
-# fulfillment cost — those aren't "digital sales" and aren't gated by the
-# global cap below.
-PRICE_CEILING_BY_TYPE = {
-    "sticker": 15.0,
-    "digital_print": 15.0,
-    "mug": 22.0,
-    "tee": 28.0,
-    "poster": 15.0,
-    "stl_file": 15.0,
-    "3d_model": 15.0,
-}
-
-
 _LISTING_TOOL = {
     "name": "submit_listing",
     "description": (
@@ -467,25 +451,27 @@ def _augment_listing(listing: dict, brief: dict) -> dict:
     return listing
 
 
-# Operator policy: all digital sales priced $3-$15 for this unproven shop.
-# Applied as a hard final clamp in _clamp_price below — supersedes the brief
-# band and per-type ceilings. Until the SI loop learns from real Etsy sales
-# (see project_north_star), this is the safe-impulse-buy range.
+# Operator pricing policy: fixed tiers, not an LLM guess. Every single
+# model ships at SINGLE_PRICE_USD; bundles price by item count via
+# BUNDLE_PRICE_TABLE. This replaced the old LLM-chosen-then-band-clamped
+# scheme so prices are deterministic and predictable across the catalog.
+SINGLE_PRICE_USD = 3.99
+
+# Bundle price by item count. Research caps bundles at 2-6 items
+# (see research._normalize_bundle); _fixed_price falls back to the nearest
+# defined tier for any out-of-range size so a job never ships unpriced.
+BUNDLE_PRICE_TABLE = {
+    2: 5.99,
+    3: 7.99,
+    4: 9.99,
+    5: 12.99,
+    6: 14.99,
+}
+
+# Validation floor — the listing is rejected below this. Every fixed tier
+# above sits comfortably over it; kept as a guard against a future tier or
+# manual edit dropping below an unprofitable price.
 GLOBAL_PRICE_FLOOR_USD = 3.0
-GLOBAL_PRICE_CEILING_USD = 15.0
-
-# Bundle pricing multiplier. Research on STL marketplaces (Etsi3D guide,
-# Lesson Craft Studio bundle playbook) shows that mega-bundles priced at
-# 50-60% of the combined individual price still beat single-file revenue per
-# click by 2-4×. We use the upper half of that range (0.55) so the discount
-# is visible but the per-item value is still high. The publisher's $15
-# ceiling then clamps anything above policy — for a 4-piece $6-each bundle
-# (~$13.20) we stay inside the band; for a 4-piece $9-each (~$19.80) we
-# clamp at $15.
-BUNDLE_PRICE_MULTIPLIER = 0.55
-
-# Hard ceiling used when product_type isn't in PRICE_CEILING_BY_TYPE.
-NEW_SHOP_PRICE_CEILING_USD = GLOBAL_PRICE_CEILING_USD
 
 
 def _bundle_size(asset: dict) -> int:
@@ -546,59 +532,23 @@ def _augment_bundle_copy(listing: dict, asset: dict) -> dict:
     return listing
 
 
-def _clamp_price(price: float, brief: dict, asset: dict | None = None) -> float:
-    """Force the model's price into the operator's $3-$15 band, with a
-    bundle-aware uplift.
+def _fixed_price(asset: dict | None) -> float:
+    """Operator pricing policy: deterministic fixed tiers by bundle size.
 
-    Constraints, in order:
-      1. If asset is a bundle (≥2 items), raise the model's single-item
-         price to `single × N × BUNDLE_PRICE_MULTIPLIER` BEFORE clamping —
-         the LLM is given a $3-$15 ceiling so it tends to anchor at single
-         prices even when the brief is a bundle. We compute the bundle
-         price programmatically so it never silently underprices.
-      2. price <= brief.price_band_usd[1] when provided
-      3. price <= per-product-type ceiling
-      4. price <= GLOBAL_PRICE_CEILING_USD (final cap — operator policy)
-      5. price >= brief.price_band_usd[0] when provided (no loss leaders)
-      6. price >= GLOBAL_PRICE_FLOOR_USD (operator floor)
-
-    The global cap/floor are applied LAST so a too-wide brief band or a
-    per-type ceiling can never bypass the operator's policy. Bundles
-    therefore can never exceed $15 — for a 4-piece bundle of $9-each items
-    (uplift to $19.80), they clamp at $15, which is still a strong anchor
-    versus the perceived $36 individual value.
+    Single model (no bundle) → SINGLE_PRICE_USD. Bundle of N items →
+    BUNDLE_PRICE_TABLE[N]. This intentionally ignores any price the LLM
+    proposed and the brief's price band — pricing is operator policy, not
+    a model decision. Research caps bundles at 2-6 items, but for any
+    out-of-range size we fall back to the nearest defined tier so the job
+    never ships unpriced.
     """
-    bundle_size = _bundle_size(asset) if asset else 1
-    raw = float(price)
-    if bundle_size >= 2:
-        # Apply the bundle uplift on top of whatever single price the model
-        # picked. Choosing the larger of (model price, computed uplift) so
-        # the LLM still has freedom to anchor higher when the niche calls
-        # for it — we just floor the bundle at a reasonable group price.
-        uplift = raw * bundle_size * BUNDLE_PRICE_MULTIPLIER
-        raw = max(raw, uplift)
-    band = brief.get("price_band_usd") if isinstance(brief, dict) else None
-    lo, hi = None, None
-    if isinstance(band, list) and len(band) >= 2:
-        try:
-            lo = float(band[0])
-            hi = float(band[1])
-        except (TypeError, ValueError):
-            lo, hi = None, None
-    product_type = brief.get("product_type", "") if isinstance(brief, dict) else ""
-    type_ceiling = PRICE_CEILING_BY_TYPE.get(product_type, NEW_SHOP_PRICE_CEILING_USD)
-    capped = raw
-    if hi is not None and bundle_size < 2:
-        # Brief.price_band_usd describes a SINGLE-ITEM price band — applying
-        # it to a bundle would defeat the uplift. Skip it for bundles and
-        # let the global $15 ceiling do the final clamp.
-        capped = min(capped, hi)
-    capped = min(capped, type_ceiling)
-    capped = min(capped, GLOBAL_PRICE_CEILING_USD)
-    if lo is not None and bundle_size < 2:
-        capped = max(capped, lo)
-    capped = max(capped, GLOBAL_PRICE_FLOOR_USD)
-    return round(capped, 2)
+    n = _bundle_size(asset) if asset else 1
+    if n < 2:
+        return SINGLE_PRICE_USD
+    if n in BUNDLE_PRICE_TABLE:
+        return BUNDLE_PRICE_TABLE[n]
+    nearest = min(BUNDLE_PRICE_TABLE, key=lambda s: abs(s - n))
+    return BUNDLE_PRICE_TABLE[nearest]
 
 
 MAX_TOOL_RETRIES = 2  # Initial attempt + 2 corrections = 3 attempts max.
@@ -932,6 +882,11 @@ def handle(method: str, params: dict) -> dict:
     print(f"[listing] job_id={job_id} calling Anthropic model={MODEL}", file=sys.stderr, flush=True)
     try:
         listing, tokens_in, tokens_out = call_anthropic(api_key, brief, asset)
+        # Operator pricing policy: overwrite whatever price the model
+        # proposed with the deterministic fixed tier. Done BEFORE validation
+        # so a stray model price can neither fail the job nor reach the
+        # listing — the price is always the operator's, never the LLM's.
+        listing["price_usd"] = _fixed_price(asset)
         errors = validate_listing(listing)
         if errors:
             msg = "; ".join(errors)
@@ -947,16 +902,11 @@ def handle(method: str, params: dict) -> dict:
         if isinstance(listing.get("tags"), list):
             listing["tags"] = _clamp_tags_to_etsy(listing["tags"])
         title = listing.get("title", "")
-        raw_price = listing.get("price_usd", 0)
-        price = _clamp_price(raw_price, brief, asset=asset)
-        if price != raw_price:
-            print(
-                f"[listing] job_id={job_id} price clamped {raw_price} -> {price} "
-                f"(band={brief.get('price_band_usd')}, "
-                f"bundle_size={_bundle_size(asset)})",
-                file=sys.stderr, flush=True,
-            )
-            listing["price_usd"] = price
+        print(
+            f"[listing] job_id={job_id} price=${listing['price_usd']} "
+            f"(fixed tier, bundle_size={_bundle_size(asset)})",
+            file=sys.stderr, flush=True,
+        )
         # Etsy 2025 Creativity Standards require AI-disclosure in every
         # listing; we also override materials per product_type. Apply
         # AFTER the model + clamp so neither can drop these.
@@ -971,7 +921,7 @@ def handle(method: str, params: dict) -> dict:
         result: dict = {
             "ok": True,
             "listing": listing,
-            "ticker_text": f"listing → publisher: \"{title[:60]}\" ${price}",
+            "ticker_text": f"listing → publisher: \"{title[:60]}\" ${listing['price_usd']}",
             "model": MODEL,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,

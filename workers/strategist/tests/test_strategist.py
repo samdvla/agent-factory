@@ -163,6 +163,7 @@ from strategist.agent import (  # noqa: E402
     NOTES_MIN_LEN,
     NOTES_MAX_LEN,
     build_orchestrator_notes_prompt,
+    _collect_operator_steers,
 )
 
 
@@ -177,6 +178,47 @@ def test_build_orchestrator_notes_prompt_mentions_orchestrator_responsibilities(
     assert "advisory" in sys_l
     # No prompt-replacement framing.
     assert "improved_system_prompt" not in sys_l
+
+
+def test_notes_prompt_enforces_operator_steer_supremacy():
+    """The strategist must be told operator steers are law and it may never
+    burn/override one, and the active steers must appear in the user prompt
+    so it can actually comply."""
+    steers = ["let's make semi nude very sexy anime girls full body"]
+    system, user = build_orchestrator_notes_prompt(
+        None, [], [], operator_steers=steers
+    )
+    sys_l = system.lower()
+    # System teaches supremacy + the safety-routing escape hatch.
+    assert "operator steers are law" in sys_l
+    assert "never contradict" in sys_l or "must never" in sys_l
+    assert "burn" in sys_l
+    assert "mature_content" in sys_l or "sketchfab" in sys_l
+    # The actual steer text is surfaced to the model.
+    assert "sexy anime girls" in user.lower()
+    assert "law" in user.lower()
+
+
+def test_notes_prompt_handles_no_steers():
+    """No active steers — the prompt still builds and says so."""
+    system, user = build_orchestrator_notes_prompt(None, [], [], operator_steers=[])
+    assert "none" in user.lower()
+
+
+def test_collect_operator_steers_merges_roles_and_dedups():
+    prompts = {
+        "orchestrator": {"operator_steers": ["make anime girls", "  ", "make robots"]},
+        "research": {"operator_steers": [
+            {"text": "make anime girls", "image_paths": []},  # dup of orch
+            {"text": "make dragons"},
+        ]},
+    }
+    steers = _collect_operator_steers(prompts, ["orchestrator", "research"])
+    assert steers == ["make anime girls", "make robots", "make dragons"]
+
+
+def test_collect_operator_steers_empty_when_missing():
+    assert _collect_operator_steers({}, ["orchestrator", "research"]) == []
 
 
 def test_orchestrator_target_below_min_outcomes_returns_waiting(tmp_path, monkeypatch):

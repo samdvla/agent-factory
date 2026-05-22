@@ -456,6 +456,612 @@ def _build_user_content_with_steer_images(
     return blocks
 
 
+# Archetype taxonomy for 3D character briefs. Character-only per the shop's
+# 3D-pivot pin — no functional objects, no props, no vehicles. The classifier
+# is pure (no API call): it keyword-matches niche + design_direction and
+# picks ONE archetype. The matched archetype swaps a specialist EXAMPLES
+# block into build_designer_prompt in place of the generic three-example
+# section, so the Sonnet call still costs the same but ships archetype-
+# tuned anatomy notes + worked examples for the kind of figurine it's
+# actually being asked to brief.
+_ARCHETYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # Order matters: anime/superhero/mecha/chibi tested before
+    # humanoid_character so "anime warrior" classifies as anime, not generic
+    # humanoid.
+    "anime_stylized": (
+        "anime", "manga", "waifu", "chibi", "magical girl",
+        "mahou shoujo", "isekai", "shounen", "shoujo", "japanese cartoon",
+    ),
+    "superhero": (
+        "superhero", "super hero", "caped", "vigilante", "comic book",
+        "marvel-style", "dc-style", "masked hero", "spandex",
+    ),
+    "mecha_robot": (
+        "mecha", "gundam-style", "battle suit", "power armor", "exosuit",
+        "robot", "droid", "cyborg", "android",
+    ),
+    "chibi_mascot": (
+        "mascot", "plush-style", "stuffed toy", "kawaii mascot",
+        "cute mascot",
+    ),
+    "deity_statue": (
+        "deity", "goddess", "buddha", "saint", "shrine", "altar",
+        "egyptian god", "norse god", "greek god", "hindu god",
+        "shinto", "religious icon",
+    ),
+    "creature": (
+        "dragon", "wyvern", "kraken", "hydra", "chimera", "kaiju",
+        "demon", "cryptid", "monster", "beast", "creature",
+        "wolf", "tiger", "lion", "bear figurine", "fox figurine",
+    ),
+    "humanoid_character": (
+        "warrior", "knight", "wizard", "mage", "sorcerer", "barbarian",
+        "rogue", "paladin", "druid", "cleric", "ranger",
+        "samurai", "ninja", "viking", "elf", "dwarf", "orc", "goblin",
+        "soldier", "explorer", "pirate", "cowboy", "gunslinger",
+    ),
+}
+
+
+def _classify_archetype(brief: dict) -> str:
+    """Return the archetype name for `brief`, or 'generic' if no keyword
+    fires. Pure function — no API call. Reads niche + design_direction +
+    concept + theme.
+    """
+    if not isinstance(brief, dict):
+        return "generic"
+    parts = []
+    for k in ("niche", "design_direction", "concept", "theme"):
+        v = brief.get(k)
+        if isinstance(v, str):
+            parts.append(v)
+    text = " ".join(parts).lower()
+    if not text.strip():
+        return "generic"
+    for archetype, keywords in _ARCHETYPE_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return archetype
+    return "generic"
+
+
+_ARCHETYPE_BLOCKS: dict[str, str] = {
+    "anime_stylized": (
+        "ARCHETYPE: anime / manga-stylized character figurine.\n"
+        "FITS: anime warrior maiden, anime swordsman/swordswoman, magical "
+        "girl, isekai hero, kitsune / catgirl, anime-style ninja or shrine "
+        "maiden, anime warrior goddess.\n"
+        "DOES NOT FIT: anime mecha pilots wearing visible mechs → route to "
+        "mecha_robot. Anime mascots without humanoid features → "
+        "chibi_mascot. Realistic 1:8 proportions humanoid → "
+        "humanoid_character.\n"
+        "ANATOMY NOTES — slender semi-realistic to anime-proportioned female "
+        "form. Hair sculpted as solid masses (clusters or sheets), never "
+        "strand-by-strand. Carved component-by-component detail front AND "
+        "back. No base — character rests on its own form only.\n"
+        "EXAMPLES — these are REAL upvoted briefs from this shop's "
+        "production history (job ids cited). Copy this shape — pose, "
+        "component-by-component callout, PBR-textured studio backdrop "
+        "tail, 'no plinth no pedestal no stand' anchor — and swap the "
+        "subject:\n"
+        "  Example 1 (job 2665, niche=\"noble winged stag-sage anime "
+        "heroine\"): \"Forest-deity warrior maiden full-body anime "
+        "figurine, slender semi-realistic female form upright on her own "
+        "bare feet, twelve-point branching stag antlers rising from her "
+        "temples with individually tapered carved tines, large feathered "
+        "wings folded behind both shoulders with primary feathers fanning "
+        "outward at tips for dramatic silhouette break, high-anime face "
+        "with large almond eyes small nose and determined expression, long "
+        "windswept hair partially braided with carved acorn-and-leaf clasp, "
+        "stag-skull-shaped pauldrons on both shoulders with engraved bone-"
+        "relief texture, cut-out midriff bodice with clean printable skin "
+        "geometry, billowing asymmetric silk-drape skirt with forest-rune "
+        "engravings carved along the hem front and back, short deer scut "
+        "tail carved at the small of the back, right arm raised with open "
+        "palm holding a solid acorn orb, left arm extended at side with "
+        "fingers spread, both legs fully formed with feet planted on own "
+        "soles no base, every component named and visible — head ears "
+        "antler rack torso both arms both hands with fingers both legs "
+        "both feet wings pauldrons skirt scut tail acorn orb — detail "
+        "carved evenly across full front and back of figure, organic "
+        "flowing surface with deep undercut relief and engraved detail, "
+        "120mm display figurine standing on own feet, no base; fully "
+        "sculpted complete finished character photographed as a final "
+        "production-ready figurine on clean neutral studio backdrop, every "
+        "surface resolved with consistent high detail density front and "
+        "back, every named component fully realized intact and visible in "
+        "frame with margin on all sides, dramatic three-quarter hero camera "
+        "angle, soft even studio lighting, single static mesh, no moving "
+        "parts, no thin unsupported overhangs, support-friendly silhouette, "
+        "no plinth no pedestal no stand no scenic base character rests on "
+        "its own form only, richly textured PBR surface (baseColorTexture, "
+        "normal map, roughness map) baked into the render, ready for "
+        "marketplace presentation.\"\n\n"
+        "  Example 2 (job 2651, niche=\"semi-nude anime swordmaiden pinup "
+        "statue\"): \"Anime swordmaiden warrior goddess, full-body confident "
+        "contrapposto stance, weight shifted to left hip with subtle hip "
+        "tilt, long-legged idealized anime proportion — oversized expressive "
+        "eyes with cool self-assured smirk, tapered waist fully visible, "
+        "voluminous wind-swept hair in four dynamic swept-back clusters with "
+        "carved strand detail, asymmetric battle-worn breastplate unfastened "
+        "and falling open on the left revealing collarbone and midriff, torn "
+        "linen shoulder wrap slipping off right shoulder with carved fraying-"
+        "edge relief, long flowing sash-obi caught at the hip mid-billow "
+        "carved in deep undercut layers, right hand gripping a nodachi "
+        "longsword with blade tip resting on her own right foot sole, left "
+        "hand open at her side fingers splayed, both legs fully sculpted "
+        "with armored greave on left shin and bare right thigh, both feet "
+        "in split-toe tabi boots planted on own soles no base, head fully "
+        "carved with eyes nose mouth lips smirk, torso front and back "
+        "carved with equal detail including vertebral spine relief and "
+        "fabric tension lines, both arms both hands all ten fingers "
+        "resolved, sword hilt with wrapped grip carved front and back, hair "
+        "mass resolved on all sides; 120mm display figurine standing on own "
+        "feet, no base; dramatic three-quarter hero camera angle, soft even "
+        "studio lighting, single static mesh, no moving parts, no thin "
+        "unsupported overhangs, support-friendly silhouette, no plinth no "
+        "pedestal no stand no scenic base character rests on its own form "
+        "only, richly textured PBR surface (baseColorTexture, normal map, "
+        "roughness map) baked into the render, ready for marketplace "
+        "presentation.\"\n\n"
+        "  Example 3 (synthetic — anime kitsune): \"Anime kitsune warrior "
+        "miko, full-body upright contrapposto stance, slender semi-realistic "
+        "female form, thick fox ears rising from a sculpted hair-mass "
+        "crown, single thick fox tail curled forward anchored at the right "
+        "ankle for support, large almond anime eyes with calm expression, "
+        "knee-length shrine-maiden robe with sleeves carved in broad pleat "
+        "planes front and back, right hand gripping an ofuda-wrapped tanto "
+        "blade at waist height, left palm open at the side, both bare feet "
+        "planted on own soles no base, every component named and visible — "
+        "head fox ears hair-mass robe collar torso both arms both hands "
+        "fingers tanto blade hilt both legs both feet fox tail — carved "
+        "evenly front and back; 100mm display figurine standing on own "
+        "feet, no base; dramatic three-quarter hero camera angle, single "
+        "static mesh, no thin unsupported overhangs, support-friendly "
+        "silhouette, no plinth no pedestal no stand no scenic base "
+        "character rests on its own form only, richly textured PBR surface "
+        "(baseColorTexture, normal map, roughness map) baked into the "
+        "render, ready for marketplace presentation.\"\n"
+    ),
+    "superhero": (
+        "ARCHETYPE: superhero / comic-book character figurine.\n"
+        "STATUS: synthetic — no validated upvoted briefs in this archetype "
+        "yet. Use these as starting templates; if the user upvotes a "
+        "superhero brief, the strategist should replace these with the "
+        "real one.\n"
+        "FITS: caped hero, masked vigilante, power-armor hero, speedster, "
+        "anti-hero with hood, classic comic-book archetype. Sidekick / kid "
+        "hero variations.\n"
+        "DOES NOT FIT: full mechanical exo with no human silhouette → "
+        "mecha_robot. Anime-styled hero with chibi proportions → "
+        "anime_stylized. Robed deity/divine champion → deity_statue.\n"
+        "ANATOMY NOTES — heroic 1:8 head-body ratio. Cape sculpted as solid "
+        "flowing mass anchored to the back, never freestanding. Mask/cowl as "
+        "a continuous shape with the head. Use generic archetype descriptions "
+        "only — never named IP.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1: \"Standing caped vigilante, power stance, fists at "
+        "hips, cape flared diagonally behind anchored to shoulders. Stylized "
+        "comic-book — exaggerated chest, simplified suit panels. Matte "
+        "single-color render, no PBR textures. 15cm display scale, support-"
+        "friendly with rectangular base, single static mesh. (negative: no "
+        "separate cape, no thin cowl ears, no second figure, no "
+        "background)\"\n"
+        "  Example 2: \"Crouching masked vigilante, three-quarter low pose, "
+        "one knee planted, gauntleted fists down. Stylized noir comic — "
+        "heavy chest plate, simplified cowl. Matte single-color. 12cm scale, "
+        "watertight base. (negative: no thin grapnel cable, no separate "
+        "cape, no IP names, no background)\"\n"
+        "  Example 3: \"Standing power-armor hero, three-quarter pose, "
+        "energy gauntlet raised at the chest, chest reactor disc as relief. "
+        "Stylized comic-book hard-surface — paneled plate armor, simplified "
+        "helmet visor. Matte single-color render, no PBR textures. 15cm "
+        "display scale, support-friendly with rectangular base, single "
+        "static mesh. (negative: no thin antennas, no separate cape, no "
+        "IP names, no background)\"\n"
+        "  Example 4: \"Speedster hero mid-run, three-quarter sprint pose, "
+        "one foot planted, opposite arm forward fist clenched. Stylized "
+        "comic-book — streamlined hood, simplified bodysuit panels. Matte "
+        "single-color render, no PBR textures. 14cm display scale, support-"
+        "friendly silhouette with elongated base anchoring the trailing "
+        "foot, single static mesh. (negative: no thin trailing speed lines, "
+        "no floating cape, no second figure, no background)\"\n"
+        "  Example 5: \"Standing hooded anti-hero, three-quarter pose, "
+        "dagger held reverse-grip at the hip, hood pulled forward over the "
+        "eyes. Stylized noir comic — heavy shoulder plates, simplified hood "
+        "as a solid wedge. Matte single-color render, no PBR textures. "
+        "13cm display scale, support-friendly with rectangular base, single "
+        "static mesh. (negative: no thin dagger tip, no separate cape, no "
+        "IP names, no background)\"\n"
+    ),
+    "mecha_robot": (
+        "ARCHETYPE: mecha / robot / droid figurine.\n"
+        "STATUS: synthetic — no validated upvoted briefs in this archetype "
+        "yet (the upvoted Skitarii-style soldiers route to humanoid_"
+        "character because they retain a human silhouette). Use these as "
+        "starting templates.\n"
+        "FITS: standing battle mecha, scout droid, humanoid-piloted exo "
+        "with visible cockpit, heavy mech (squat + multi-weapon), industrial "
+        "worker robot, sentry/turret-form droid.\n"
+        "DOES NOT FIT: anime mecha pilot in flight suit (no visible mech) "
+        "→ anime_stylized. Power-armor hero where the human form still reads "
+        "→ superhero. Robotic creature/beast → creature.\n"
+        "ANATOMY NOTES — hard-surface forms; paneled armor as relief, never "
+        "floating plates; joints sculpted closed (no articulated gaps); "
+        "antennas thick or omitted; wires omitted. Use generic descriptions "
+        "only — no Gundam, Transformers, or other IP names.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1: \"Standing battle mecha, upright stance, plasma rifle "
+        "held diagonally across chest. Stylized hard-surface — paneled torso "
+        "armor as relief, simplified shoulder pauldrons. Matte single-color "
+        "render, no PBR textures. 15cm display scale, support-friendly with "
+        "rectangular base, single static mesh. (negative: no thin antennas, "
+        "no separate weapon parts, no floating wires, no background)\"\n"
+        "  Example 2: \"Crouching scout droid, three-quarter low pose, one "
+        "manipulator arm extended, sensor head tilted. Stylized industrial "
+        "low-poly — paneled hull, thick limb segments. Matte single-color. "
+        "10cm desk scale, watertight base. (negative: no thin antenna wires, "
+        "no separate sensor parts, no IP names, no background)\"\n"
+        "  Example 3: \"Standing piloted exo-suit, upright pose, visible "
+        "cockpit window at the chest housing a simplified pilot silhouette. "
+        "Stylized hard-surface — heavy thigh plates, paneled forearm armor. "
+        "Matte single-color render, no PBR textures. 18cm display scale, "
+        "support-friendly with rectangular base, single static mesh. "
+        "(negative: no thin antennas, no separate hatch parts, no IP "
+        "names, no background)\"\n"
+        "  Example 4: \"Squat heavy mech, frontal pose, missile pod "
+        "shoulder-mounted on one side, shielded forearm on the other. "
+        "Stylized industrial hard-surface — broad tank-like base, thick "
+        "leg pistons sculpted closed. Matte single-color render, no PBR "
+        "textures. 12cm display scale, watertight base, single static mesh. "
+        "(negative: no thin missile tips, no separate shoulder pod parts, "
+        "no IP names, no background)\"\n"
+        "  Example 5: \"Standing industrial worker robot, frontal pose, one "
+        "claw arm low at the side, opposing arm raised holding a stylized "
+        "wrench. Stylized utilitarian hard-surface — drum-shaped torso, "
+        "simplified treaded base instead of legs. Matte single-color render, "
+        "no PBR textures. 11cm desk decor scale, support-friendly silhouette, "
+        "single static mesh. (negative: no thin wrench handle, no separate "
+        "antenna, no cabling, no background)\"\n"
+    ),
+    "chibi_mascot": (
+        "ARCHETYPE: chibi mascot / kawaii character figurine.\n"
+        "STATUS: synthetic — no validated upvoted briefs in this archetype "
+        "yet. Use these as starting templates.\n"
+        "FITS: animal mascots (cat, bear, fox, penguin, panda), food/object "
+        "mascots (mushroom-headed, onigiri-headed), kawaii human chibi (1:2 "
+        "ratio human girl/boy), branded plush-style characters.\n"
+        "DOES NOT FIT: anime-proportioned humans (1:5 ratio or taller) → "
+        "anime_stylized. Realistic animal figurines for collectors → "
+        "creature. Anything with thin or articulated appendages.\n"
+        "ANATOMY NOTES — 1:2 head-body ratio, oversized head, soft rounded "
+        "limbs. Facial features as relief (not extruded). Ears and tails "
+        "sculpted thick, never thin appendages.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1: \"Standing chibi cat mascot, frontal pose, paws raised "
+        "in waving gesture, oversized head. Stylized kawaii — round body, "
+        "thick rounded ears, simplified facial relief. Matte single-color "
+        "render, no PBR textures. 8cm desk decor scale, watertight, support-"
+        "friendly. (negative: no thin whiskers, no separate bow, no thin "
+        "tail tip, no background)\"\n"
+        "  Example 2: \"Seated chibi bear mascot, frontal pose, arms hugging "
+        "knees, head tilted slightly. Stylized kawaii — round limbs, "
+        "simplified snout relief. Matte single-color. 7cm scale. (negative: "
+        "no thin claws, no separate accessories, no PBR textures, no "
+        "background)\"\n"
+        "  Example 3: \"Standing chibi mushroom mascot, frontal pose, tiny "
+        "round arms outstretched, oversized mushroom-cap head with relief "
+        "spots. Stylized kawaii — stubby legs as rounded plinths, simplified "
+        "facial relief. Matte single-color render, no PBR textures. 7cm "
+        "desk decor scale, watertight, support-friendly base. (negative: "
+        "no thin stem, no separate cap spots, no PBR textures, no "
+        "background)\"\n"
+        "  Example 4: \"Standing chibi girl mascot, frontal pose, hands "
+        "clasped at the chest, oversized head with stub-pigtail hair "
+        "sculpted as two solid balls. Stylized kawaii — 1:2 head-body "
+        "ratio, dress simplified to a broad bell skirt. Matte single-color "
+        "render, no PBR textures. 8cm desk decor scale, watertight, "
+        "support-friendly. (negative: no thin hair strands, no separate "
+        "ribbon, no PBR textures, no background)\"\n"
+        "  Example 5: \"Standing chibi penguin mascot, frontal pose, flippers "
+        "tucked at the sides, oversized round head. Stylized kawaii — "
+        "torpedo body, simplified beak as a small triangular wedge, feet as "
+        "rounded plinths. Matte single-color render, no PBR textures. 7cm "
+        "desk decor scale, watertight base, single static mesh. (negative: "
+        "no thin flipper tips, no separate beak parts, no PBR textures, no "
+        "background)\"\n"
+    ),
+    "deity_statue": (
+        "ARCHETYPE: deity / mythological figure / ceremonial statue.\n"
+        "STATUS: synthetic — no validated upvoted briefs in this archetype "
+        "yet. Use these as starting templates.\n"
+        "FITS: Egyptian, Norse, Greek/Roman, Hindu, Buddhist, Shinto, "
+        "Aztec/Mayan, Celtic deities and ceremonial figures. Saints, "
+        "religious icons, altar statuary, shrine pieces.\n"
+        "DOES NOT FIT: deity-themed cartoony chibi (oversized head, kawaii) "
+        "→ chibi_mascot. Modern superhero with divine theme (cape, mask) → "
+        "superhero. Deity creature with non-humanoid form (multi-headed "
+        "beast) → creature.\n"
+        "ANATOMY NOTES — upright frontal or seated symmetrical pose. "
+        "Implements held close to the body. Ornamentation sculpted as relief, "
+        "never floating gems or thin filigree. Robes simplified to broad "
+        "planes.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1: \"Seated Egyptian cat deity, upright posture, paws "
+        "forward on thighs, head facing forward. Stylized Art Deco — sharp "
+        "geometric forms, smooth large planes. Matte single-color render, no "
+        "PBR textures. 15cm display scale, hollow-printable, support-"
+        "friendly. (negative: no jewelry details, no offering bowl, no "
+        "floating hieroglyphs, no background)\"\n"
+        "  Example 2: \"Standing Norse thunder god, frontal pose, hammer "
+        "across chest, beard as solid mass. Stylized stoic statue — "
+        "simplified armor planes, thick robe folds. Matte single-color. 18cm "
+        "altar scale, watertight base, support-friendly. (negative: no "
+        "floating lightning, no thin hair strands, no IP names, no "
+        "background)\"\n"
+        "  Example 3: \"Standing Hindu four-armed deity on a lotus base, "
+        "symmetrical frontal pose, two arms raised holding stylized lotus "
+        "buds, two arms lowered in mudra positions across the body. Stylized "
+        "temple statuary — broad pleated dhoti as a single planar mass, "
+        "crown sculpted as relief. Matte single-color render, no PBR "
+        "textures. 20cm altar scale, hollow-printable, support-friendly base. "
+        "(negative: no thin jewelry, no floating gems, no IP names, no "
+        "background)\"\n"
+        "  Example 4: \"Standing Greek classical goddess, contrapposto "
+        "pose, draped robe falling diagonally from one shoulder to the "
+        "opposite hip, one arm at the side and the other raised holding a "
+        "spear close to the body. Stylized marble statuary — smooth large "
+        "planes, simplified hair tied back as a solid mass. Matte single-"
+        "color render, no PBR textures. 22cm display scale, hollow-printable, "
+        "support-friendly. (negative: no thin spear tip, no floating drapery, "
+        "no IP names, no background)\"\n"
+        "  Example 5: \"Seated Buddhist meditating figure, upright posture, "
+        "legs folded in lotus position, hands resting in lap mudra. Stylized "
+        "temple statuary — robe simplified to broad pleat planes, ushnisha "
+        "(top-knot) sculpted as a solid dome. Matte single-color render, no "
+        "PBR textures. 14cm altar scale, watertight base, support-friendly. "
+        "(negative: no thin lotus petal tips, no floating halo, no painted "
+        "detail, no background)\"\n"
+    ),
+    "creature": (
+        "ARCHETYPE: creature / monster / beast figurine.\n"
+        "STATUS: synthetic — no validated upvoted briefs in this archetype "
+        "yet. Use these as starting templates.\n"
+        "FITS: dragons/wyverns, four-legged beasts (wolf, lion, bear), "
+        "bipedal monsters (troll, orc-creature, lizardman), insectoid "
+        "(beetle, scorpion-thing), aquatic (kraken with anchored tentacles, "
+        "fish-creature), undead skeletal figures, demon/imp.\n"
+        "DOES NOT FIT: anime-styled humanoid with animal ears (kitsune, "
+        "catgirl) → anime_stylized. Realistic-proportion humanoid → "
+        "humanoid_character. Robotic beast → mecha_robot.\n"
+        "ANATOMY NOTES — silhouette beats detail. Wings folded or anchored "
+        "(never spread thin). Horns/spines as thickened conical forms. Tail "
+        "anchored to the base or curled inward. Fur/scales as surface "
+        "texture only, never protruding strands.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1: \"Coiled wyvern, head reared, wings folded against "
+        "body, tail curled around circular base. Stylized fantasy — thick "
+        "horn cluster, scaled skin as surface texture. Matte single-color "
+        "render, no PBR textures. 12cm tabletop scale, support-friendly "
+        "silhouette, single static mesh. (negative: no spread wings, no "
+        "thin tongue, no separate flame breath, no background)\"\n"
+        "  Example 2: \"Seated forest wolf, alert pose, head turned to the "
+        "side, tail curled around hind paws. Stylized low-poly creature — "
+        "faceted fur as planes, oversized paws. Matte single-color. 8cm "
+        "scale, watertight base. (negative: no thin whiskers, no protruding "
+        "fur strands, no prey in mouth, no background)\"\n"
+        "  Example 3: \"Bipedal troll, three-quarter stance, club rested "
+        "head-down on the ground beside one foot, hunched shoulders. "
+        "Stylized fantasy — thick tusked jaw, oversized fists, simplified "
+        "loincloth as a broad plane. Matte single-color render, no PBR "
+        "textures. 14cm tabletop scale, support-friendly silhouette with "
+        "rounded base, single static mesh. (negative: no thin club spikes, "
+        "no separate weapon parts, no second figure, no background)\"\n"
+        "  Example 4: \"Crouched giant scarab beetle, frontal pose, six legs "
+        "thick and conical anchored to the base, single horn raised. "
+        "Stylized fantasy insectoid — segmented carapace as relief, "
+        "simplified mandible plates. Matte single-color render, no PBR "
+        "textures. 9cm desk scale, watertight base, single static mesh. "
+        "(negative: no thin antennae, no separate wing covers, no protruding "
+        "mandibles, no background)\"\n"
+        "  Example 5: \"Anchored kraken bust on a rocky outcrop base, "
+        "central body upright, tentacles curling inward across the base "
+        "(none extending beyond the silhouette). Stylized aquatic creature "
+        "— thick tentacles as conical forms, broad-eyed simplified head. "
+        "Matte single-color render, no PBR textures. 13cm tabletop scale, "
+        "support-friendly base, single static mesh. (negative: no thin "
+        "tentacle tips, no spread tentacles, no separate base elements, "
+        "no background)\"\n"
+    ),
+    "humanoid_character": (
+        "ARCHETYPE: humanoid character / sci-fi or fantasy figurine.\n"
+        "FITS: cybernetic / Skitarii-style warriors (cyber-priestess, "
+        "cybernetic ranger, mechanized infantry, void-canon monk), sci-fi "
+        "soldiers, cyberpunk runners, fantasy adventurers (warrior, ranger, "
+        "paladin, rogue, mage), fantasy races (elf, dwarf, orc, goblin), "
+        "historical figures (samurai, viking, knight, pirate).\n"
+        "DOES NOT FIT: anime-stylized humanoid (large eyes, anime hair "
+        "masses) → anime_stylized. Caped hero with mask → superhero. Full "
+        "robotic / no human silhouette → mecha_robot. Deity / religious "
+        "figure → deity_statue.\n"
+        "ANATOMY NOTES — heroic 1:7-1:8 proportions; semi-realistic "
+        "anatomy with stylized exaggeration. Weapons sculpted thick (≥2mm "
+        "minimum). Cables/mechadendrites recessed or thickened (≥1.5mm). "
+        "Cloaks anchored to the body. Hair as solid sculpted masses. "
+        "Character stands on its own form — no plinth, no pedestal, no "
+        "scenic base.\n"
+        "EXAMPLES — these are REAL upvoted briefs from this shop's "
+        "production history (job ids cited). The Skitarii-style cybernetic "
+        "ranger niche is this shop's strongest validated pattern. Copy "
+        "this shape — pose, exhaustive component-by-component callout, "
+        "PBR-textured studio backdrop tail — and swap the subject:\n"
+        "  Example 1 (job 2666, niche=\"Skitarii-style cyber-priestess "
+        "warrior\"): \"Void-Cantor cyber-priestess warrior, full-body "
+        "upright stance on her own digitigrade mechanical left leg and "
+        "organic sandalled right foot, no base — tall narrow silhouette "
+        "framed by wide gothic-arched pauldrons engraved with circuit-rune "
+        "panels front and back, half-visored face with one organic eye "
+        "visible and one recessed optical sensor lens on the other side, "
+        "mechanical spine-brace with bundled cable-veins running down the "
+        "back fully carved, fully replaced bionic right arm ending in a "
+        "chunky gauntlet-censer with incense-vent grilles raised at chest "
+        "height trailing sculpted smoke wisps, organic left hand gripping "
+        "a tall staff crowned with a gothic arch reliquary housing a "
+        "glowing data-crystal, layered ecclesiastical robes split at the "
+        "front hem to reveal the digitigrade leg with hydraulic piston "
+        "relief, robe panels engraved with column circuit-rune script "
+        "front and back, gothic arched pauldrons with barbed finial tips, "
+        "exposed cable-vein bundles at shoulder and elbow joints, both "
+        "feet fully resolved and planted on own form, every component "
+        "fully present intact and in frame with margin on all sides; "
+        "semi-realistic anatomical detail with stylized exaggeration for "
+        "tabletop readability, organic flowing ecclesiastical surfaces "
+        "merged with sharp hard-surface geometric cybernetic plates and "
+        "deep undercut circuit-rune relief; 80mm desk figurine standing "
+        "on own feet, no base; dramatic three-quarter hero camera angle, "
+        "soft even studio lighting, single static mesh, no moving parts, "
+        "no thin unsupported overhangs, support-friendly silhouette, no "
+        "plinth no pedestal no stand no scenic base character rests on "
+        "its own form only, richly textured PBR surface (baseColorTexture, "
+        "normal map, roughness map) baked into the render, ready for "
+        "marketplace presentation.\"\n\n"
+        "  Example 2 (job 2650, niche=\"Skitarii-style cybernetic soldier "
+        "— radium ranger archetype\"): \"Radium Ranger cybernetic soldier "
+        "full-body figurine, hunched heroic three-quarter stance, wide-"
+        "brimmed low-slung metal hood fused to a half-mechanical skull "
+        "face with one enlarged glowing lens eye and exposed jaw with "
+        "visible teeth, gaunt organic ribcage visible through gaps in "
+        "ribbed segmented torso armour, oversized slab shoulder plates "
+        "with engraved bolt-line and rivet relief front and back, left "
+        "multi-jointed arm ending in a splayed clawed gauntlet raised "
+        "forward, right forearm fused directly to a long-barrelled radium "
+        "carbine raised across body at chest height with engraved barrel "
+        "vents and cable bundle feeds, cable bundles running from torso "
+        "down both legs, reverse-jointed digitigrade legs in full plated "
+        "armour with deep panel-line relief front and back, both clawed "
+        "armoured feet planted on own soles, no base; sharp hard-surface "
+        "geometric planes with angular silhouette and crisp edges, "
+        "grotesque organic flesh texture on exposed ribcage and jaw; 80mm "
+        "desk figurine standing on own feet, no base; dramatic three-"
+        "quarter hero camera angle, soft even studio lighting, single "
+        "static mesh, no moving parts, no thin unsupported overhangs, "
+        "support-friendly silhouette, no plinth no pedestal no stand no "
+        "scenic base character rests on its own form only, richly textured "
+        "PBR surface (baseColorTexture, normal map, roughness map) baked "
+        "into the render, ready for marketplace presentation.\"\n\n"
+        "  Example 3 (job 2638, niche=\"Skitarii-style cybernetic ranger "
+        "warrior\"): \"Cybernetic ranger warrior full-body figurine, gaunt "
+        "scarred human face half-obscured by ribbed respirator cowl with "
+        "carved ventilation grilles and tubing, elongated triangular torso "
+        "clad in segmented gothic brass-toned pauldrons with engraved "
+        "bolt-seam relief front and back, right arm fully organic wrapped "
+        "in mesh-fabric joint with gauntleted hand, left arm entirely "
+        "bionic with exposed wiring grooves and claw-grip rifle rest fused "
+        "at the elbow, wide low-slung utility belt with pouches and carved "
+        "mechanical latches, both legs asymmetric with piston-ribbed knee "
+        "guards and flat-bottomed armored boots, long-barrelled arc-rifle "
+        "levelled forward at 20-degree downward cant gripped in both "
+        "hands across body, mid-stride confident advance pose with forward "
+        "lean, corroded brass plating over sinew-wrapped sub-structure "
+        "visible at every joint, every component fully named and "
+        "resolved — head with respirator cowl eyes nose scarred cheek, "
+        "torso with pauldrons, both arms with hands and fingers thickened "
+        "to 2mm minimum, both legs with knee guards, both flat-bottomed "
+        "boots planted on own soles, arc-rifle as primary held object, "
+        "standing on own feet, no base; 60mm heroic-scale display figurine "
+        "standing on own feet, no base; dramatic three-quarter hero camera "
+        "angle, soft even studio lighting, single static mesh, no moving "
+        "parts, no thin unsupported overhangs, support-friendly silhouette, "
+        "no plinth no pedestal no stand no scenic base character rests on "
+        "its own form only, richly textured PBR surface (baseColorTexture, "
+        "normal map, roughness map) baked into the render, ready for "
+        "marketplace presentation.\"\n\n"
+        "  Example 4 (job 1402, niche=\"D&D goblin rogue tabletop "
+        "miniature\" — classic-fantasy shorter format, also upvoted): "
+        "\"Crouched goblin rogue, three-quarter view, dagger drawn at hip, "
+        "one eye toward viewer. Exaggerated organic proportions—oversized "
+        "pointed ears, sharp nose, hunched shoulders, muscular legs "
+        "coiled. Stylized cartoon form with hard-surface cloth folds and "
+        "sharp silhouette. 32mm scale with integrated round base, support-"
+        "friendly geometry, all appendages ≥1.5mm thick, shallow angled "
+        "overhangs, single static mesh, matte single-color untextured "
+        "render. (negative: no thin dagger blade, no floating cloak, no "
+        "fine hair strands, no PBR textures, no background)\"\n"
+    ),
+    "generic": (
+        "ARCHETYPE: generic character figurine — no specific archetype "
+        "matched. Lean on the PROMPT FORMULA and HARD RULES; pick the "
+        "closest anchor from these worked examples.\n"
+        "EXAMPLES — copy this shape, swap the subject:\n"
+        "  Example 1 (character): \"Standing goblin warrior, three-quarter "
+        "stance, broad-bladed sword raised overhead. Stylized cartoon with "
+        "hard-surface armor. Matte single-color render, no PBR textures. "
+        "28mm tabletop mini scale, support-friendly silhouette with "
+        "circular base, single static mesh. (negative: no thin spear "
+        "blade, no floating cloak, no second figure, no background)\"\n"
+        "  Example 2 (deity statue): \"Seated Bastet figurine, upright "
+        "posture, paws forward, head tilted slightly. Stylized Egyptian "
+        "Art Deco — sharp geometric forms, smooth surfaces. Matte single-"
+        "color, no painted detail. 15cm desk display scale, hollow-"
+        "printable, support-friendly. (negative: no jewelry details, no "
+        "offering bowl, no thin appendages, no floating hieroglyphs)\"\n"
+    ),
+}
+
+
+def _archetype_block(brief: dict) -> tuple[str, str]:
+    """Return (archetype_name, EXAMPLES_block) for a 3D brief."""
+    arch = _classify_archetype(brief)
+    return arch, _ARCHETYPE_BLOCKS.get(arch, _ARCHETYPE_BLOCKS["generic"])
+
+
+# Designer-wing specialist role ids, keyed by archetype. The UI uses this map
+# to walk the matching specialist avatar to "working" + push a design →
+# specialist handoff when the designer worker emits a specialist_assigned
+# notification. "generic" intentionally has no specialist — when no archetype
+# fires, the lead designer keeps the work without delegating.
+_SPECIALIST_ROLE_BY_ARCHETYPE: dict[str, str | None] = {
+    "anime_stylized":    "anime_spec",
+    "superhero":         "hero_spec",
+    "mecha_robot":       "mecha_spec",
+    "chibi_mascot":      "chibi_spec",
+    "deity_statue":      "deity_spec",
+    "creature":          "creature_spec",
+    "humanoid_character": "humanoid_spec",
+    "generic":            None,
+}
+
+
+def specialist_role_for_archetype(archetype: str) -> str | None:
+    """Public accessor — tests use this to validate the map covers every
+    archetype the classifier can emit."""
+    return _SPECIALIST_ROLE_BY_ARCHETYPE.get(archetype)
+
+
+def _emit_jsonrpc_notification(method: str, params: dict) -> None:
+    """Send a JSON-RPC notification to the supervisor mid-process_job.
+
+    The supervisor reads worker stdout line-by-line; emitting a single
+    newline-terminated JSON line here is the same shape the protocol module
+    writes between requests. Multiple writers compose fine because each
+    notification is one self-contained line. Used to fire UI signals (e.g.
+    'specialist_assigned') the moment the designer classifies a brief —
+    BEFORE the long Sonnet + Tripo run — so the floor lights up the
+    matching specialist room at the right moment, not post-hoc on job_
+    completed.
+    """
+    try:
+        sys.stdout.write(
+            json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n"
+        )
+        sys.stdout.flush()
+    except Exception as e:
+        print(
+            f"[designer] could not emit JSON-RPC notification {method!r}: {e}",
+            file=sys.stderr, flush=True,
+        )
+
+
 def _designer_schema_block(brief: dict) -> str:
     """The non-negotiable protocol contract for the Designer's JSON output.
 
@@ -507,13 +1113,18 @@ def build_designer_prompt(brief: dict) -> tuple[str, str]:
         # _designer_schema_block so the strategist's override path and the
         # built-in path stay schema-equivalent.
         #
-        # Architecture: Identity → Pipeline-aware rules → Examples → Anti-
-        # patterns. The string `brief_for_image_gen` is sent verbatim to
-        # Nano Banana Pro (image render) and then the resulting PNG is fed
-        # into Tripo/Meshy image-to-3D. So the brief must satisfy BOTH
-        # stages — front-loaded subject + adjectives (early-token weighting),
-        # explicit pose, single stylization anchor, real-unit scale,
-        # printability constraints, and a negative clause.
+        # Architecture: Identity → Pipeline-aware rules → Archetype-tuned
+        # examples → Anti-patterns. The string `brief_for_image_gen` is sent
+        # verbatim to Nano Banana Pro (image render) and then the resulting
+        # PNG is fed into Tripo/Meshy image-to-3D. So the brief must satisfy
+        # BOTH stages — front-loaded subject + adjectives (early-token
+        # weighting), explicit pose, single stylization anchor, real-unit
+        # scale, printability constraints, and a negative clause. The
+        # archetype block (anime / superhero / mecha / chibi / deity /
+        # creature / humanoid / generic) swaps the worked examples for ones
+        # tuned to the archetype detected from the brief — same one-call
+        # cost, archetype-tuned anatomy guidance.
+        archetype_name, archetype_examples = _archetype_block(brief)
         philosophy = (
             "PERSONA — You are the Designer at an AI-run 3D-asset shop "
             "selling STL + GLB digital downloads on Etsy and Cults3D. You "
@@ -541,27 +1152,7 @@ def build_designer_prompt(brief: dict) -> tuple[str, str]:
             "surface] · [Scale anchor in real units] · [Printability "
             "constraints] · (negative: 3-5 explicit excludes)\n\n"
 
-            "EXAMPLES — copy this shape, swap the subject:\n"
-            "  Example 1 (character figurine): \"Standing goblin warrior, "
-            "three-quarter stance, sword raised overhead. Stylized cartoon "
-            "with hard-surface armor. Matte single-color render, no PBR "
-            "textures. 28mm tabletop mini scale, support-friendly silhouette "
-            "with circular base, single static mesh. (negative: no thin "
-            "spear blade, no floating cloak, no second figure, no "
-            "background)\"\n"
-            "  Example 2 (deity statue): \"Seated Bastet figurine, upright "
-            "posture, paws forward, head tilted slightly. Stylized Egyptian "
-            "Art Deco — sharp geometric forms, smooth surfaces. Matte "
-            "single-color, no painted detail. 15cm desk display scale, "
-            "hollow-printable, support-friendly. (negative: no jewelry "
-            "details, no offering bowl, no thin appendages, no hieroglyphs "
-            "floating in space)\"\n"
-            "  Example 3 (terrain tile): \"Single modular mushroom-forest "
-            "terrain tile, top-down view, 5cm hex base with central "
-            "mushroom cluster. Stylized D&D fantasy, low-poly. Solid base, "
-            "watertight geometry, no overhangs. 28mm tabletop scale. "
-            "(negative: no characters, no thin grass blades, no animal "
-            "figures, no separate components)\"\n\n"
+            f"{archetype_examples}\n"
 
             "HARD RULES for `brief_for_image_gen`:\n"
             "  • Exactly ONE subject (a 'modular tile set' counts as one "
@@ -624,25 +1215,26 @@ def build_designer_prompt(brief: dict) -> tuple[str, str]:
     return system, user
 
 
-def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
-    system_prompt, user_prompt = build_designer_prompt(brief)
-    override = _load_system_override("designer")
-    if override:
-        # The strategist may tune design philosophy, but the JSON-schema
-        # contract is non-negotiable — always re-append it so an override
-        # that forgets to mention the schema can't break the parser.
-        system_prompt = override.rstrip() + "\n\n" + _designer_schema_block(brief)
-    system_prompt = _append_operator_steers(system_prompt, "designer")
-    # Image-bearing steers attach to the user message as multimodal blocks
-    # (Anthropic's `system` is text-only). Designer benefits most from these
-    # — style / palette / silhouette refs feed the brief_for_image_gen.
-    user_content = _build_user_content_with_steer_images(user_prompt, "designer")
+# Haiku 4.5 is the validator. The critique is a tiny structured call
+# (~200 tokens in, ~150 out) and costs a fraction of a cent per asset — well
+# under the Sonnet designer call it protects. The critique only runs on 3D
+# briefs (the 2D path is for stickers and has its own SVG-quality pipeline
+# downstream). Set DESIGNER_CRITIQUE_DISABLED=1 to bypass entirely.
+CRITIQUE_MODEL = "claude-haiku-4-5-20251001"
 
+
+def _call_designer_sonnet(
+    api_key: str,
+    system_prompt: str,
+    user_content,
+) -> tuple[dict, int, int]:
+    """One Sonnet call → parsed designer JSON. Pulled out so call_anthropic
+    can reuse it for the initial brief AND the optional revision pass."""
     body = json.dumps({
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "system": system_prompt,
-                "messages": _messages_for_json_call(user_content),
+        "messages": _messages_for_json_call(user_content),
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -669,8 +1261,210 @@ def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
     usage = response.get("usage", {})
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
+    return _parse_loose_json_object(text), tokens_in, tokens_out
 
-    data = _parse_loose_json_object(text)
+
+def _critique_disabled() -> bool:
+    return os.environ.get("DESIGNER_CRITIQUE_DISABLED", "").strip() in ("1", "true", "yes")
+
+
+def _critique_brief(
+    api_key: str,
+    brief: dict,
+    asset: dict,
+    archetype: str,
+) -> tuple[bool, list[str], int, int]:
+    """Run the Haiku validator on `asset['brief_for_image_gen']`.
+
+    Returns `(passed, issues, tokens_in, tokens_out)`. `passed=True` means the
+    brief satisfies every hard rule and can ship straight to Nano Banana
+    Pro. `passed=False` returns a short list of issue strings the caller can
+    paste into a revision prompt. Network or parse failures fail OPEN —
+    the brief is treated as passed rather than blocking the pipeline on a
+    validator outage. Critique is light-touch: it grades, it doesn't
+    rewrite.
+    """
+    bfig = ""
+    if isinstance(asset, dict):
+        v = asset.get("brief_for_image_gen")
+        if isinstance(v, str):
+            bfig = v.strip()
+    if not bfig:
+        # No brief to critique — let the downstream pipeline handle the
+        # empty-field error in its own validation. Don't burn a Haiku call.
+        return True, [], 0, 0
+
+    system = (
+        "You are the brief validator for an AI-run 3D-asset shop. The "
+        "Designer just emitted a `brief_for_image_gen` string. That string "
+        "will be sent VERBATIM to Nano Banana Pro to render one image, "
+        "which Tripo/Meshy then reconstructs into a 3D mesh. Your job is "
+        "to check the brief against the hard rules below and return "
+        "STRUCTURED JSON only.\n\n"
+
+        "HARD RULES — every brief must satisfy ALL of these:\n"
+        "  1. Exactly ONE subject (no 'and his pet wolf').\n"
+        "  2. Explicit pose / orientation (standing / seated / kneeling / "
+        "three-quarter / top-down / side profile).\n"
+        "  3. Single stylization anchor (stylized cartoon | semi-realistic "
+        "| low-poly | organic flowing | hard-surface geometric | "
+        "sculptural realism). Not 4+ stacked stylization adjectives.\n"
+        "  4. Scale anchor in real units (mm / cm / inch / wearable / "
+        "tabletop / desk / display / altar).\n"
+        "  5. Printability clause — at least one of: 'support-friendly', "
+        "'single static mesh', 'matte single-color', 'watertight', "
+        "'hollow-printable'.\n"
+        "  6. Negative clause `(negative: ...)` with 3+ explicit excludes.\n"
+        "  7. Length 30-100 words.\n"
+        "  8. No named copyrighted IP (Naruto, Pikachu, Mickey, Spider-"
+        "Man, Yoda, Gundam, Pokémon, Marvel/DC heroes, etc.). Generic "
+        "archetype descriptions are fine.\n"
+        "  9. No non-physical effects (smoke, glitter, magic energy, glow, "
+        "particle systems).\n"
+        " 10. No vague adjectives ('beautiful', 'amazing', 'stunning', "
+        "'high-quality') stacked without geometry signal.\n\n"
+
+        "OUTPUT — JSON only, no prose, no markdown fences:\n"
+        "{\n"
+        '  "pass": <true | false>,\n'
+        '  "issues": ["<short reason 1>", "<short reason 2>", ...]\n'
+        "}\n"
+        "Use an empty issues list when pass is true. Be strict: when in "
+        "doubt, fail the brief. The shop loses real money on bad meshes."
+    )
+    user_payload = {
+        "archetype": archetype,
+        "niche": brief.get("niche", "") if isinstance(brief, dict) else "",
+        "brief_for_image_gen": bfig,
+    }
+    body = json.dumps({
+        "model": CRITIQUE_MODEL,
+        "max_tokens": 400,
+        "system": system,
+        "messages": _messages_for_json_call(json.dumps(user_payload)),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{ANTHROPIC_BASE_URL}/v1/messages",
+        data=body,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        raw = _retry_request(req, timeout=30, max_attempts=2)
+    except Exception as e:
+        print(
+            f"[designer.critique] validator unreachable, failing open: {e}",
+            file=sys.stderr, flush=True,
+        )
+        return True, [], 0, 0
+
+    try:
+        response = json.loads(raw)
+        text = response["content"][0]["text"]
+        if "{" not in text:
+            text = "{" + text
+        parsed = _parse_loose_json_object(text)
+        usage = response.get("usage", {})
+        ti = usage.get("input_tokens", 0)
+        to = usage.get("output_tokens", 0)
+    except Exception as e:
+        print(
+            f"[designer.critique] could not parse validator response, "
+            f"failing open: {e}",
+            file=sys.stderr, flush=True,
+        )
+        return True, [], 0, 0
+
+    passed = bool(parsed.get("pass", True))
+    issues_raw = parsed.get("issues") or []
+    issues = [str(x).strip() for x in issues_raw if str(x).strip()] if isinstance(issues_raw, list) else []
+    # If the model claims pass=true but still emitted issues, trust the
+    # issues — better one wasted revision than a bad mesh.
+    if passed and issues:
+        passed = False
+    return passed, issues, ti, to
+
+
+def call_anthropic(api_key: str, brief: dict) -> tuple[dict, int, int]:
+    system_prompt, user_prompt = build_designer_prompt(brief)
+    override = _load_system_override("designer")
+    product_type = brief.get("product_type", "") if isinstance(brief, dict) else ""
+    is_3d_brief = product_type in ("stl_file", "3d_model")
+    if override:
+        # The strategist may tune design philosophy, but two pieces still
+        # need to compose with the override:
+        #   1. The matched archetype's worked examples (real upvoted
+        #      briefs for humanoid/anime, synthetic templates for the
+        #      rest). The override owns the design rules; archetype
+        #      examples reinforce them with the right per-niche
+        #      composition.
+        #   2. The JSON-schema contract — non-negotiable, always re-
+        #      appended so an override that forgets to mention the schema
+        #      can't break the parser downstream.
+        system_prompt = override.rstrip()
+        if is_3d_brief:
+            _, archetype_examples_block = _archetype_block(brief)
+            system_prompt += "\n\n" + archetype_examples_block
+        system_prompt += "\n\n" + _designer_schema_block(brief)
+    system_prompt = _append_operator_steers(system_prompt, "designer")
+    # Image-bearing steers attach to the user message as multimodal blocks
+    # (Anthropic's `system` is text-only). Designer benefits most from these
+    # — style / palette / silhouette refs feed the brief_for_image_gen.
+    user_content = _build_user_content_with_steer_images(user_prompt, "designer")
+
+    data, tokens_in, tokens_out = _call_designer_sonnet(api_key, system_prompt, user_content)
+
+    # 3D briefs go through one optional critique + one-revision pass. The
+    # 2D path (stickers / digital prints) has its own SVG-validation
+    # pipeline downstream so the critique gate would be redundant there.
+    product_type = brief.get("product_type", "") if isinstance(brief, dict) else ""
+    is_3d = product_type in ("stl_file", "3d_model")
+    if is_3d and not _critique_disabled():
+        archetype = _classify_archetype(brief)
+        passed, issues, c_in, c_out = _critique_brief(api_key, brief, data, archetype)
+        tokens_in += c_in
+        tokens_out += c_out
+        if not passed and issues:
+            print(
+                f"[designer.critique] revising brief — archetype={archetype!r} "
+                f"issues={issues}",
+                file=sys.stderr, flush=True,
+            )
+            critique_block = (
+                "CRITIQUE FROM PRIOR ATTEMPT — your previous draft of "
+                "`brief_for_image_gen` failed validation against the hard "
+                "rules. Fix every issue below in your next response. Do "
+                "NOT acknowledge this critique in prose; just emit corrected "
+                "JSON per the schema:\n"
+                + "\n".join(f"  - {iss}" for iss in issues)
+            )
+            revised_system = system_prompt.rstrip() + "\n\n" + critique_block
+            try:
+                revised_data, r_in, r_out = _call_designer_sonnet(
+                    api_key, revised_system, user_content
+                )
+                tokens_in += r_in
+                tokens_out += r_out
+                # Only swap the brief if the revision produced a non-empty
+                # brief_for_image_gen — never replace a real brief with an
+                # empty one if Sonnet flubbed the second turn.
+                if (
+                    isinstance(revised_data, dict)
+                    and isinstance(revised_data.get("brief_for_image_gen"), str)
+                    and revised_data["brief_for_image_gen"].strip()
+                ):
+                    data = revised_data
+            except Exception as e:
+                print(
+                    f"[designer.critique] revision call failed, shipping "
+                    f"original brief: {e}",
+                    file=sys.stderr, flush=True,
+                )
+
     return data, tokens_in, tokens_out
 
 
@@ -1050,33 +1844,66 @@ def _run_image_to_3d(
     gemini-3-pro-image-preview). Both feed budget_ledger as separate
     per-call charges.
     """
-    try:
-        from . import nanobanana
-    except ImportError as e:
-        print(f"[designer] nanobanana import failed: {e}", file=sys.stderr, flush=True)
-        return None
-    prompt = (
-        asset.get("brief_for_image_gen")
-        or brief.get("design_direction")
-        or brief.get("niche")
-        or ""
-    )
-    if not isinstance(prompt, str) or not prompt.strip():
-        return None
-    try:
-        # api_key arg is a back-compat shim; the Higgsfield CLI handles
-        # auth internally so the value is ignored. We pass None to keep
-        # the signature explicit at the call site.
-        ref_path, image_gen_model = nanobanana.generate_reference_image(
-            None, prompt, job_id=job_id, assets_dir=assets_dir
+    mode = (brief.get("mode") or "creative").strip().lower()
+
+    if mode == "realism":
+        # Realism mode: skip nanobanana, pull a real photo of the brief's
+        # subject from the web. Failures here are HARD — we deliberately
+        # do not fall back to nanobanana/text-to-3D because either would
+        # silently ship the wrong face. Research has already forced
+        # ip_risk='high' so the publisher will hold this for operator
+        # approval before any marketplace upload.
+        try:
+            from . import realism
+        except ImportError as e:
+            print(f"[designer] realism import failed: {e}", file=sys.stderr, flush=True)
+            raise _Image3dMeshFailed(f"realism module unavailable: {e}") from e
+        query = (
+            brief.get("realism_subject")
+            or brief.get("niche")
+            or ""
         )
-    except Exception as e:
-        print(
-            f"[designer] nanobanana failed: {e} — image not available, "
-            "falling back to text-to-3D per image-first policy",
-            file=sys.stderr, flush=True,
+        if not isinstance(query, str) or not query.strip():
+            raise _Image3dMeshFailed("realism mode brief has no subject query")
+        try:
+            ref_path, image_gen_model = realism.acquire_reference(
+                query, job_id=job_id, assets_dir=assets_dir,
+            )
+        except realism.RealismError as e:
+            print(
+                f"[designer] realism reference acquisition FAILED: {e} — "
+                "NOT falling back to text-to-3D (realism subject is the brief)",
+                file=sys.stderr, flush=True,
+            )
+            raise _Image3dMeshFailed(f"realism reference failed: {e}") from e
+    else:
+        try:
+            from . import nanobanana
+        except ImportError as e:
+            print(f"[designer] nanobanana import failed: {e}", file=sys.stderr, flush=True)
+            return None
+        prompt = (
+            asset.get("brief_for_image_gen")
+            or brief.get("design_direction")
+            or brief.get("niche")
+            or ""
         )
-        return None
+        if not isinstance(prompt, str) or not prompt.strip():
+            return None
+        try:
+            # api_key arg is a back-compat shim; the Higgsfield CLI handles
+            # auth internally so the value is ignored. We pass None to keep
+            # the signature explicit at the call site.
+            ref_path, image_gen_model = nanobanana.generate_reference_image(
+                None, prompt, job_id=job_id, assets_dir=assets_dir
+            )
+        except Exception as e:
+            print(
+                f"[designer] nanobanana failed: {e} — image not available, "
+                "falling back to text-to-3D per image-first policy",
+                file=sys.stderr, flush=True,
+            )
+            return None
 
     provider = _image_to_3d_provider()
     # Provider selection is EXCLUSIVE: the settings choice picks one of
@@ -1394,6 +2221,27 @@ def handle(method: str, params: dict) -> dict:
 
     product_type = brief.get("product_type", "") if isinstance(brief, dict) else ""
     is_3d = product_type in ("stl_file", "3d_model")
+
+    # If this is a 3D brief, classify the archetype now and emit a JSON-RPC
+    # notification so the UI can walk the matching specialist avatar to
+    # "working" + push a design → specialist handoff BEFORE the long Sonnet
+    # + Tripo run kicks off. The classification is pure (no API call) so
+    # this is a fixed-cost addition.
+    archetype = _classify_archetype(brief) if is_3d else None
+    specialist_role = _SPECIALIST_ROLE_BY_ARCHETYPE.get(archetype) if archetype else None
+    if is_3d and specialist_role:
+        _emit_jsonrpc_notification("event", {
+            "kind": "specialist_assigned",
+            "archetype": archetype,
+            "specialist_role": specialist_role,
+            "designer_job_id": job_id,
+            "niche": brief.get("niche", "") if isinstance(brief, dict) else "",
+        })
+        print(
+            f"[designer] job_id={job_id} archetype={archetype!r} "
+            f"→ specialist={specialist_role!r}",
+            file=sys.stderr, flush=True,
+        )
 
     print(f"[designer] job_id={job_id} calling Anthropic model={MODEL} pt={product_type!r}", file=sys.stderr, flush=True)
     # provider_calls accumulates every non-Anthropic call this designer

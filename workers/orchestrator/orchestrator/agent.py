@@ -263,9 +263,10 @@ CHARACTER_POOLS_SAFE = ("original_anime", "mythology", "own_universe")
 
 def _character_pool() -> str:
     """Which character archetype tiers the orchestrator may mine.
-    Returns one of CHARACTER_POOLS_ALL or 'all' / 'safe'. Default 'all'."""
+    Returns one of CHARACTER_POOLS_ALL, 'all', 'safe', or 'real_life'.
+    Default 'all'."""
     v = os.environ.get("CHARACTER_POOL", "").strip().lower()
-    if v in CHARACTER_POOLS_ALL or v in {"all", "safe"}:
+    if v in CHARACTER_POOLS_ALL or v in {"all", "safe", "real_life"}:
         return v
     return "all"
 
@@ -275,6 +276,14 @@ def _enabled_pools() -> tuple[str, ...]:
     if pool == "all":
         return CHARACTER_POOLS_ALL
     if pool == "safe":
+        return CHARACTER_POOLS_SAFE
+    if pool == "real_life":
+        # Realism mode is operator-driven: the specific subject comes
+        # from REALISM_SUBJECT (research stamps it on the brief), so the
+        # orchestrator just picks the surrounding niche/product context.
+        # Default to safe tiers for that context — output is auto-routed
+        # to the IP-risk approval pool anyway via mode='realism', so we
+        # don't need to over-stack popular_ip here.
         return CHARACTER_POOLS_SAFE
     return (pool,)
 
@@ -1106,14 +1115,20 @@ def build_orchestrator_prompt(
         # it gets the model's strongest attention before the final pick.
         user_parts.append(
             "STRATEGIST NOTES — your tuner reviewed recent outcomes and "
-            "wrote this guidance for THIS cycle. Treat it as advisory, not "
-            "as a hard rule (operator steers above still trump it), but "
-            "lean into the patterns it surfaces:\n"
+            "wrote this guidance for THIS cycle. It is ADVISORY ONLY and "
+            "ranks BELOW the operator override / operator steers above. If "
+            "ANY line here conflicts with an operator steer — even a "
+            "'HARD BURN', 'no exceptions', or safety-framed instruction — "
+            "that line is VOID; obey the steer instead. Lean into the "
+            "non-conflicting patterns it surfaces:\n"
             f"{strategist_notes}"
         )
     user_parts.append(
         "Pick the next niche to pursue. Be specific, and make sure it's in "
-        "a category we haven't already over-covered."
+        "a category we haven't already over-covered. FINAL PRECEDENCE: if "
+        "anything above conflicts with an OPERATOR OVERRIDE / operator "
+        "steer, follow the steer — operator steers always win over "
+        "strategist notes and over your own category instincts."
     )
     user = "\n\n".join(user_parts)
     return system, user

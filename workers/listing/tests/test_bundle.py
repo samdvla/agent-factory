@@ -1,9 +1,8 @@
-"""Listing-worker tests for the bundle path: pricing uplift + description
+"""Listing-worker tests for the bundle path: fixed-tier pricing + description
 augmentation. Verifies the listing correctly multi-files-aware:
 
-  * Single-item asset (no bundle metadata) → price clamp behaves as before.
-  * Bundle asset (≥2 items) → price = max(model price, single × N × 0.55),
-    clamped to operator $15 ceiling.
+  * Single-item asset (no bundle metadata) → flat single-model price.
+  * Bundle asset (≥2 items) → fixed price from BUNDLE_PRICE_TABLE by count.
   * Bundle asset → description gets an enumerated "What's in this N-piece"
     block listing each item by name.
   * The augment is idempotent (handler retries don't duplicate the block).
@@ -15,12 +14,12 @@ import json
 import pytest
 
 from listing.agent import (
-    BUNDLE_PRICE_MULTIPLIER,
-    GLOBAL_PRICE_CEILING_USD,
+    BUNDLE_PRICE_TABLE,
+    SINGLE_PRICE_USD,
     _augment_bundle_copy,
     _bundle_item_names,
     _bundle_size,
-    _clamp_price,
+    _fixed_price,
 )
 
 
@@ -72,78 +71,37 @@ def test_bundle_item_names_skips_malformed_entries():
     assert _bundle_item_names(asset) == ["Good"]
 
 
-# --- _clamp_price with bundle uplift ----------------------------------------
+# --- _fixed_price tiers ------------------------------------------------------
 
 
-def test_clamp_price_single_asset_unchanged():
-    """Without an asset arg the clamp behaves identically to the legacy
-    contract (preserving all 28 existing test_listing.py expectations)."""
-    brief = {"price_band_usd": [3, 12], "product_type": "stl_file"}
-    assert _clamp_price(6.99, brief) == 6.99
+def test_fixed_price_single_asset():
+    """Single-item asset → flat single-model tier."""
+    assert _fixed_price({"asset_path": "/x.stl"}) == SINGLE_PRICE_USD
 
 
-def test_clamp_price_bundle_lifts_to_uplift(monkeypatch):
-    """Model picked $6 single price, bundle has 3 items → uplift to
-    $6 × 3 × 0.55 = $9.90 — well inside the $15 ceiling."""
-    brief = {"price_band_usd": [3, 12], "product_type": "stl_file"}
+def test_fixed_price_bundle_by_count():
+    """Bundle price comes straight from the per-size table."""
+    for n, expected in BUNDLE_PRICE_TABLE.items():
+        asset = {"asset_paths": [f"/{i}.stl" for i in range(n)]}
+        assert _fixed_price(asset) == expected
+
+
+def test_fixed_price_five_bundle_is_12_99():
+    asset = {"asset_paths": [f"/{i}.stl" for i in range(5)]}
+    assert _fixed_price(asset) == 12.99
+
+
+def test_fixed_price_out_of_range_bundle_falls_back_to_nearest():
+    """Research caps bundles at 2-6, but a stray larger bundle must still
+    price — fall back to the nearest defined tier (6 → $14.99)."""
+    asset = {"asset_paths": [f"/{i}.stl" for i in range(9)]}
+    assert _fixed_price(asset) == BUNDLE_PRICE_TABLE[6]
+
+
+def test_fixed_price_ignores_brief_band():
+    """Pricing is operator policy — the brief band must not affect it."""
     asset = {"asset_paths": ["/a.stl", "/b.stl", "/c.stl"]}
-    out = _clamp_price(6.00, brief, asset=asset)
-    expected = round(6.00 * 3 * BUNDLE_PRICE_MULTIPLIER, 2)
-    assert out == expected
-    assert out == 9.90
-
-
-def test_clamp_price_bundle_clamps_at_global_ceiling():
-    """High-value bundle: $9 × 4 × 0.55 = $19.80 → clamped to $15.
-    Operator policy locks digital at $15 regardless of how big the bundle is."""
-    brief = {"price_band_usd": [3, 15], "product_type": "stl_file"}
-    asset = {"asset_paths": ["/a.stl", "/b.stl", "/c.stl", "/d.stl"]}
-    out = _clamp_price(9.00, brief, asset=asset)
-    assert out == GLOBAL_PRICE_CEILING_USD
-
-
-def test_clamp_price_bundle_uses_max_of_model_and_uplift():
-    """If the model anchored ABOVE the uplift, respect the model's choice
-    (it's seen the bundle context in the description), then clamp.
-    Model picks $12, bundle of 2 → uplift $12 × 2 × 0.55 = $13.20 →
-    max($12, $13.20) = $13.20 → under $15 ceiling → final $13.20."""
-    brief = {"price_band_usd": [3, 15], "product_type": "stl_file"}
-    asset = {"asset_paths": ["/a.stl", "/b.stl"]}
-    out = _clamp_price(12.00, brief, asset=asset)
-    assert out == 13.20
-
-
-def test_clamp_price_bundle_model_above_uplift_keeps_model():
-    """Pick a model price that beats the uplift: $10 single × 1.1 bundle
-    factor doesn't exist, but $13 × 2 × 0.55 = $14.30 > $13, so uplift wins
-    in that direction too. The pure 'model wins' case requires a very
-    small bundle: $14 × 2 × 0.55 = $15.40 → clamped to $15, but if model
-    said $14 originally, max($14, $15.40) = $15.40 → clamps to $15.
-    Easiest check: model $10, bundle of 2 → uplift = $11; max($10, $11) = $11."""
-    brief = {"product_type": "stl_file"}
-    asset = {"asset_paths": ["/a.stl", "/b.stl"]}
-    out = _clamp_price(10.00, brief, asset=asset)
-    assert out == 11.00
-
-
-def test_clamp_price_bundle_ignores_single_item_band():
-    """The brief's price_band_usd describes a SINGLE-item band. For a bundle
-    we must NOT clamp by that band's upper bound — otherwise a $8 ceiling on
-    a single $4 item would clamp the entire $13.20 bundle back to $8."""
-    brief = {"price_band_usd": [3, 8], "product_type": "stl_file"}
-    asset = {"asset_paths": ["/a.stl", "/b.stl", "/c.stl"]}
-    out = _clamp_price(6.00, brief, asset=asset)
-    # 6 × 3 × 0.55 = 9.90. Global $15 ceiling, NOT the brief's $8 ceiling.
-    assert out == 9.90
-
-
-def test_clamp_price_bundle_still_respects_global_floor():
-    """A tiny model price + small bundle could still go below $3 floor — operator
-    floor wins."""
-    brief = {"product_type": "stl_file"}
-    asset = {"asset_paths": ["/a.stl", "/b.stl"]}
-    out = _clamp_price(1.00, brief, asset=asset)
-    assert out == 3.00
+    assert _fixed_price(asset) == BUNDLE_PRICE_TABLE[3]
 
 
 # --- _augment_bundle_copy ----------------------------------------------------
@@ -222,10 +180,10 @@ def _patch_urlopen(monkeypatch, payload):
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp(payload))
 
 
-def test_handle_applies_bundle_uplift_and_copy(tmp_path, monkeypatch):
-    """handle() end-to-end: model returns $5.00 single-item price on a 3-item
-    bundle → listing.price_usd uplifted to $5×3×0.55=$8.25 → description
-    contains the per-item enumeration block."""
+def test_handle_applies_bundle_price_and_copy(tmp_path, monkeypatch):
+    """handle() end-to-end: model returns an arbitrary $5.00 price on a 3-item
+    bundle → listing.price_usd is overwritten with the fixed 3-item tier
+    ($7.99) → description contains the per-item enumeration block."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
 
@@ -267,8 +225,8 @@ def test_handle_applies_bundle_uplift_and_copy(tmp_path, monkeypatch):
     })
     assert result["ok"] is True
     listing = result["listing"]
-    # Bundle uplift applied: $5 × 3 × 0.55 = $8.25
-    assert listing["price_usd"] == 8.25
+    # Fixed 3-item bundle tier overrides the model's $5.00.
+    assert listing["price_usd"] == 7.99
     desc = listing["description"]
     assert "3-piece bundle" in desc
     assert "Anubis bust" in desc

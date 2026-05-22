@@ -3,11 +3,11 @@ import json
 from listing.agent import (
     build_listing_prompt,
     validate_listing,
-    _clamp_price,
+    _fixed_price,
     _augment_listing,
     AI_DISCLOSURE_TEXT,
     PRODUCT_MATERIALS,
-    NEW_SHOP_PRICE_CEILING_USD,
+    SINGLE_PRICE_USD,
 )
 
 
@@ -19,50 +19,17 @@ def test_prompt_includes_title_constraint():
     assert "13 tags" in system or "Exactly 13" in system
 
 
-def test_clamp_price_caps_at_band_upper():
-    brief = {"price_band_usd": [3, 8]}
-    assert _clamp_price(25, brief) == 8.0
+def test_fixed_price_single_is_flat():
+    """Every single model ships at the flat single-model tier, regardless
+    of brief band or product type."""
+    assert _fixed_price({"asset_path": "/x.stl"}) == SINGLE_PRICE_USD
+    assert _fixed_price({}) == SINGLE_PRICE_USD
+    assert _fixed_price(None) == SINGLE_PRICE_USD
 
 
-def test_clamp_price_caps_at_global_ceiling_when_no_band():
-    brief = {"niche": "x"}
-    assert _clamp_price(50, brief) == NEW_SHOP_PRICE_CEILING_USD
-
-
-def test_clamp_price_lifts_below_band_lower():
-    brief = {"price_band_usd": [5, 12]}
-    assert _clamp_price(0.50, brief) == 5.0
-
-
-def test_clamp_price_enforces_floor_when_band_lower_is_zero():
-    """Operator policy floor ($3) must override a brief lower bound of 0."""
-    brief = {"price_band_usd": [0, 12]}
-    assert _clamp_price(0.50, brief) == 3.00
-
-
-def test_clamp_price_passthrough_in_band():
-    brief = {"price_band_usd": [3, 12]}
-    assert _clamp_price(6.99, brief) == 6.99
-
-
-def test_clamp_price_global_ceiling_supersedes_brief_band():
-    """Operator policy locks every digital sale to $3-$15. Even if research
-    returns a wider band, the global cap wins."""
-    brief = {"price_band_usd": [5, 50], "product_type": "stl_file"}
-    assert _clamp_price(40, brief) == 15.0
-
-
-def test_clamp_price_3d_model_capped_at_15():
-    """3d_model used to allow up to $30 — operator policy now caps all
-    digital types at $15."""
-    brief = {"product_type": "3d_model"}
-    assert _clamp_price(25, brief) == 15.0
-
-
-def test_clamp_price_global_floor_supersedes_brief_band():
-    """A brief that asks for $0.50 must still be raised to the operator $3 floor."""
-    brief = {"price_band_usd": [0.50, 8], "product_type": "stl_file"}
-    assert _clamp_price(1.00, brief) == 3.00
+def test_fixed_price_ignores_brief_band():
+    """Pricing is operator policy — a brief price band must not move it."""
+    assert _fixed_price({"price_band_usd": [10, 50], "asset_path": "/x.stl"}) == SINGLE_PRICE_USD
 
 
 def test_augment_listing_appends_ai_disclosure():

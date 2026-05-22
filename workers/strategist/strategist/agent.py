@@ -556,10 +556,44 @@ def _read_recent_drafts(limit: int = ORCH_DRAFTS_TAIL_LIMIT) -> list[dict]:
     return data[-limit:]
 
 
+def _collect_operator_steers(prompts: dict, roles: list[str]) -> list[str]:
+    """Pull active operator-steer TEXTS for the given roles out of a loaded
+    prompts.json dict, de-duplicated, preserving order. Accepts both on-disk
+    shapes: plain strings and {"text": ..., "image_paths": [...]} objects
+    (matching the orchestrator's _load_operator_steers). Returns [] when none.
+
+    The strategist must see these so its notes never contradict a steer —
+    operator steers are law and outrank strategist guidance.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for role in roles:
+        section = prompts.get(role)
+        arr = section.get("operator_steers") if isinstance(section, dict) else None
+        if not isinstance(arr, list):
+            continue
+        for entry in arr:
+            text: str | None = None
+            if isinstance(entry, str):
+                text = entry
+            elif isinstance(entry, dict) and isinstance(entry.get("text"), str):
+                text = entry["text"]
+            if not text or not text.strip():
+                continue
+            text = text.strip()
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+    return out
+
+
 def build_orchestrator_notes_prompt(
     current_notes: str | None,
     outcomes: list[dict],
     recent_drafts: list[dict],
+    operator_steers: list[str] | None = None,
 ) -> tuple[str, str]:
     """Synthesis prompt for tuning the orchestrator (Strategy Lead).
 
@@ -598,6 +632,21 @@ def build_orchestrator_notes_prompt(
         "data — do NOT cite it as a winner. The variable to tune is WHAT "
         "KIND OF CHARACTER (anime, mythology, sci-fi, fantasy, monster, "
         "mascot, etc.), not whether to pivot back to objects.\n\n"
+
+        "OPERATOR STEERS ARE LAW (HIGHEST PRIORITY — above everything here, "
+        "including the scope rule):\n"
+        " The operator's active steers are listed in your input below. They "
+        "are standing orders from the human who runs the shop. Your note MUST "
+        "stay consistent with them and MUST NEVER contradict, override, "
+        "soften, veto, or 'burn' an active steer — not even on platform-"
+        "safety grounds. If a steer asks for content a marketplace dislikes "
+        "(e.g. mature / NSFW), DO NOT tell the orchestrator to stop picking "
+        "it: the publisher already routes mature_content only to platforms "
+        "that allow it (Sketchfab / Cults3D / Gumroad) and skips Etsy / Fab / "
+        "Printify / Pinterest / MMF automatically. Your job is to help the "
+        "orchestrator EXECUTE the steer well (better head-nouns, scale, "
+        "framing, breadth within the steer), never to fight it. When no "
+        "steers are listed, tune freely within the scope rule above.\n\n"
 
         "WHAT THE ORCHESTRATOR ALREADY SEES on its own:\n"
         " • A character-archetype universe (mythology deities, eldritch "
@@ -640,10 +689,22 @@ def build_orchestrator_notes_prompt(
         f"The notes must be between {NOTES_MIN_LEN} and {NOTES_MAX_LEN} chars."
     )
 
+    if operator_steers:
+        steers_block = (
+            "ACTIVE OPERATOR STEERS (LAW — your note must NEVER contradict, "
+            "veto, or burn these; help the orchestrator execute them):\n"
+            + "\n".join(f"  - {s}" for s in operator_steers)
+        )
+    else:
+        steers_block = (
+            "ACTIVE OPERATOR STEERS: (none — tune freely within the scope rule)"
+        )
+
     user = (
         "Recent outcomes (most recent last):\n"
         f"{summarize_outcomes(outcomes)}\n\n"
         f"{drafts_summary}\n\n"
+        f"{steers_block}\n\n"
         "Current strategist_notes the orchestrator is reading:\n"
         f"---\n{cur}\n---\n\n"
         "Produce a fresh, surgical strategist_notes payload."
@@ -684,8 +745,11 @@ def _process_orchestrator_tuning(job_id: int) -> dict:
         if isinstance(cur, str):
             current_notes = cur
     recent_drafts = _read_recent_drafts()
+    operator_steers = _collect_operator_steers(prompts, ["orchestrator", "research"])
 
-    system, user = build_orchestrator_notes_prompt(current_notes, outcomes, recent_drafts)
+    system, user = build_orchestrator_notes_prompt(
+        current_notes, outcomes, recent_drafts, operator_steers=operator_steers
+    )
     try:
         result, tokens_in, tokens_out = call_anthropic(api_key, system, user)
     except Exception as e:

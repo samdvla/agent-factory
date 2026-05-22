@@ -695,6 +695,32 @@ def _normalize_brief(brief: dict) -> None:
         brief.get("keywords"),
     )
     brief["mature_content"] = bool(inferred_mc or (declared_mc is True))
+    # Creative vs realism mode. Creative (default) renders the reference
+    # via nanobanana from the design_direction text. Realism searches the
+    # web for a real photo of the brief's subject (real people / licensed
+    # characters) because text-to-image cannot reproduce a specific real
+    # likeness. Realism output is ALWAYS IP-loaded, so we force ip_risk
+    # to 'high' — the publisher then holds the draft for operator approval
+    # before any marketplace upload, mirroring the mature_content
+    # routing pattern.
+    #
+    # Operator control: Settings → Realism Mode writes the
+    # `realism_subject` secret, which the Tauri layer forwards as
+    # REALISM_SUBJECT env. A non-empty value here means "the next cycle
+    # is realism with THIS subject" and overrides whatever the model
+    # self-declared in the brief.
+    env_subject = os.environ.get("REALISM_SUBJECT", "").strip()
+    declared_mode = brief.get("mode")
+    is_realism = bool(env_subject) or (
+        isinstance(declared_mode, str) and declared_mode.strip().lower() == "realism"
+    )
+    if is_realism:
+        brief["mode"] = "realism"
+        brief["ip_risk"] = "high"
+        if env_subject:
+            brief["realism_subject"] = env_subject
+    else:
+        brief["mode"] = "creative"
 
 
 def build_demand_brief_prompt(

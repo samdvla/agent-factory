@@ -3,7 +3,7 @@
 Walks a real bundle brief through every worker boundary the way the
 supervisor would, asserting that:
   • Designer generates N bundle items (mesh quality gate runs on each).
-  • Listing applies the bundle uplift and enumerates items in description.
+  • Listing prices by fixed tier (bundle size) and enumerates items in description.
   • Publisher threads asset_paths + bundle metadata to cfo + writes the
     Pinterest pin + records everything in the audit JSON.
 
@@ -94,7 +94,7 @@ def _make_test_glb(path: str) -> None:
 def test_full_pipeline_bundle_listing(tmp_path, monkeypatch):
     """Drive a 3-item bundle through designer → listing → publisher and
     verify the FINAL result carries: bundle_size=3, asset_paths=[3 stls],
-    pinterest_pin_path written, bundle uplift applied to price."""
+    pinterest_pin_path written, fixed-tier bundle price applied."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENT_FACTORY_DATA", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -103,6 +103,10 @@ def test_full_pipeline_bundle_listing(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAGE_TO_3D_PROVIDER", "tripo")
     monkeypatch.setenv("BUNDLE_GENERATION_ENABLED", "1")
     monkeypatch.setenv("PINTEREST_PIN_ENABLED", "1")
+    # These tests pre-queue exactly designer + listing mock responses. The
+    # critique pass would consume an extra Anthropic call and drain the
+    # queue. Critique has its own focused tests in test_designer.py.
+    monkeypatch.setenv("DESIGNER_CRITIQUE_DISABLED", "1")
 
     # ---- Mock Anthropic in a way that satisfies both designer + listing ----
     # Designer's call comes first (Haiku JSON), then listing's call (Sonnet
@@ -194,8 +198,9 @@ def test_full_pipeline_bundle_listing(tmp_path, monkeypatch):
         f"listing failed: {listing_result.get('error')!r}"
     )
     listing = listing_result["listing"]
-    # Bundle uplift: $5 × 3 × 0.55 = $8.25
-    assert listing["price_usd"] == 8.25
+    # Fixed-tier pricing: 3-item bundle ships at BUNDLE_PRICE_TABLE[3],
+    # ignoring whatever price the model proposed.
+    assert listing["price_usd"] == 7.99
     desc = listing["description"]
     # Every bundle item name appears in the description.
     for name in bundle_items:
@@ -242,6 +247,10 @@ def test_full_pipeline_single_listing_back_compat(tmp_path, monkeypatch):
     monkeypatch.delenv("MESHY_API_KEY", raising=False)
     monkeypatch.setenv("BUNDLE_GENERATION_ENABLED", "1")
     monkeypatch.setenv("PINTEREST_PIN_ENABLED", "1")
+    # These tests pre-queue exactly designer + listing mock responses. The
+    # critique pass would consume an extra Anthropic call and drain the
+    # queue. Critique has its own focused tests in test_designer.py.
+    monkeypatch.setenv("DESIGNER_CRITIQUE_DISABLED", "1")
 
     queue = [_haiku_3d_response(), _listing_tool_response(price=6.99)]
     qi = iter(queue)
@@ -294,8 +303,9 @@ def test_full_pipeline_single_listing_back_compat(tmp_path, monkeypatch):
         {"job_id": 600, "payload": designer_result["handoff"]["payload"]},
     )
     assert listing_result["ok"] is True
-    # No bundle uplift — model price comes through after the legacy clamp.
-    assert listing_result["listing"]["price_usd"] == 6.99
+    # Single model ships at the fixed SINGLE_PRICE_USD tier — the model's
+    # proposed $6.99 is intentionally discarded by operator pricing policy.
+    assert listing_result["listing"]["price_usd"] == 3.99
 
     from publisher.agent import handle as publisher_handle  # noqa: E402
     publisher_result = publisher_handle(
@@ -318,6 +328,10 @@ def test_full_pipeline_bundle_partial_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("TRIPO_API_KEY", "t-test")
     monkeypatch.setenv("BUNDLE_GENERATION_ENABLED", "1")
     monkeypatch.setenv("PINTEREST_PIN_ENABLED", "1")
+    # These tests pre-queue exactly designer + listing mock responses. The
+    # critique pass would consume an extra Anthropic call and drain the
+    # queue. Critique has its own focused tests in test_designer.py.
+    monkeypatch.setenv("DESIGNER_CRITIQUE_DISABLED", "1")
 
     queue = [_haiku_3d_response(), _listing_tool_response(price=6.00)]
     qi = iter(queue)
@@ -376,8 +390,9 @@ def test_full_pipeline_bundle_partial_failure(tmp_path, monkeypatch):
         {"job_id": 700, "payload": designer_result["handoff"]["payload"]},
     )
     assert listing_result["ok"] is True
-    # Bundle uplift: $6 × 2 × 0.55 = $6.60
-    assert listing_result["listing"]["price_usd"] == pytest.approx(6.60, abs=0.01)
+    # Partial failure dropped the bundle from 3 → 2 surviving items, so it
+    # ships at the fixed 2-item tier BUNDLE_PRICE_TABLE[2].
+    assert listing_result["listing"]["price_usd"] == 5.99
 
     from publisher.agent import handle as publisher_handle  # noqa: E402
     publisher_result = publisher_handle(

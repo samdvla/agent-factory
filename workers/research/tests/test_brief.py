@@ -395,3 +395,47 @@ def test_loose_json_handles_fence_and_trailing_prose():
     )
     out = _parse_loose_json_object(body)
     assert out["niche"] == "yokai keychain"
+
+
+def test_normalize_brief_realism_forces_high_ip_risk():
+    """Realism mode = real-person likeness or licensed character, so the
+    publisher must hold the draft for operator approval. We enforce this
+    by overriding ip_risk to 'high' regardless of what the model self-
+    declared, mirroring the mature_content backstop pattern."""
+    brief = {"niche": "lebron james figurine", "mode": "realism", "ip_risk": "none"}
+    _normalize_brief(brief)
+    assert brief["mode"] == "realism"
+    assert brief["ip_risk"] == "high"
+
+
+def test_normalize_brief_default_mode_is_creative():
+    brief = {"niche": "wizard figurine"}
+    _normalize_brief(brief)
+    assert brief["mode"] == "creative"
+
+
+def test_normalize_brief_invalid_mode_falls_back_to_creative():
+    brief = {"niche": "x", "mode": "freestyle"}
+    _normalize_brief(brief)
+    assert brief["mode"] == "creative"
+
+
+def test_normalize_brief_realism_subject_env_overrides_mode(monkeypatch):
+    """Settings → Realism Mode writes the realism_subject secret; Tauri
+    forwards it as REALISM_SUBJECT env. A non-empty env value flips the
+    brief to realism mode regardless of what the model declared, and
+    populates realism_subject so the designer's search query is the
+    operator's choice (not the niche string)."""
+    monkeypatch.setenv("REALISM_SUBJECT", "Lebron James")
+    brief = {"niche": "athlete figurine", "mode": "creative"}
+    _normalize_brief(brief)
+    assert brief["mode"] == "realism"
+    assert brief["ip_risk"] == "high"
+    assert brief["realism_subject"] == "Lebron James"
+
+
+def test_normalize_brief_empty_realism_subject_env_stays_creative(monkeypatch):
+    monkeypatch.setenv("REALISM_SUBJECT", "   ")
+    brief = {"niche": "wizard figurine"}
+    _normalize_brief(brief)
+    assert brief["mode"] == "creative"

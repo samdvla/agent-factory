@@ -44,7 +44,13 @@ def _capture_anthropic_system(monkeypatch):
             }).encode("utf-8")
 
     def _fake_urlopen(req, timeout=60):
-        captured["body"] = json.loads(req.data.decode("utf-8"))
+        # Only capture the FIRST call — that's the designer Sonnet call
+        # these tests are asserting against. The 3D path may fire a follow-
+        # up Haiku critique call (and a Sonnet revision if critique fails);
+        # those use a different system prompt and would otherwise overwrite
+        # the body we want to inspect.
+        if "body" not in captured:
+            captured["body"] = json.loads(req.data.decode("utf-8"))
         return _Resp()
 
     import urllib.request
@@ -101,6 +107,60 @@ def test_no_override_uses_default(tmp_path, monkeypatch):
     call_anthropic("k-test", {"niche": "x"})
     default_system, _ = build_designer_prompt({"niche": "x"})
     assert captured["body"]["system"] == default_system
+
+
+def test_override_plus_3d_brief_appends_archetype_examples(tmp_path, monkeypatch):
+    """When the strategist's system_override is active AND the brief is 3D,
+    the matched archetype's worked examples MUST still land in the system
+    prompt. Before this wire, override was nuclear and the archetype block
+    was silently dropped — meaning all the prompt work was dead code in
+    production where the override is always present."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    override_text = "Designer override that emphasizes Skitarii-style detail. " * 8
+    (af_dir / "prompts.json").write_text(json.dumps({
+        "designer": {"system_override": override_text},
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from designer.agent import call_anthropic
+    # The niche "Skitarii cybernetic ranger" classifies as humanoid_character
+    # and should pull in the upvoted Cyber-priestess + Radium Ranger
+    # examples from the archetype block.
+    call_anthropic("k-test", {
+        "niche": "Skitarii cybernetic ranger warrior",
+        "product_type": "stl_file",
+    })
+    sent = captured["body"]["system"]
+    # 1. The override survives.
+    assert "Skitarii-style detail" in sent
+    # 2. The matched archetype's examples land too.
+    assert "ARCHETYPE: humanoid character" in sent
+    assert "Void-Cantor cyber-priestess" in sent, (
+        "real upvoted Cyber-priestess brief must appear in override path"
+    )
+    # 3. Schema is still re-appended.
+    assert "stl_file" in sent
+    assert "JSON only" in sent
+
+
+def test_override_plus_2d_brief_skips_archetype(tmp_path, monkeypatch):
+    """2D briefs never go through the archetype router — verify the override
+    path still drops the archetype block when the brief isn't 3D."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    af_dir = tmp_path / ".agent-factory"
+    af_dir.mkdir()
+    (af_dir / "prompts.json").write_text(json.dumps({
+        "designer": {"system_override": "Designer override for 2D path."},
+    }))
+
+    captured = _capture_anthropic_system(monkeypatch)
+    from designer.agent import call_anthropic
+    call_anthropic("k-test", {"niche": "minimalist line art"})
+    sent = captured["body"]["system"]
+    assert "Designer override for 2D path." in sent
+    assert "ARCHETYPE" not in sent
 
 
 def test_drift_guard_rejects_stale_svg_override(tmp_path, monkeypatch):
@@ -194,6 +254,307 @@ def test_brief_parse_ignores_trailing_prose(monkeypatch, tmp_path):
     from designer.agent import call_anthropic
     parsed, _, _ = call_anthropic("k-test", {"niche": "boho"})
     assert parsed == asset_json
+
+
+# --- Archetype router + brief critique ---
+
+
+def test_archetype_classifier_picks_anime_over_humanoid():
+    """'anime warrior' must classify as anime_stylized, not humanoid — anime
+    keywords come first in _ARCHETYPE_KEYWORDS for exactly this reason."""
+    from designer.agent import _classify_archetype
+    assert _classify_archetype({"niche": "anime warrior figurine"}) == "anime_stylized"
+
+
+def test_archetype_classifier_catches_each_archetype():
+    from designer.agent import _classify_archetype
+    cases = {
+        "anime_stylized": {"niche": "chibi magical girl mini"},
+        "superhero": {"niche": "caped vigilante action figure"},
+        "mecha_robot": {"niche": "mecha pilot battle suit"},
+        "chibi_mascot": {"niche": "kawaii mascot plushie"},
+        "deity_statue": {"niche": "egyptian god altar statue"},
+        "creature": {"niche": "fantasy dragon mini"},
+        "humanoid_character": {"niche": "fantasy dwarf paladin"},
+        "generic": {"niche": "abstract collectible"},
+        "generic": {},
+    }
+    for expected, brief in cases.items():
+        assert _classify_archetype(brief) == expected, brief
+
+
+def test_3d_prompt_swaps_in_creature_examples_for_dragon_brief(tmp_path, monkeypatch):
+    """A dragon brief must put the creature archetype examples into the
+    Sonnet prompt — wyvern example specifically, not goblin warrior."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from designer.agent import build_designer_prompt
+    system, _user = build_designer_prompt({"niche": "tabletop dragon mini", "product_type": "stl_file"})
+    assert "ARCHETYPE: creature" in system
+    assert "Coiled wyvern" in system
+    # The goblin warrior example must NOT leak into the creature path.
+    assert "Standing goblin warrior" not in system
+
+
+def test_3d_prompt_uses_anime_examples_for_anime_brief(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from designer.agent import build_designer_prompt
+    system, _user = build_designer_prompt({
+        "niche": "anime swordmaiden figurine",
+        "product_type": "stl_file",
+    })
+    assert "ARCHETYPE: anime" in system
+    # The anime block now uses the REAL upvoted swordmaiden brief from job
+    # 2651 as Example 2 — the marker "swordmaiden warrior goddess" only
+    # appears in that example, so it's a reliable signature.
+    assert "swordmaiden warrior goddess" in system
+    # The creature block must not leak into the anime path.
+    assert "Coiled wyvern" not in system
+
+
+def test_2d_brief_skips_archetype_block(tmp_path, monkeypatch):
+    """The 2D path (stickers, prints) must not get the 3D archetype
+    structure — the SVG pipeline downstream relies on the older shape."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from designer.agent import build_designer_prompt
+    system, _user = build_designer_prompt({"niche": "boho moon stickers"})
+    assert "ARCHETYPE" not in system
+
+
+def _critique_resp(passed: bool, issues=None):
+    return _resp({
+        "content": [{"type": "text", "text": json.dumps({
+            "pass": passed,
+            "issues": issues or [],
+        })}],
+        "usage": {"input_tokens": 80, "output_tokens": 40},
+    })
+
+
+def _designer_3d_resp(brief_text: str = "Standing dwarf paladin, three-quarter stance, warhammer raised. Stylized cartoon hard-surface armor. Matte single-color render, no PBR textures. 28mm tabletop scale, support-friendly silhouette, single static mesh. (negative: no thin spear, no floating cloak, no second figure, no background)"):
+    return _resp({
+        "content": [{"type": "text", "text": json.dumps({
+            "asset_type": "stl_file",
+            "style": "stylized cartoon",
+            "palette": ["#aaa"],
+            "dimensions": "28mm tabletop",
+            "mockup_count": 1,
+            "brief_for_image_gen": brief_text,
+        })}],
+        "usage": {"input_tokens": 60, "output_tokens": 100},
+    })
+
+
+def test_critique_passes_no_revision(tmp_path, monkeypatch):
+    """Critique returns pass=true → no revision call, original asset returned."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DESIGNER_CRITIQUE_DISABLED", raising=False)
+    calls = []
+    queue = iter([_designer_3d_resp(), _critique_resp(passed=True)])
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode("utf-8"))
+        calls.append(body["model"])
+        return next(queue)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from designer.agent import call_anthropic, MODEL, CRITIQUE_MODEL
+    asset, _ti, _to = call_anthropic("k-test", {
+        "niche": "dwarf paladin mini",
+        "product_type": "stl_file",
+    })
+    assert calls == [MODEL, CRITIQUE_MODEL]
+    assert "warhammer" in asset["brief_for_image_gen"]
+
+
+def test_critique_fail_triggers_one_revision(tmp_path, monkeypatch):
+    """Critique returns pass=false with issues → exactly one revision Sonnet
+    call fires, and the asset is replaced with the revised brief."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DESIGNER_CRITIQUE_DISABLED", raising=False)
+    calls = []
+    queue = iter([
+        _designer_3d_resp("bad brief: a dragon AND a wolf"),
+        _critique_resp(passed=False, issues=["multiple subjects", "missing pose"]),
+        _designer_3d_resp("Coiled wyvern, head reared, wings folded. Stylized fantasy. Matte single-color. 12cm tabletop. support-friendly silhouette, single static mesh. (negative: no spread wings, no thin tongue, no background)"),
+    ])
+    revised_systems = []
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode("utf-8"))
+        calls.append(body["model"])
+        if body["model"].startswith("claude-sonnet") and len(calls) > 1:
+            revised_systems.append(body["system"])
+        return next(queue)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from designer.agent import call_anthropic, MODEL, CRITIQUE_MODEL
+    asset, _ti, _to = call_anthropic("k-test", {
+        "niche": "tabletop dragon mini",
+        "product_type": "stl_file",
+    })
+    assert calls == [MODEL, CRITIQUE_MODEL, MODEL]
+    assert len(revised_systems) == 1
+    assert "CRITIQUE FROM PRIOR ATTEMPT" in revised_systems[0]
+    assert "multiple subjects" in revised_systems[0]
+    assert "Coiled wyvern" in asset["brief_for_image_gen"]
+
+
+def test_critique_disabled_via_env(tmp_path, monkeypatch):
+    """DESIGNER_CRITIQUE_DISABLED=1 → critique never runs, only the designer
+    Sonnet call fires."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DESIGNER_CRITIQUE_DISABLED", "1")
+    calls = []
+    queue = iter([_designer_3d_resp()])
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode("utf-8"))
+        calls.append(body["model"])
+        return next(queue)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from designer.agent import call_anthropic, MODEL
+    call_anthropic("k-test", {"niche": "dragon mini", "product_type": "stl_file"})
+    assert calls == [MODEL]
+
+
+def test_critique_skipped_on_2d_briefs(tmp_path, monkeypatch):
+    """The 2D path (sticker / digital print) must not invoke the critique —
+    only one Anthropic call total."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DESIGNER_CRITIQUE_DISABLED", raising=False)
+    calls = []
+    queue = iter([_haiku_response()])
+
+    def fake_urlopen(req, timeout=60):
+        body = json.loads(req.data.decode("utf-8"))
+        calls.append(body["model"])
+        return next(queue)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from designer.agent import call_anthropic, MODEL
+    call_anthropic("k-test", {"niche": "minimalist wall art"})
+    assert calls == [MODEL]
+
+
+def test_critique_fails_open_on_validator_error(tmp_path, monkeypatch):
+    """If the critique call raises mid-flight, the original asset must still
+    be returned — we don't want a validator outage to wedge the pipeline."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DESIGNER_CRITIQUE_DISABLED", raising=False)
+    state = {"n": 0}
+
+    def fake_urlopen(req, timeout=60):
+        state["n"] += 1
+        if state["n"] == 1:
+            return _designer_3d_resp()
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from designer.agent import call_anthropic
+    asset, _ti, _to = call_anthropic("k-test", {
+        "niche": "dragon mini",
+        "product_type": "stl_file",
+    })
+    # Designer brief survives despite the validator outage.
+    assert "warhammer" in asset["brief_for_image_gen"] or "dragon" in asset["brief_for_image_gen"].lower()
+
+
+# --- Specialist-assigned notification (designer → UI signal) ---
+
+
+def test_specialist_role_map_covers_every_archetype():
+    """The archetype → specialist_role map must have an entry for every
+    archetype the classifier can emit. Missing one means a 3D brief in
+    that category would silently produce no UI signal."""
+    from designer.agent import (
+        _ARCHETYPE_KEYWORDS, _ARCHETYPE_BLOCKS, _SPECIALIST_ROLE_BY_ARCHETYPE,
+    )
+    # Every archetype defined in keywords + blocks (including 'generic')
+    # must appear in the specialist map.
+    all_archetypes = set(_ARCHETYPE_KEYWORDS.keys()) | set(_ARCHETYPE_BLOCKS.keys())
+    for a in all_archetypes:
+        assert a in _SPECIALIST_ROLE_BY_ARCHETYPE, (
+            f"archetype {a!r} missing from specialist map"
+        )
+    # Generic must explicitly map to None — "lead designer keeps it."
+    assert _SPECIALIST_ROLE_BY_ARCHETYPE["generic"] is None
+
+
+def test_3d_handle_emits_specialist_assigned_notification(tmp_path, monkeypatch, capsys):
+    """When a 3D brief enters handle(), the worker must emit a JSON-RPC
+    notification with kind=specialist_assigned + the matched specialist
+    role id, BEFORE the long Sonnet/Tripo work begins. The frontend listens
+    for this to animate the design → specialist handoff in real time."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    # Stub the actual Anthropic call so we don't try to hit the network.
+    monkeypatch.setattr(urllib.request, "urlopen",
+        lambda req, timeout=60: (_ for _ in ()).throw(RuntimeError("stubbed")))
+
+    from designer.agent import handle
+    # The handle is allowed to fail — we only care that the notification
+    # fired BEFORE the failure.
+    try:
+        handle("process_job", {
+            "job_id": 9001,
+            "payload": {"brief": {
+                "niche": "Skitarii cybernetic ranger",
+                "product_type": "stl_file",
+            }},
+        })
+    except Exception:
+        pass
+    out = capsys.readouterr().out
+    # The notification is a single JSON line on stdout.
+    assert '"specialist_assigned"' in out, out[:500]
+    notif_line = next(line for line in out.splitlines() if "specialist_assigned" in line)
+    parsed = json.loads(notif_line)
+    assert parsed["method"] == "event"
+    assert parsed["params"]["kind"] == "specialist_assigned"
+    assert parsed["params"]["specialist_role"] == "humanoid_spec"
+    assert parsed["params"]["archetype"] == "humanoid_character"
+    assert parsed["params"]["designer_job_id"] == 9001
+
+
+def test_2d_handle_does_not_emit_specialist_assigned(tmp_path, monkeypatch, capsys):
+    """The 2D path has no specialists — must not emit the notification."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    monkeypatch.setattr(urllib.request, "urlopen",
+        lambda req, timeout=60: (_ for _ in ()).throw(RuntimeError("stubbed")))
+    from designer.agent import handle
+    try:
+        handle("process_job", {
+            "job_id": 9002,
+            "payload": {"brief": {"niche": "boho stickers"}},
+        })
+    except Exception:
+        pass
+    out = capsys.readouterr().out
+    assert "specialist_assigned" not in out
+
+
+def test_generic_archetype_does_not_emit_specialist(tmp_path, monkeypatch, capsys):
+    """When the classifier can't find any archetype keyword (falls to
+    'generic'), the lead designer keeps the brief — no specialist."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k-test")
+    monkeypatch.setattr(urllib.request, "urlopen",
+        lambda req, timeout=60: (_ for _ in ()).throw(RuntimeError("stubbed")))
+    from designer.agent import handle
+    try:
+        handle("process_job", {
+            "job_id": 9003,
+            "payload": {"brief": {
+                "niche": "abstract zonal collectible",  # no keyword matches
+                "product_type": "stl_file",
+            }},
+        })
+    except Exception:
+        pass
+    out = capsys.readouterr().out
+    assert "specialist_assigned" not in out
 
 
 # --- Slice G: real SVG asset generation ---
