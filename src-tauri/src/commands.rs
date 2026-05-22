@@ -574,6 +574,26 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
     } else {
         Some(("GEMINI_IMAGE_API_KEY".into(), gemini_image_key))
     };
+    // SerpAPI key + realism subject — opt-in realism mode for the next
+    // research cycle. When `realism_subject` is non-empty, research
+    // stamps mode='realism' + realism_subject on the brief and the
+    // designer skips nanobanana, hitting SerpAPI Google Images instead
+    // to find a real photo of the named subject. Output is always
+    // routed to the IP-risk approval pool (research forces
+    // ip_risk='high' on realism briefs), so nothing ships to a
+    // marketplace without operator review.
+    let serpapi_key = secrets::get("serpapi_api_key").ok().flatten().unwrap_or_default();
+    let serpapi_env: Option<(String, String)> = if serpapi_key.is_empty() {
+        None
+    } else {
+        Some(("SERPAPI_API_KEY".into(), serpapi_key))
+    };
+    let realism_subject = secrets::get("realism_subject").ok().flatten().unwrap_or_default();
+    let realism_subject_env: Option<(String, String)> = if realism_subject.trim().is_empty() {
+        None
+    } else {
+        Some(("REALISM_SUBJECT".into(), realism_subject))
+    };
     // YouTube Data API key — used by research's trends fetcher for the
     // YouTube trending source. Optional: if missing, research skips
     // YouTube but still hits Reddit + Google Trends.
@@ -652,6 +672,8 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
         let tripo_env = tripo_env.clone();
         let google_env = google_env.clone();
         let gemini_image_env = gemini_image_env.clone();
+        let serpapi_env = serpapi_env.clone();
+        let realism_subject_env = realism_subject_env.clone();
         let youtube_env = youtube_env.clone();
         let higgsfield_env = higgsfield_env.clone();
         let shop_focus_env = shop_focus_env.clone();
@@ -687,6 +709,12 @@ pub async fn start_supervisor_with_state(state: Arc<AppState>) -> Result<(), Str
             }
             if let Some(ref gi) = gemini_image_env {
                 env.push(gi.clone());
+            }
+            if let Some(ref s) = serpapi_env {
+                env.push(s.clone());
+            }
+            if let Some(ref rs) = realism_subject_env {
+                env.push(rs.clone());
             }
             if let Some(ref y) = youtube_env {
                 env.push(y.clone());
@@ -2306,6 +2334,73 @@ pub async fn cmd_count_recent_jobs(
     q.fetch_one(&state.pool).await.map_err(|e| e.to_string())
 }
 
+/// One pending (queued or running) job, in the order the supervisor will
+/// claim them. Lighter than `JobRow` — the UI only needs identity + a
+/// peek at the brief to label the row and offer a skip button.
+#[derive(Serialize)]
+pub struct PendingJob {
+    pub id: i64,
+    pub agent_role: String,
+    pub status: String,
+    pub payload_json: String,
+    pub scheduled_at: String,
+    pub started_at: Option<String>,
+}
+
+/// Pending queue for the Activity feed's "Up next" strip. Running jobs
+/// first (they're already in flight), then queued jobs in claim order
+/// (`scheduled_at ASC`) — the same ordering `queue::claim` uses, so the
+/// list mirrors exactly what the supervisor will pick next.
+#[tauri::command]
+pub async fn cmd_list_pending_jobs(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<PendingJob>, String> {
+    list_pending_jobs_with(&state.pool, state.project_id).await
+}
+
+/// Pool + project-id variant for the HTTP API server.
+pub async fn list_pending_jobs_with(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> Result<Vec<PendingJob>, String> {
+    let rows = sqlx::query_as::<_, (i64, String, String, String, String, Option<String>)>(
+        "SELECT id, agent_role, status, payload_json, scheduled_at, started_at \
+         FROM jobs \
+         WHERE project_id = ? AND status IN ('queued','running') \
+         ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, scheduled_at ASC, id ASC \
+         LIMIT 200",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PendingJob {
+            id: r.0,
+            agent_role: r.1,
+            status: r.2,
+            payload_json: r.3,
+            scheduled_at: r.4,
+            started_at: r.5,
+        })
+        .collect())
+}
+
+/// Operator skip: cancel a queued job so the supervisor never runs it.
+/// Returns true if the job was cancelled, false if it wasn't queued
+/// anymore (already claimed/finished). Running jobs can't be skipped —
+/// see `queue::skip`.
+#[tauri::command]
+pub async fn cmd_skip_job(
+    state: State<'_, Arc<AppState>>,
+    job_id: i64,
+) -> Result<bool, String> {
+    crate::queue::skip(&state.pool, job_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct AgentTodayStats {
     pub role: String,
@@ -3152,6 +3247,11 @@ const CHARACTER_POOLS: &[&str] = &[
     "popular_ip",
     "safe",
     "all",
+    // Real-life subjects — opt-in realism pipeline (web search for a
+    // real photo of a named subject → image-to-3D). Requires
+    // REALISM_SUBJECT secret to be set; otherwise the supervisor logs
+    // a warning and the cycle proceeds without realism mode.
+    "real_life",
 ];
 
 #[tauri::command]

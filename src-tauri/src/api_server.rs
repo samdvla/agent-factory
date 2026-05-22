@@ -67,6 +67,7 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/api/agent_messages_since", get(agent_messages_since_handler))
         .route("/api/recent_jobs", get(recent_jobs_handler))
         .route("/api/recent_jobs/count", get(recent_jobs_count_handler))
+        .route("/api/pending_jobs", get(pending_jobs_handler))
         .route("/api/unrated_jobs_count", get(unrated_jobs_count_handler))
         .route("/api/pinterest/status", get(pinterest_status_handler))
         .route("/api/pinterest/pins", get(pinterest_pins_handler))
@@ -87,6 +88,7 @@ pub async fn run(state: Arc<AppState>, bind_addr: String, token: String) -> anyh
         .route("/api/enqueue", post(enqueue_handler))
         .route("/api/etsy/kill_switch", post(etsy_kill_switch_handler))
         .route("/api/jobs/rate", post(rate_job_handler))
+        .route("/api/jobs/skip", post(skip_job_handler))
         .route("/api/agent_messages/post", post(post_agent_message_handler))
         // Phase 2 batch 2 — listing review actions + smoke-test triggers.
         .route("/api/etsy/listings/activate", post(etsy_activate_listing_handler))
@@ -387,6 +389,32 @@ async fn recent_jobs_count_handler(
         sql_q = sql_q.bind(u);
     }
     sql_q.fetch_one(&s.inner.pool).await.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn pending_jobs_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<commands::PendingJob>>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    commands::list_pending_jobs_with(&s.inner.pool, s.inner.project_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(serde::Deserialize)]
+struct SkipJobBody { job_id: i64 }
+
+async fn skip_job_handler(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<SkipJobBody>,
+) -> Result<Json<bool>, StatusCode> {
+    check_auth(&headers, &s.token)?;
+    crate::queue::skip(&s.inner.pool, body.job_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn unrated_jobs_count_handler(

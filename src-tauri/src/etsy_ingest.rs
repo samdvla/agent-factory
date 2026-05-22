@@ -310,6 +310,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_new_receipts_filters_by_last_seen() {
+        let _g = crate::secrets::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
         crate::secrets::set_cache_for_test("etsy_shared_secret", None);
         let mut server = mockito::Server::new_async().await;
@@ -352,6 +355,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_reply_form_body() {
+        let _g = crate::secrets::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::secrets::set_cache_for_test("etsy_api_keystring", Some("KEY123"));
         crate::secrets::set_cache_for_test("etsy_shared_secret", None);
         let mut server = mockito::Server::new_async().await;

@@ -255,6 +255,8 @@ pub fn run() {
             commands::cmd_resume_from_smoke_test,
             commands::cmd_list_recent_jobs,
             commands::cmd_count_recent_jobs,
+            commands::cmd_list_pending_jobs,
+            commands::cmd_skip_job,
             commands::cmd_today_stats,
             commands::cmd_rate_job,
             commands::cmd_chat_with_agent,

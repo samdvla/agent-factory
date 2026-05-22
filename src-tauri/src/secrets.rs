@@ -120,6 +120,16 @@ pub fn set_cache_for_test(key: &str, value: Option<&str>) {
         .insert(key.to_string(), value.map(String::from));
 }
 
+/// Test-only helper: a process-global lock serializing tests that mutate the
+/// shared secrets cache. The cache is a single process-wide map, so tests in
+/// different modules race under cargo's parallel runner unless they all
+/// serialize on this one lock.
+#[cfg(test)]
+pub fn test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -60,6 +60,23 @@ pub async fn claim(pool: &SqlitePool, agent_role: &str) -> anyhow::Result<Option
     }
 }
 
+/// Operator skip: cancel a job that hasn't started yet. Only `queued`
+/// jobs can be skipped — a `running` job is mid-flight in a worker and
+/// cancelling it cleanly would require killing the worker process, so we
+/// refuse and let it finish. Returns true if a row was actually
+/// cancelled, false if the job wasn't found or was no longer queued
+/// (e.g. it got claimed between the UI render and the click).
+pub async fn skip(pool: &SqlitePool, job_id: i64) -> anyhow::Result<bool> {
+    let res = sqlx::query(
+        "UPDATE jobs SET status = 'cancelled', finished_at = datetime('now'), \
+         error = 'skipped by operator' WHERE id = ? AND status = 'queued'"
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub async fn complete(pool: &SqlitePool, job_id: i64, result: Value) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE jobs SET status = 'done', finished_at = datetime('now'), result_json = ? WHERE id = ?"
