@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, createContext, useContext } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, type JobRow } from "../../api";
+import { api, type JobRow, type PendingJobRow } from "../../api";
 import { useFactoryStore } from "../state/factoryStore";
 import AssetViewer from "./AssetViewer";
 import Asset3DModal from "./Asset3DModal";
@@ -691,6 +691,91 @@ function JobCard({
 
 const JobCardMemo = memo(JobCard);
 
+/* ───── Pending queue ────────────────────────────────────────────────── */
+
+/** Pull a short human label + realism flag out of a pending job's payload.
+ *  The brief lives at `payload.brief` for pipeline jobs; fall back to the
+ *  top level for the odd role whose payload is flatter. */
+function pendingLabel(payloadJson: string): { label: string; realism: boolean } {
+  const p = safeParse<any>(payloadJson) ?? {};
+  const brief = p.brief ?? p;
+  const raw =
+    brief.realism_subject ||
+    brief.niche ||
+    brief.niche_seed ||
+    p.niche ||
+    p.trigger ||
+    "";
+  const mode = (brief.mode ?? "").toString().toLowerCase();
+  return { label: typeof raw === "string" ? raw : "", realism: mode === "realism" };
+}
+
+function PendingStrip({
+  jobs,
+  skipping,
+  onSkip,
+}: {
+  jobs: PendingJobRow[];
+  skipping: number | null;
+  onSkip: (jobId: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (jobs.length === 0) return null;
+  return (
+    <div className={`af-pending${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="af-pending-title"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title={open ? "Collapse queue" : "Expand queue to skip jobs"}
+      >
+        <span className="af-pending-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+        Up next <span className="af-pending-count">{jobs.length}</span>
+      </button>
+      {open && (
+      <div className="af-pending-list">
+        {jobs.map((j, i) => {
+          const { label, realism } = pendingLabel(j.payload_json);
+          const running = j.status === "running";
+          return (
+            <div
+              key={j.id}
+              className={`af-pending-row${running ? " is-running" : ""}`}
+              style={{ "--role-color": roleColor(j.agent_role) } as React.CSSProperties}
+            >
+              <span className="af-pending-pos" aria-hidden>
+                {running ? "▶" : i + 1}
+              </span>
+              <span className="af-role-pill">{j.agent_role}</span>
+              <span className="af-pending-id">#{j.id}</span>
+              {realism && <span className="af-pending-tag">realism</span>}
+              {label && <span className="af-pending-label" title={label}>{label}</span>}
+              <span className="af-pending-spacer" />
+              {running ? (
+                <span className="af-pending-status" title="In flight — can't skip">
+                  running
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="af-pending-skip"
+                  onClick={() => onSkip(j.id)}
+                  disabled={skipping === j.id}
+                  title="Skip this job — it won't run"
+                >
+                  {skipping === j.id ? "skipping…" : "skip"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      )}
+    </div>
+  );
+}
+
 /* ───── Main ─────────────────────────────────────────────────────────── */
 
 export interface ActivityFeedProps {
@@ -719,6 +804,52 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const refreshTimer = useRef<number | null>(null);
+  const [pending, setPending] = useState<PendingJobRow[]>([]);
+  const [skipping, setSkipping] = useState<number | null>(null);
+
+  const refreshPending = useCallback(async () => {
+    try {
+      const all = await api.listPendingJobs();
+      // Drop zombie "running" rows: the supervisor times jobs out at ~10
+      // min, so anything still flagged running past 15 min is an orphan
+      // left behind by a worker/app restart, not a live job. Queued rows
+      // are always real. Without this the strip fills with stale jobs.
+      const STALE_RUNNING_MS = 15 * 60 * 1000;
+      const now = Date.now();
+      setPending(
+        all.filter((j) => {
+          if (j.status !== "running") return true;
+          if (!j.started_at) return false;
+          const t = Date.parse(
+            j.started_at.includes("T")
+              ? j.started_at
+              : j.started_at.replace(" ", "T") + "Z",
+          );
+          return !Number.isNaN(t) && now - t < STALE_RUNNING_MS;
+        }),
+      );
+    } catch {
+      // Pending strip is best-effort; a transient failure shouldn't blank
+      // the whole feed. Next refresh tick will retry.
+    }
+  }, []);
+
+  const skip = useCallback(
+    async (jobId: number) => {
+      setSkipping(jobId);
+      // Optimistic remove so the row vanishes immediately on click.
+      setPending((prev) => prev.filter((j) => j.id !== jobId));
+      try {
+        await api.skipJob(jobId);
+      } catch (e) {
+        console.warn("skip_job failed; refetching", e);
+      } finally {
+        setSkipping(null);
+        refreshPending();
+      }
+    },
+    [refreshPending],
+  );
 
   // Reset to page 1 when filters change so the user never lands on an empty
   // page (the rating filter is client-side, but the role filter is server-side
@@ -748,6 +879,10 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    refreshPending();
+  }, [refreshPending]);
+
   // Re-fetch on JobCompleted/JobFailed so new outputs surface immediately.
   // Debounced. On page > 1, we deliberately skip auto-refresh: the user is
   // browsing history and re-fetching with a fixed offset would cause rows
@@ -770,6 +905,16 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
       ) {
         schedule();
       }
+      // The pending strip mirrors live queue/running state, so refresh it on
+      // every job lifecycle transition (including job_started) regardless of
+      // which feed page is showing.
+      if (
+        e.payload.kind === "job_started" ||
+        e.payload.kind === "job_completed" ||
+        e.payload.kind === "job_failed"
+      ) {
+        refreshPending();
+      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -780,7 +925,7 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
         refreshTimer.current = null;
       }
     };
-  }, [refresh, page]);
+  }, [refresh, page, refreshPending]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
@@ -851,6 +996,7 @@ export default function ActivityFeed({ alwaysOpen, wide }: ActivityFeedProps) {
     <SvgLightboxCtx.Provider value={openLightbox}>
     <Open3DModalCtx.Provider value={openModal3d}>
     <div className={`af-panel${alwaysOpen ? " is-always-open" : ""}${wide ? " is-wide" : ""}`}>
+      <PendingStrip jobs={pending} skipping={skipping} onSkip={skip} />
       <div className="af-controls">
         <div className="af-chip-row">
           {ROLE_FILTERS.map((f) => (

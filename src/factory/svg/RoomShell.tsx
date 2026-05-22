@@ -11,24 +11,33 @@ import type { ReactNode } from "react";
 import {
   StrategyRoom, OpsBay, ListingDesk, ResearchLab, CsBooth, RenderStudio,
   DesignStudio, FinanceRoom, LegalRoom, ArchiveRoom, MarketingStudio,
+  AnimeStudio, HeroStudio, MechaBay, ChibiCorner, DeityAtelier,
+  CreatureDen, HumanoidForge,
 } from "./iso/rooms";
 import { RoomTag } from "../state/types";
 
 function isoFurnitureFor(tag: RoomTag, accent: string): ReactNode {
   switch (tag) {
-    case "bridge":   return <StrategyRoom accent={accent} />;
-    case "ops":      return <OpsBay accent={accent} />;
-    case "copy":     return <ListingDesk accent={accent} />;
-    case "analyst":  return <ResearchLab accent={accent} layout="row" />;
-    case "rd":       return <ResearchLab accent={accent} layout="central" />;
-    case "comms":    return <CsBooth accent={accent} />;
-    case "dev":      return <RenderStudio accent={accent} />;
-    case "creative": return <DesignStudio accent={accent} />;
-    case "finance":  return <FinanceRoom accent={accent} />;
-    case "legal":    return <LegalRoom accent={accent} />;
-    case "archive":  return <ArchiveRoom accent={accent} />;
-    case "marketing":return <MarketingStudio accent={accent} />;
-    default:         return <StrategyRoom accent={accent} />;
+    case "bridge":         return <StrategyRoom accent={accent} />;
+    case "ops":            return <OpsBay accent={accent} />;
+    case "copy":           return <ListingDesk accent={accent} />;
+    case "analyst":        return <ResearchLab accent={accent} layout="row" />;
+    case "rd":             return <ResearchLab accent={accent} layout="central" />;
+    case "comms":          return <CsBooth accent={accent} />;
+    case "dev":            return <RenderStudio accent={accent} />;
+    case "creative":       return <DesignStudio accent={accent} />;
+    case "finance":        return <FinanceRoom accent={accent} />;
+    case "legal":          return <LegalRoom accent={accent} />;
+    case "archive":        return <ArchiveRoom accent={accent} />;
+    case "marketing":      return <MarketingStudio accent={accent} />;
+    case "anime_studio":   return <AnimeStudio accent={accent} />;
+    case "hero_studio":    return <HeroStudio accent={accent} />;
+    case "mecha_bay":      return <MechaBay accent={accent} />;
+    case "chibi_corner":   return <ChibiCorner accent={accent} />;
+    case "deity_atelier":  return <DeityAtelier accent={accent} />;
+    case "creature_den":   return <CreatureDen accent={accent} />;
+    case "humanoid_forge": return <HumanoidForge accent={accent} />;
+    default:               return <StrategyRoom accent={accent} />;
   }
 }
 
@@ -68,17 +77,16 @@ function RoomShellInner({ roomId, doors: doorsProp, detailLevel = "full" }: Room
   const isDissolving = room?.dissolving ?? false;
   useEffect(() => {
     if (!createdAt || isDissolving) return;
-    let raf = 0;
-    const tick = () => {
-      if (Date.now() - createdAt >= 600) {
-        force({});
-        return;
-      }
-      force({});
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // The spawn-in is driven entirely by the CSS `opacity` transition that
+    // fires when `opacity` flips 0→1 at the 600ms mark (see `isSpawning`
+    // below). The intermediate frames keep opacity pinned at 0, so the old
+    // per-frame rAF loop re-rendered the whole room for 600ms while changing
+    // nothing visible. A single timer at the threshold reproduces the exact
+    // same fade for a fraction of the cost.
+    const remaining = 600 - (Date.now() - createdAt);
+    if (remaining <= 0) return;
+    const id = setTimeout(() => force({}), remaining);
+    return () => clearTimeout(id);
   }, [createdAt, isDissolving]);
 
   if (!room) return null;

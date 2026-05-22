@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFactoryStore } from "../state/factoryStore";
 import { iso, ROOM_W, ROOM_H, roomOrigin } from "./geometry";
 import { homeStationFor, stationCount, stationWorld } from "./stations";
@@ -6,6 +6,7 @@ import Avatar from "./Avatar";
 import SpawnFx from "./kit/SpawnFx";
 import DissolveFx from "./kit/DissolveFx";
 import { DetailLevel } from "./viewport";
+import { deriveThoughts } from "./thoughtText";
 
 const STATION_DWELL_MIN_MS = 2600;
 const STATION_DWELL_JITTER_MS = 2400;
@@ -43,6 +44,12 @@ export default function AvatarLayer({
   const wealthByRole = useFactoryStore((s) => s.wealthByRole);
   const rewardsByRole = useFactoryStore((s) => s.rewardsByRole);
   const supervisorRunning = useFactoryStore((s) => s.supervisorRunning);
+
+  // Per-role natural "thought" string for the speech-bubble cloud above each
+  // avatar. Derived purely from agent state + counters (see deriveThoughts),
+  // so it reads like a human thought rather than echoing raw ticker logs.
+  // Keyed on `agents` so it recomputes only when an agent's state/job changes.
+  const thoughts = useMemo(() => deriveThoughts(agents), [agents]);
   const layerRef = useRef<HTMLDivElement>(null);
   const [, force] = useState<object>({});
 
@@ -248,11 +255,10 @@ export default function AvatarLayer({
   const project = (
     roleId: string,
     roomId: string,
+    svg: SVGSVGElement,
+    ctm: DOMMatrix,
+    layerRect: DOMRect,
   ): { left: number; top: number; label: string } | null => {
-    const svg = svgRef.current;
-    const layer = layerRef.current;
-    if (!svg || !layer) return null;
-
     const travel = agentTravel[roleId];
 
     // Waypoint-based travel: interpolate along the polyline so the agent
@@ -291,10 +297,7 @@ export default function AvatarLayer({
     const pt = svg.createSVGPoint();
     pt.x = w.x;
     pt.y = w.y;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return null;
     const screen = pt.matrixTransform(ctm);
-    const layerRect = layer.getBoundingClientRect();
     return {
       left: screen.x - layerRect.left,
       top: screen.y - layerRect.top,
@@ -306,9 +309,23 @@ export default function AvatarLayer({
   // land on the projected screen point. The Avatar component handles size
   // scaling internally (by setting the SVG's width/height attributes), so
   // the SVG is always rasterized natively and stays crisp at any zoom.
+  // Avatars are positioned with a GPU `transform` rather than `left`/`top`.
+  // Animating left/top reflows the layer every frame (and forces the avatar's
+  // drop-shadow filter to re-rasterize); a translate3d is compositor-only, so
+  // a moving avatar's shadow rasterizes once and just composites. Visually
+  // identical — same pixels, far cheaper.
   const transitionStyle = viewChanged
     ? "none"
-    : "left 1.4s cubic-bezier(.4,0,.2,1), top 1.4s cubic-bezier(.4,0,.2,1)";
+    : "transform 1.4s cubic-bezier(.4,0,.2,1)";
+
+  // The screen CTM and layer rect are identical for every avatar in a given
+  // render, but reading them forces a synchronous layout. Hoist both out of
+  // the per-avatar projection so each frame does one layout read instead of
+  // one-per-avatar (the dominant cost while many agents are in transit).
+  const svg = svgRef.current;
+  const layer = layerRef.current;
+  const ctm = svg?.getScreenCTM() ?? null;
+  const layerRect = layer?.getBoundingClientRect() ?? null;
 
   return (
     <div
@@ -316,7 +333,7 @@ export default function AvatarLayer({
       id="avatar-layer"
       style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
     >
-      {Object.values(roles).map((role) => {
+      {svg && ctm && layerRect && Object.values(roles).map((role) => {
         const agent = agents[role.id];
         if (!agent) return null;
         // Viewport cull: don't mount avatars whose room is off-screen. Also
@@ -326,7 +343,7 @@ export default function AvatarLayer({
         const visRoom = travel?.roomId ?? role.room;
         const tier = detailLevels?.get(visRoom);
         if (tier === "hidden") return null;
-        const pos = project(role.id, role.room);
+        const pos = project(role.id, role.room, svg, ctm, layerRect);
         if (!pos) return null;
         const moving = movingRoles.has(role.id);
         const isTraveling = !!(travel?.waypoints && travel.waypoints.length > 1);
@@ -341,11 +358,14 @@ export default function AvatarLayer({
             className={`avatar-anchor${moving || isTraveling ? " is-moving" : ""}`}
             style={{
               position: "absolute",
-              left: pos.left - FOOT_X * zoom,
-              top: pos.top - FOOT_Y * zoom,
+              left: 0,
+              top: 0,
+              transform: `translate3d(${pos.left - FOOT_X * zoom}px, ${
+                pos.top - FOOT_Y * zoom
+              }px, 0)`,
               transition: perAgentTransition,
               pointerEvents: "auto",
-              willChange: "left, top",
+              willChange: "transform",
             }}
             title={`${role.name} · ${role.title} · ${pos.label} · net $${
               (wealthByRole[role.id]?.lifetime_net_usd ?? 0).toFixed(2)
@@ -357,6 +377,7 @@ export default function AvatarLayer({
               sizeScale={zoom}
               lifetimeNet={wealthByRole[role.id]?.lifetime_net_usd}
               rewards={rewardsByRole[role.id]}
+              thought={thoughts[role.id]}
               onClick={() => selectAgent(role.id)}
             />
             {agent.state === "materializing" && (

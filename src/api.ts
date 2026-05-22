@@ -123,10 +123,19 @@ export type PromptHistoryEntry = {
   source?: string | null;
 };
 
+export type PendingJobRow = {
+  id: number;
+  agent_role: string;
+  status: "queued" | "running";
+  payload_json: string;
+  scheduled_at: string;
+  started_at: string | null;
+};
+
 export type JobRow = {
   id: number;
   agent_role: string;
-  status: "done" | "errored";
+  status: "done" | "errored" | "queued" | "running" | "cancelled";
   payload_json: string;
   result_json: string | null;
   error: string | null;
@@ -362,6 +371,14 @@ export const api = {
       })
     );
   },
+  listPendingJobs: (): Promise<PendingJobRow[]> =>
+    remoteOr<PendingJobRow[]>("/api/pending_jobs", () =>
+      invoke("cmd_list_pending_jobs")
+    ),
+  skipJob: (jobId: number): Promise<boolean> =>
+    remoteOrPost<boolean>("/api/jobs/skip", { job_id: jobId }, () =>
+      invoke<boolean>("cmd_skip_job", { jobId })
+    ),
   todayStats: (): Promise<TodayStats> =>
     remoteOr<TodayStats>("/api/today_stats", () => invoke("cmd_today_stats")),
   rateJob: (jobId: number, rating: "up" | "down" | null, note?: string | null) =>

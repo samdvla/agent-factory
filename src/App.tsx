@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { Profiler, useEffect, useState } from "react";
+import { profilerCallback } from "./factory/perf/collector";
 import SvgFactoryFloor from "./factory/svg/SvgFactoryFloor";
 import TopBar from "./factory/ui/TopBar";
 import Ticker from "./factory/ui/Ticker";
@@ -9,6 +10,7 @@ import OnboardingWizard from "./factory/ui/OnboardingWizard";
 import SettingsModal from "./factory/ui/SettingsModal";
 import CommandRail from "./factory/ui/CommandRail";
 import PipelinePanel from "./factory/ui/PipelinePanel";
+import PerfDiag from "./factory/ui/PerfDiag";
 import { useSupervisorEventsToStore } from "./hooks/useSupervisorEvents";
 import { usePrintifyOperatorBoot } from "./hooks/usePrintifyOperator";
 import { useDemoFloor } from "./hooks/useDemoFloor";
@@ -183,7 +185,10 @@ export default function App() {
 
   return (
     <div className={`app${railCollapsed ? " rail-collapsed" : ""}${sandbox ? " has-sandbox" : ""}`}>
-      <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
+      <PerfDiag />
+      <Profiler id="rail" onRender={profilerCallback}>
+        <CommandRail collapsed={railCollapsed} onToggle={handleRailToggle} />
+      </Profiler>
       <div className="floor-wrap" style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
         {sandbox && (
           <div className="sandbox-banner" role="status" aria-label="Sandbox mode">
@@ -193,16 +198,22 @@ export default function App() {
           </div>
         )}
         <SvgFactoryFloor />
-        <TopBar
-          onAlertClick={() => setAlertTrayOpen((v) => !v)}
-          onSettingsClick={() => setSettingsOpen(true)}
-        />
-        <div className="right-rail">
-          <PipelinePanel />
-          <SideDrawer />
-        </div>
+        <Profiler id="topbar" onRender={profilerCallback}>
+          <TopBar
+            onAlertClick={() => setAlertTrayOpen((v) => !v)}
+            onSettingsClick={() => setSettingsOpen(true)}
+          />
+        </Profiler>
+        <Profiler id="rightrail" onRender={profilerCallback}>
+          <div className="right-rail">
+            <PipelinePanel />
+            <SideDrawer />
+          </div>
+        </Profiler>
       </div>
-      <Ticker />
+      <Profiler id="ticker" onRender={profilerCallback}>
+        <Ticker />
+      </Profiler>
       <AlertTray open={alertTrayOpen} onClose={() => setAlertTrayOpen(false)} />
       <GateModal />
       <OnboardingWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />

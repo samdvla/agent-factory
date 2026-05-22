@@ -41,6 +41,16 @@ const ROOM_NAME_BY_TAG: Record<RoomTag, string> = {
   archive:  "Archive Room",
   dev:      "Dev Bay",
   marketing: "Marketing Studio",
+  // Designer-wing specialist names — used if the hire resolver ever spawns a
+  // duplicate specialist via the dynamic hire path (current fixtures place
+  // them as founding rooms, so these are fallback names only).
+  anime_studio:   "Anime Studio Annex",
+  hero_studio:    "Hero Studio Annex",
+  mecha_bay:      "Mecha Bay Annex",
+  chibi_corner:   "Chibi Corner Annex",
+  deity_atelier:  "Deity Atelier Annex",
+  creature_den:   "Creature Den Annex",
+  humanoid_forge: "Humanoid Forge Annex",
 };
 
 function newRoleId(name: string): string {

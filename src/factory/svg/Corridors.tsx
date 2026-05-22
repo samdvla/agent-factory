@@ -344,6 +344,26 @@ export default function Corridors({ strips: _strips }: { strips: Strip[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [networkKey(Object.values(rooms))]);
 
+  // The corridor SVG (slabs, hatch lines, light pools, blurred rails) is a
+  // pure function of topology + theme. `rooms` changes reference on every
+  // occupant update, which re-renders this component even when the network is
+  // unchanged — memoizing the rendered output keeps those updates from
+  // rebuilding the entire corridor tree. `network` is already memoized on the
+  // topology key and `theme` is a stable reference from ISO_THEMES.
+  const content = useMemo(
+    () => (
+      <>
+        {network.segments.map((seg) => (
+          <CorridorSegment key={seg.key} seg={seg} theme={theme} />
+        ))}
+        {network.junctions.map((j) => (
+          <CorridorJunction key={j.key} j={j} theme={theme} />
+        ))}
+      </>
+    ),
+    [network, theme],
+  );
+
   if (!network.segments.length && !network.junctions.length) return null;
 
   return (
@@ -351,12 +371,7 @@ export default function Corridors({ strips: _strips }: { strips: Strip[] }) {
       className={`iso-corridors iso-theme-${theme.name}`}
       opacity={CORRIDOR_OPACITY}
     >
-      {network.segments.map((seg) => (
-        <CorridorSegment key={seg.key} seg={seg} theme={theme} />
-      ))}
-      {network.junctions.map((j) => (
-        <CorridorJunction key={j.key} j={j} theme={theme} />
-      ))}
+      {content}
     </g>
   );
 }

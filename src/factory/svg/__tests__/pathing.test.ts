@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { findPath } from "../layout";
 import type { Waypoint } from "../layout";
+import { ROOM_W, ROOM_H, GAP } from "../geometry";
 import type { Room } from "../../state/types";
+
+const STEP_X = ROOM_W + GAP;
+const STEP_Y = ROOM_H + GAP;
 
 const FOUNDING_ROOMS: Room[] = [
   { id: "strategy", name: "Strategy",  col: 0, row: 0 },
@@ -39,10 +43,10 @@ describe("pathing regression guard", () => {
         const path = findPath(FOUNDING_ROOMS, a.id, b.id);
         if (path.length < 2) continue;
         // Estimate a lower bound: Manhattan distance between room centers.
-        const ax = a.col * 7 + 3;
-        const ay = a.row * 7 + 3;
-        const bx = b.col * 7 + 3;
-        const by = b.row * 7 + 3;
+        const ax = a.col * STEP_X + ROOM_W / 2;
+        const ay = a.row * STEP_Y + ROOM_H / 2;
+        const bx = b.col * STEP_X + ROOM_W / 2;
+        const by = b.row * STEP_Y + ROOM_H / 2;
         const lower = Math.abs(ax - bx) + Math.abs(ay - by);
         const len = pathLen(path);
         // Path must be no more than 1.6x the Manhattan distance (allows for corridor detours).

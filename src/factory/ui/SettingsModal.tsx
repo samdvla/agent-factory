@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type EtsyStatus, type GumroadBackfillResult } from "../../api";
 import { hirePrintifyOperator, dissolvePrintifyOperator } from "../../hooks/usePrintifyOperator";
 import { useFactoryStore } from "../state/factoryStore";
+import { usePerfSettings, PERF_TOGGLE_META } from "../perf/perfSettings";
 import { ISO_THEMES, ISO_THEME_NAMES, mapAppThemeToIso } from "../svg/iso/themes";
 import type { IsoThemeName } from "../state/types";
 import {
@@ -988,11 +989,30 @@ function CharacterPoolSection() {
   const [pool, setPool] = useState<string>("all");
   const [saving, setSaving] = useState(false);
 
+  // Realism-mode credentials (only relevant when pool === 'real_life'):
+  // SerpAPI key + the operator-named subject. Both are persisted in
+  // secrets and forwarded to workers as SERPAPI_API_KEY / REALISM_SUBJECT.
+  const [keyDraft, setKeyDraft] = useState("");
+  const [keyPresent, setKeyPresent] = useState(false);
+  const [subjectDraft, setSubjectDraft] = useState("");
+  const [savedSubject, setSavedSubject] = useState("");
+  const [realismSaving, setRealismSaving] = useState<null | "key" | "subject">(null);
+  const [realismMsg, setRealismMsg] = useState<string | null>(null);
+
   useEffect(() => {
     api
       .getCharacterPool()
       .then((r) => setPool(r.value))
       .catch(() => {});
+    Promise.all([
+      api.getSecret("serpapi_api_key"),
+      api.getSecret("realism_subject"),
+    ]).then(([k, s]) => {
+      setKeyPresent(!!(k && k.length));
+      const sub = (s ?? "").trim();
+      setSavedSubject(sub);
+      setSubjectDraft(sub);
+    }).catch(() => {});
   }, []);
 
   const handleSet = async (next: string) => {
@@ -1003,6 +1023,42 @@ function CharacterPoolSection() {
       setPool(next);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveKey = async () => {
+    const trimmed = keyDraft.trim();
+    if (!trimmed) return;
+    setRealismSaving("key");
+    setRealismMsg(null);
+    try {
+      await api.setSecret("serpapi_api_key", trimmed);
+      setKeyPresent(true);
+      setKeyDraft("");
+      setRealismMsg("SerpAPI key saved.");
+    } catch (e) {
+      setRealismMsg(`Save failed: ${e}`);
+    } finally {
+      setRealismSaving(null);
+    }
+  };
+
+  const saveSubject = async () => {
+    const trimmed = subjectDraft.trim();
+    setRealismSaving("subject");
+    setRealismMsg(null);
+    try {
+      await api.setSecret("realism_subject", trimmed);
+      setSavedSubject(trimmed);
+      setRealismMsg(
+        trimmed
+          ? `Realism mode armed for next cycle: ${trimmed}`
+          : "Subject cleared — next cycle skips realism mode.",
+      );
+    } catch (e) {
+      setRealismMsg(`Save failed: ${e}`);
+    } finally {
+      setRealismSaving(null);
     }
   };
 
@@ -1039,7 +1095,15 @@ function CharacterPoolSection() {
       sub: "Naruto, Marvel, Star Wars, etc. Same DMCA risk as 'All four' until the IP gate ships. Pick deliberately.",
       risk: true,
     },
+    {
+      value: "real_life",
+      label: "Real-life subjects",
+      sub: "Real people / licensed characters (e.g. Lebron James, Mario). Swaps nanobanana for SerpAPI photo search → image-to-3D so the likeness is accurate. Output is always held for manual approval.",
+      risk: true,
+    },
   ];
+
+  const realismArmed = savedSubject.length > 0;
 
   return (
     <section className="settings-section">
@@ -1087,6 +1151,84 @@ function CharacterPoolSection() {
           </button>
         ))}
       </div>
+
+      {pool === "real_life" && (
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <div className="settings-helper" style={{ marginBottom: 12 }}>
+            Realism mode swaps the designer pipeline from nanobanana
+            (text→image) to web search (real photo of a named subject) →
+            image-to-3D. Used when the brief targets a real person or
+            licensed character that text-to-image cannot reproduce with
+            an accurate likeness. <strong>Output is always IP-loaded</strong>
+            and routed to the operator-approval pool; nothing ships to
+            Etsy / Fab / Printify without manual review.
+          </div>
+
+          <div className="settings-field-row">
+            <div className="settings-field-label-col">
+              <span className="settings-field-label">SerpAPI key</span>
+              <span className="settings-helper">
+                {keyPresent
+                  ? "Saved. Paste a new key + save to replace."
+                  : "Required. Get one at serpapi.com/users/sign_up — ~$0.015 per search."}
+              </span>
+            </div>
+            <input
+              type="password"
+              className="settings-cred-input"
+              placeholder={keyPresent ? "•••••• (saved)" : "SerpAPI key"}
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="settings-cred-save"
+              onClick={saveKey}
+              disabled={realismSaving !== null || !keyDraft.trim()}
+            >
+              {realismSaving === "key" ? "Saving…" : "Save"}
+            </button>
+          </div>
+
+          <div className="settings-field-row">
+            <div className="settings-field-label-col">
+              <span className="settings-field-label">Subject</span>
+              <span className="settings-helper">
+                {realismArmed
+                  ? `Armed: next research cycle runs realism mode with subject "${savedSubject}".`
+                  : "Type the named subject (e.g. \"Lebron James\", \"Mario\"). Empty = realism mode disarmed even with this pool selected."}
+              </span>
+            </div>
+            <input
+              type="text"
+              className="settings-cred-input"
+              placeholder="e.g. Lebron James"
+              value={subjectDraft}
+              onChange={(e) => setSubjectDraft(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="settings-cred-save"
+              onClick={saveSubject}
+              disabled={realismSaving !== null || subjectDraft.trim() === savedSubject}
+            >
+              {realismSaving === "subject"
+                ? "Saving…"
+                : realismArmed && !subjectDraft.trim()
+                ? "Clear"
+                : "Save"}
+            </button>
+          </div>
+
+          {realismMsg && (
+            <div className="settings-helper" style={{ marginTop: 4 }}>{realismMsg}</div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -3174,7 +3316,7 @@ function PodDailyCapRow() {
 /*  Main SettingsModal                                                    */
 /* ------------------------------------------------------------------ */
 
-type SettingsTabId = "account" | "pipeline" | "generation" | "etsy" | "cross";
+type SettingsTabId = "account" | "pipeline" | "generation" | "etsy" | "cross" | "performance";
 
 interface SettingsTabDef {
   id: SettingsTabId;
@@ -3240,7 +3382,91 @@ const SETTINGS_TABS: SettingsTabDef[] = [
       </svg>
     ),
   },
+  {
+    id: "performance",
+    label: "Performance",
+    sublabel: "FPS · render cost",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+      </svg>
+    ),
+  },
 ];
+
+function PerformanceSection() {
+  const hudVisible = usePerfSettings((s) => s.hudVisible);
+  const toggles = usePerfSettings((s) => s.toggles);
+  const setHud = usePerfSettings((s) => s.setHud);
+  const setToggle = usePerfSettings((s) => s.setToggle);
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Performance</div>
+      <div className="settings-helper" style={{ marginBottom: 14 }}>
+        The factory floor is paint-heavy. These switches strip individual
+        rendering costs. Measured on a busy floor: the avatar drop-shadow and
+        SVG blur are the two big costs, so they ship off by default. Glass blur
+        measured as near-zero cost — leave it on. Changes save automatically.
+      </div>
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 10,
+          padding: "10px 0",
+          cursor: "pointer",
+          borderBottom: "1px solid var(--hairline, rgba(255,255,255,0.08))",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={hudVisible}
+          onChange={(e) => setHud(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <span style={{ display: "block", fontWeight: 600 }}>Show FPS overlay</span>
+          <span className="settings-helper" style={{ marginTop: 2 }}>
+            Live frame-rate and render-cost readout, top-center. Toggle anytime
+            with the <code>h</code> key.
+          </span>
+        </span>
+      </label>
+
+      {PERF_TOGGLE_META.map((m) => (
+        <label
+          key={m.key}
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: "10px 0",
+            cursor: "pointer",
+            borderBottom: "1px solid var(--hairline, rgba(255,255,255,0.08))",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={toggles[m.key]}
+            onChange={(e) => setToggle(m.key, e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <span style={{ display: "block", fontWeight: 600 }}>
+              {m.label}{" "}
+              <span style={{ opacity: 0.5, fontWeight: 400 }}>[{m.hotkey}]</span>
+            </span>
+            <span className="settings-helper" style={{ marginTop: 2 }}>
+              {m.help}
+            </span>
+          </span>
+        </label>
+      ))}
+    </section>
+  );
+}
 
 export default function SettingsModal({
   open,
@@ -3570,6 +3796,8 @@ export default function SettingsModal({
 
           {/* Scrollable pane */}
           <div className="settings-pane" key={activeTab}>
+
+          {activeTab === "performance" && <PerformanceSection />}
 
           {activeTab === "account" && <>
           <RemoteFactorySection />

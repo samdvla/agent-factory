@@ -95,6 +95,43 @@ const HANDOFF_LABEL_BY_FROM: Record<string, string> = {
   si: "prompt tweak",
 };
 
+/** Designer-wing specialist role ids. Kept in sync with fixtures.ts and with
+ *  _SPECIALIST_ROLE_BY_ARCHETYPE in workers/designer/designer/agent.py. */
+const DESIGNER_SPECIALIST_ROLES: ReadonlyArray<string> = [
+  "anime_spec", "hero_spec", "mecha_spec", "chibi_spec",
+  "deity_spec", "creature_spec", "humanoid_spec",
+];
+
+/** Walk every working specialist back to idle. Called when the lead
+ *  designer finishes a job — the specialist's "shadow run" ends with the
+ *  designer's run. Also pushes a specialist → design return-trip doc-
+ *  sprite per resetting specialist so the visual loop closes: the brief
+ *  flew DOWN to the specialist on assignment, the finished asset flies
+ *  BACK to the designer here. Idempotent: specialists already idle stay
+ *  idle and emit no return-trip.
+ */
+function resetWorkingSpecialists(store: FactoryStore): void {
+  const designerRoom = store.roles["designer"]?.room;
+  for (const sr of DESIGNER_SPECIALIST_ROLES) {
+    const cur = store.agents[sr];
+    if (!cur || cur.state !== "working") continue;
+    store.setAgentState(sr, "idle");
+    store.setAgentTask(sr, "");
+    const specSpec = store.roles[sr];
+    if (designerRoom && specSpec && specSpec.room !== designerRoom) {
+      store.pushHandoff({
+        id: `spec-return-${sr}-${Date.now()}-${Math.random().toFixed(3)}`,
+        fromRoom: specSpec.room,
+        toRoom: designerRoom,
+        color: specSpec.hex,
+        label: "finished asset",
+        startedAt: Date.now(),
+        durationMs: 2200,
+      });
+    }
+  }
+}
+
 export function applySupervisorEvent(
   store: FactoryStore,
   evt: SupervisorEvent
@@ -157,6 +194,10 @@ export function applySupervisorEvent(
         store.setAgentJob(r, null);
         store.setAgentTask(r, "");
         store.incrementAgentCompleted(r);
+        // The designer's run also ends every shadow-working specialist —
+        // the specialist's "working" state is bound to the designer's
+        // current job, not to its own queue.
+        if (r === "designer") resetWorkingSpecialists(store);
         const result = evt.result as Record<string, unknown> | null | undefined;
         const tickerText =
           result && typeof result["ticker_text"] === "string"
@@ -190,6 +231,9 @@ export function applySupervisorEvent(
         store.setAgentState(r, "crashed");
         store.setAgentJob(r, null);
         store.incrementAgentFailed(r);
+        // Same reset logic as job_completed — a failed designer run still
+        // ends the matching specialist's shadow run.
+        if (r === "designer") resetWorkingSpecialists(store);
         store.pushTicker({
           ts: Date.now(),
           source: r,
@@ -206,6 +250,54 @@ export function applySupervisorEvent(
       break;
     case "worker_notification": {
       if (!r || !evt.method) break;
+      // specialist_assigned is the designer worker's signal that it just
+      // classified a 3D brief into one of the 7 archetypes and is routing
+      // the work through the matching specialist room. We animate this as:
+      //   1. specialist avatar walks to "working"
+      //   2. doc-sprite flies design → specialist room (visible handoff)
+      //   3. ticker line so the LiveLog shows the routing
+      // When the designer's job_completed fires later, the matching reset
+      // walks any specialist still in "working" back to idle (see below).
+      if (
+        evt.method === "event" &&
+        evt.params && typeof evt.params === "object" &&
+        (evt.params as Record<string, unknown>).kind === "specialist_assigned"
+      ) {
+        const p = evt.params as Record<string, unknown>;
+        const specRole = typeof p.specialist_role === "string" ? p.specialist_role : null;
+        const archetype = typeof p.archetype === "string" ? p.archetype : "";
+        const niche = typeof p.niche === "string" ? p.niche : "";
+        const specRoleSpec = specRole ? store.roles[specRole] : null;
+        const designerRoleSpec = store.roles["designer"];
+        if (specRole && specRoleSpec && designerRoleSpec) {
+          store.setAgentState(specRole, "working");
+          store.setAgentTask(specRole, archetype ? `${archetype} brief` : "specialist work");
+          if (designerRoleSpec.room !== specRoleSpec.room) {
+            // 2400ms duration so the doc-sprite is comfortably visible
+            // for a multi-second designer job; the existing enqueue_handoff
+            // path uses 1400ms but that one flies between rooms that are
+            // usually neighbors — design → specialist crosses up to 3
+            // cells, so a longer flight reads better.
+            store.pushHandoff({
+              id: `spec-${specRole}-${Date.now()}-${Math.random().toFixed(3)}`,
+              fromRoom: designerRoleSpec.room,
+              toRoom: specRoleSpec.room,
+              color: specRoleSpec.hex,
+              label: niche ? niche.slice(0, 32) : archetype || "specialist brief",
+              startedAt: Date.now(),
+              durationMs: 2400,
+            });
+          }
+          const tickerNiche = niche ? ` (${niche.slice(0, 40)})` : "";
+          store.pushTicker({
+            ts: Date.now(),
+            source: "designer",
+            text: `→ ${specRole}: ${archetype}${tickerNiche}`,
+          });
+          store.markRealActivity(specRole);
+          break;
+        }
+      }
       // enqueue_handoff is the supervisor's signal that one role's output is
       // being passed to another role's queue. Animate it as a doc-sprite
       // flying through the corridors so the floor stays visibly alive.

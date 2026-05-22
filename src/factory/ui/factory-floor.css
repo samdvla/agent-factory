@@ -2276,6 +2276,69 @@ button.etsy-pill {
   bottom: 0;
   left: 50%;
 }
+
+/* ───── Thought cloud — speech bubble above the avatar's head ─────
+   Shows 1-2 lines of what the agent is currently working on / talking
+   about. Anchored top-center; the parent .avatar-anchor scales the whole
+   avatar with zoom, and the bubble scales with it via the inline transform
+   set in Avatar.tsx. */
+.avatar-thought {
+  position: absolute;
+  left: 50%;
+  /* `bottom` is set inline in Avatar.tsx to `sh` (the avatar's zoom-scaled
+     height) so the bubble tracks the top of the head at every zoom level —
+     a fixed px value dropped it to body level when zoomed in. */
+  width: 84px;             /* compact — small footprint over the head */
+  pointer-events: none;
+  z-index: 6;
+  animation: thought-rise 0.28s ease-out;
+}
+.avatar-thought .thought-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;   /* hard cap at 2 lines */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+  width: 100%;
+  /* Hard 2-line ceiling behind -webkit-line-clamp (some WKWebView builds drop
+     the clamp under certain box/padding combos). line-height 1.2 × 6.5px =
+     7.8px/line, 2 lines ≈ 16px, + 6px vertical padding ≈ 22px. */
+  max-height: 22px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: rgba(9, 12, 17, 0.92);
+  border: 1px solid rgba(var(--accent-rgb), 0.42);
+  box-shadow:
+    0 3px 9px rgba(0, 0, 0, 0.5),
+    0 0 7px rgba(var(--accent-rgb), 0.18);
+  color: #e6ebf2;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 6.5px;
+  line-height: 1.2;
+  letter-spacing: 0.05px;
+  text-align: center;
+  white-space: normal;
+  word-break: break-word;
+}
+/* Little downward tail pointing at the head */
+.avatar-thought::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -3px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  background: rgba(9, 12, 17, 0.92);
+  border-right: 1px solid rgba(var(--accent-rgb), 0.42);
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.42);
+  transform: rotate(45deg);
+}
+@keyframes thought-rise {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(5px) scale(0.92); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0)   scale(1); }
+}
 /* Per-role work FX panel. Hidden by default; each role's working state
    reveals a small badge on the side of the avatar that mimics what the
    agent actually does. */
@@ -2628,6 +2691,249 @@ button.etsy-pill {
 
 .avatar-fx .fx-paper { display: none; }
 
+/* ───── Strategist — pen scribbling prompt steers ───── */
+.fx-scribble { padding: 5px 5px; }
+.fx-scribble .line {
+  position: absolute;
+  left: 5px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.4;
+  transform-origin: 0 50%;
+}
+.fx-scribble .l1 { top: 7px;  width: 0; }
+.fx-scribble .l2 { top: 13px; width: 0; }
+.fx-scribble .l3 { top: 19px; width: 0; }
+.avatar-working .fx-scribble .line { animation: scribble-write 1.8s ease-in-out infinite; }
+.avatar-working .fx-scribble .l2 { animation-delay: 0.4s; }
+.avatar-working .fx-scribble .l3 { animation-delay: 0.8s; }
+@keyframes scribble-write {
+  0%       { width: 0;    opacity: 0.2; }
+  60%      { width: 26px; opacity: 0.9; }
+  100%     { width: 26px; opacity: 0.2; }
+}
+
+/* ───── Marketing — Pinterest pin feed masonry ───── */
+.fx-pinfeed { padding: 4px; }
+.fx-pinfeed .pin {
+  position: absolute;
+  border-radius: 1.5px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-dim));
+  opacity: 0.7;
+}
+.fx-pinfeed .p1 { left: 5px;  top: 5px;  width: 12px; height: 18px; }
+.fx-pinfeed .p2 { left: 20px; top: 5px;  width: 12px; height: 10px; }
+.fx-pinfeed .p3 { left: 20px; top: 17px; width: 12px; height: 6px; }
+.avatar-working .fx-pinfeed .pin { animation: pin-pop 1.9s ease-in-out infinite; }
+.avatar-working .fx-pinfeed .p2 { animation-delay: 0.3s; }
+.avatar-working .fx-pinfeed .p3 { animation-delay: 0.6s; }
+@keyframes pin-pop {
+  0%, 100% { opacity: 0.4; transform: translateY(2px) scale(0.94); }
+  50%      { opacity: 1;   transform: translateY(0)   scale(1); }
+}
+
+/* ───── Anime stylist — twinkling sparkle stars ───── */
+.fx-sparkle { padding: 4px; }
+.fx-sparkle .star {
+  position: absolute;
+  width: 6px; height: 6px;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%);
+  opacity: 0;
+}
+.fx-sparkle .s1 { left: 7px;  top: 7px;  }
+.fx-sparkle .s2 { left: 18px; top: 13px; width: 8px; height: 8px; }
+.fx-sparkle .s3 { left: 26px; top: 5px;  width: 5px; height: 5px; }
+.avatar-working .fx-sparkle .star { animation: sparkle-twinkle 1.6s ease-in-out infinite; }
+.avatar-working .fx-sparkle .s2 { animation-delay: 0.5s; }
+.avatar-working .fx-sparkle .s3 { animation-delay: 0.9s; }
+@keyframes sparkle-twinkle {
+  0%, 100% { opacity: 0;   transform: scale(0.4) rotate(0deg); }
+  50%      { opacity: 1;   transform: scale(1)   rotate(45deg); }
+}
+
+/* ───── Hero designer — comic-book action burst ───── */
+.fx-burst { padding: 4px; }
+.fx-burst .ray {
+  position: absolute;
+  left: 18px; top: 14px;
+  width: 14px; height: 2px;
+  background: var(--accent);
+  transform-origin: 0 50%;
+  opacity: 0.7;
+}
+.fx-burst .r1 { transform: rotate(-20deg); }
+.fx-burst .r2 { transform: rotate(20deg); }
+.fx-burst .hero-star {
+  position: absolute;
+  left: 8px; top: 9px;
+  width: 10px; height: 10px;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
+.avatar-working .fx-burst .hero-star { animation: hero-pop 1.5s ease-in-out infinite; }
+.avatar-working .fx-burst .ray { animation: hero-ray 1.5s ease-in-out infinite; }
+@keyframes hero-pop {
+  0%, 100% { transform: scale(0.7) rotate(-8deg); opacity: 0.6; }
+  50%      { transform: scale(1.1) rotate(8deg);  opacity: 1; }
+}
+@keyframes hero-ray {
+  0%, 100% { opacity: 0.2; }
+  50%      { opacity: 0.9; }
+}
+
+/* ───── Mecha engineer — spinning gear ───── */
+.fx-gear { padding: 4px; }
+.fx-gear .cog {
+  position: absolute;
+  left: 12px; top: 7px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  box-sizing: border-box;
+  background:
+    radial-gradient(circle, transparent 40%, var(--accent) 41%, var(--accent) 46%, transparent 47%);
+}
+.fx-gear .cog::before,
+.fx-gear .cog::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 3px;
+  border: 2px solid var(--accent);
+  clip-path: polygon(
+    44% 0, 56% 0, 56% 12%, 44% 12%,
+    100% 44%, 100% 56%, 88% 56%, 88% 44%,
+    44% 100%, 56% 100%, 56% 88%, 44% 88%,
+    0 44%, 0 56%, 12% 56%, 12% 44%
+  );
+  opacity: 0.8;
+}
+.avatar-working .fx-gear .cog { animation: gear-spin 2.4s linear infinite; }
+@keyframes gear-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ───── Chibi artist — pulsing heart ───── */
+.fx-heart { padding: 4px; }
+.fx-heart .heart {
+  position: absolute;
+  left: 13px; top: 9px;
+  width: 12px; height: 12px;
+  background: var(--accent);
+  /* Octagonal heart approximation — robust across WebKit/Chromium without
+     needing clip-path: path() which WKWebView (Tauri/macOS) renders
+     inconsistently. */
+  clip-path: polygon(50% 100%, 8% 50%, 8% 25%, 28% 12%, 50% 28%, 72% 12%, 92% 25%, 92% 50%);
+}
+.fx-heart .heart-glint {
+  position: absolute;
+  left: 15px; top: 11px;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.85);
+  opacity: 0;
+}
+.avatar-working .fx-heart .heart { animation: heart-beat 1.3s ease-in-out infinite; }
+.avatar-working .fx-heart .heart-glint { animation: heart-glint 1.3s ease-in-out infinite; }
+@keyframes heart-beat {
+  0%, 100% { transform: scale(0.85); }
+  30%      { transform: scale(1.15); }
+  45%      { transform: scale(0.95); }
+}
+@keyframes heart-glint {
+  0%, 100% { opacity: 0; }
+  40%      { opacity: 0.9; }
+}
+
+/* ───── Deity sculptor — radiating halo aura ───── */
+.fx-halo { padding: 4px; }
+.fx-halo .halo-ring {
+  position: absolute;
+  left: 11px; top: 6px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+}
+.avatar-working .fx-halo .halo-ring { animation: halo-radiate 2.0s ease-out infinite; }
+.avatar-working .fx-halo .r2 { animation-delay: 1.0s; }
+@keyframes halo-radiate {
+  0%   { opacity: 0.9; transform: scale(0.4); }
+  100% { opacity: 0;   transform: scale(1.3); }
+}
+
+/* ───── Creature designer — claw rake ───── */
+.fx-claw { padding: 4px; }
+.fx-claw .slash {
+  position: absolute;
+  top: 4px;
+  width: 2.5px; height: 20px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, var(--accent) 30%, var(--accent) 70%, transparent);
+  transform: rotate(18deg);
+  transform-origin: 50% 0;
+  opacity: 0;
+}
+.fx-claw .s1 { left: 12px; }
+.fx-claw .s2 { left: 18px; }
+.fx-claw .s3 { left: 24px; }
+.avatar-working .fx-claw .slash { animation: claw-rake 1.5s ease-out infinite; }
+.avatar-working .fx-claw .s2 { animation-delay: 0.08s; }
+.avatar-working .fx-claw .s3 { animation-delay: 0.16s; }
+@keyframes claw-rake {
+  0%       { opacity: 0;   transform: rotate(18deg) translateX(-4px) scaleY(0.5); }
+  35%      { opacity: 1;   transform: rotate(18deg) translateX(0)    scaleY(1); }
+  100%     { opacity: 0;   transform: rotate(18deg) translateX(4px)  scaleY(1); }
+}
+
+/* ───── Humanoid sculptor — shield + blade ───── */
+.fx-shield { padding: 4px; }
+.fx-shield .shield {
+  position: absolute;
+  left: 12px; top: 6px;
+  width: 14px; height: 16px;
+  background: var(--accent);
+  opacity: 0.85;
+  clip-path: polygon(50% 0, 100% 18%, 100% 60%, 50% 100%, 0 60%, 0 18%);
+}
+.fx-shield .blade {
+  position: absolute;
+  left: 18px; top: 5px;
+  width: 2px; height: 18px;
+  background: rgba(255,255,255,0.85);
+  transform: rotate(35deg);
+  transform-origin: 50% 50%;
+}
+.avatar-working .fx-shield .shield { animation: shield-sheen 1.9s ease-in-out infinite; }
+.avatar-working .fx-shield .blade  { animation: blade-glint 1.9s ease-in-out infinite; }
+@keyframes shield-sheen {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+@keyframes blade-glint {
+  0%, 100% { opacity: 0.4; transform: rotate(35deg) translateY(2px); }
+  50%      { opacity: 1;   transform: rotate(35deg) translateY(-1px); }
+}
+
+/* ───── Generic fallback — pulsing dot ───── */
+.fx-pulse { padding: 4px; }
+.fx-pulse .pulse-dot {
+  position: absolute;
+  left: 16px; top: 10px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.5;
+}
+.avatar-working .fx-pulse .pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.7); box-shadow: 0 0 0 var(--accent); }
+  50%      { opacity: 1;   transform: scale(1);   box-shadow: 0 0 8px var(--accent); }
+}
+
 .avatar-fx .glow {
   position: absolute;
   left: 50%;
@@ -2653,39 +2959,9 @@ button.etsy-pill {
   50%      { opacity: 0.65; transform: scale(1.15); }
 }
 
-/* Status glyph pulses & ring. Position + transform are set inline in
-   Avatar.tsx so they can scale with sizeScale; CSS only handles the
-   visual chrome here. */
-.avatar-glyph {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 14px;
-  padding: 1px 4px;
-  left: 50%;
-  border-radius: 8px;
-  background: rgba(7, 9, 12, 0.85);
-  border: 1px solid var(--line-2);
-  font-family: var(--font-mono);
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1;
-  white-space: nowrap;
-}
-.glyph-working   { color: var(--accent-ok); border-color: rgba(94,208,168,0.45); animation: glyph-pulse 1.1s ease-in-out infinite; }
-.glyph-walking   { color: var(--accent);    border-color: rgba(var(--accent-rgb), 0.45); }
-.glyph-awaiting  { color: var(--accent-warm); border-color: rgba(245,166,35,0.5); animation: glyph-pulse 1.6s ease-in-out infinite; }
-.glyph-crashed   { color: var(--accent-bad); border-color: rgba(239,79,90,0.5);  }
-.glyph-paused    { color: var(--ink-2); }
-.glyph-idle      { color: var(--ink-2); opacity: 0.55; }
-.glyph-killed    { display: none; }
-.glyph-quarantined { color: var(--accent-warm); border-color: rgba(245,166,35,0.4); }
-
-@keyframes glyph-pulse {
-  0%, 100% { box-shadow: 0 0 0 rgba(94,208,168,0); }
-  50%      { box-shadow: 0 0 10px rgba(94,208,168,0.6); }
-}
+/* (The .avatar-glyph status pill — the W / > / ? badge above the head — was
+   removed in favor of the natural thought cloud, which now conveys agent
+   status. Its CSS lived here and has been deleted along with it.) */
 
 /* Room state — accent the room when an agent in it is busy */
 .iso-room { transition: filter 0.6s ease; }
@@ -6156,6 +6432,125 @@ button.etsy-pill {
   gap: 12px;
   font-family: var(--font-sans);
 }
+
+/* ── Pending queue ("Up next") ─────────────────────────────────────── */
+.af-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent);
+}
+.af-pending-title {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  transition: color 120ms ease;
+}
+.af-pending-title:hover { color: var(--ink-0); }
+.af-pending-caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--ink-3);
+}
+.af-pending-count {
+  color: var(--ink-1);
+  background: var(--bg-2);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+.af-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.af-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid transparent;
+}
+.af-pending-row.is-running {
+  border-color: rgba(var(--accent-rgb), 0.35);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+.af-pending-pos {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font: 10px/1 var(--font-mono);
+  color: var(--ink-3);
+}
+.af-pending-row.is-running .af-pending-pos { color: var(--role-color, var(--accent)); }
+.af-pending-id {
+  font: 11px/1 var(--font-mono);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.af-pending-tag {
+  font: 9px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 999px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+.af-pending-label {
+  font-size: 12px;
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.af-pending-spacer { flex: 1; }
+.af-pending-status {
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--role-color, var(--accent));
+  flex-shrink: 0;
+}
+.af-pending-skip {
+  appearance: none;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-1);
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.af-pending-skip:hover:not(:disabled) {
+  background: rgba(239, 79, 90, 0.1);
+  color: var(--accent-bad);
+  border-color: rgba(239, 79, 90, 0.45);
+}
+.af-pending-skip:disabled { opacity: 0.5; cursor: wait; }
+
 .af-controls {
   display: flex;
   flex-direction: column;
@@ -8250,4 +8645,31 @@ button.etsy-pill {
 }
 .mp-sync-all-btn .is-spinning {
   animation: etsy-resync-spin 0.9s linear infinite;
+}
+
+/* ============================================================
+   Performance toggles (driven by Settings > Performance and the
+   FPS overlay). Each <body> class strips one rendering cost. See
+   src/factory/perf/perfSettings.ts. Defaults disable avatar shadow
+   + SVG blur, which measured as the two dominant paint costs.
+   ============================================================ */
+body.diag-no-backdrop *,
+body.diag-no-backdrop *::before,
+body.diag-no-backdrop *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+body.diag-no-shadow .avatar-anchor {
+  filter: none !important;
+}
+body.diag-no-anim *,
+body.diag-no-anim *::before,
+body.diag-no-anim *::after {
+  animation: none !important;
+  transition: none !important;
+}
+body.diag-no-svgfilter [filter],
+body.diag-no-svgfilter g,
+body.diag-no-svgfilter circle {
+  filter: none !important;
 }

@@ -6,7 +6,7 @@ import {
   Plant, Printer3D, Rug, ServerRack, SideTable, Stool,
   TallPlant, Treadmill, UltraWide, WallScreen, YogaMat,
 } from "./furnitureV2";
-import { WallDecal, iso3, U } from "./primitives";
+import { Box, Cylinder, Sphere, WallDecal, iso3, U } from "./primitives";
 
 const CHAIR_R = 0.33; // half a 0.66-unit chair
 
@@ -561,5 +561,573 @@ function RingLight({ x, y, accent }: { x: number; y: number; accent: string }) {
       {/* Highlight glint on the top-left of the ring */}
       <ellipse cx={ringCx - ringR * 0.4} cy={ringCy - ringR * 0.18} rx={ringR * 0.25} ry={ringR * 0.08} fill="#fff" opacity={0.55} />
     </g>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DESIGNER-WING SPECIALIST ROOMS
+//
+//  Seven small employee desks that work UNDER the lead designer (Mara Chen
+//  in the Design Studio). Each occupies the same 6×6 cell as a boss room
+//  but uses a smaller inset working footprint (the SmallFootprint pad below)
+//  so the visual reads as "employee cubicle" rather than "executive office".
+//  Each room ships niche-specific props the lead designer hands a brief
+//  to: katana wall + manga shelf (anime), cape mannequin + comic shelf
+//  (hero), gantry + servo bench (mecha), plush bin + ribbon spool (chibi),
+//  altar + obelisk (deity), bone shelf + scaled hide (creature), shield
+//  rack + sword cabinet (humanoid).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Inset pad used by every specialist room — it visually "shrinks" the work
+ * area inside the 6×6 cell to about 4×4 by drawing a recessed floor tile,
+ * a smaller rug, and a soft pendant pool. The wider unused border around
+ * it reads as "this person has less floor than the boss has".
+ */
+function SmallFootprint({ accent, glow = "#fff5d6" }: { accent: string; glow?: string }) {
+  return (
+    <>
+      {/* Recessed floor tile (subtle dark border around the work area) */}
+      <FloorRect x={0.9} y={0.9} w={4.2} d={4.2} color="#000" opacity={0.10} />
+      <FloorRect x={1.0} y={1.0} w={4.0} d={4.0} color="#000" opacity={0.04} />
+      <Rug x={1.6} y={2.7} w={2.8} d={1.5} color={accent} opacity={0.18} />
+      <FloorLightPool x={3.0} y={3.2} rx={1.35} ry={0.85} color={glow} opacity={0.30} />
+    </>
+  );
+}
+
+// ────────────────── ANIME STYLIST (anime_studio) ──────────────────
+// Niche props: a katana on a wall rack, a manga-volume bookshelf, a stack
+// of cel-stylization color references, a wacom-style drafting tablet.
+export function AnimeStudio({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#ffeaf2" />
+      {/* Back wall — manga volume bookshelf in a hot-pink-spined run. */}
+      <Bookshelf x={0.4} y={0.4} w={1.6} d={0.4} h={1.9} color="#2a1a2a" books={accent} />
+      {/* Katana mounted on the right wall (two-bar wooden rack with a
+          single sheathed blade across it). Drawn as a wall decal so it
+          sticks to the right plane in iso. */}
+      <WallDecal wall="right" u={1.6} v={1.05}>
+        <g transform="scale(-1, 1)">
+          {/* Mount bars */}
+          <rect x={0} y={-2} width={70} height={3} fill="#4a2a1a" rx={1} />
+          <rect x={0} y={-22} width={70} height={3} fill="#4a2a1a" rx={1} />
+          {/* Sheath (dark) */}
+          <rect x={2} y={-12} width={66} height={6} fill="#101015" rx={1} />
+          {/* Tsuba (guard) + handle wrap */}
+          <rect x={4} y={-13} width={4} height={8} fill={accent} />
+          <rect x={8} y={-12} width={14} height={6} fill="#1a1a22" />
+          <line x1={10} y1={-12} x2={10} y2={-6} stroke={accent} strokeWidth={0.6} opacity={0.7} />
+          <line x1={14} y1={-12} x2={14} y2={-6} stroke={accent} strokeWidth={0.6} opacity={0.7} />
+          <line x1={18} y1={-12} x2={18} y2={-6} stroke={accent} strokeWidth={0.6} opacity={0.7} />
+        </g>
+      </WallDecal>
+      {/* Cel-art reference moodboard above the desk (small framed swatches) */}
+      <WallDecal wall="left" u={2.6} v={0.45}>
+        <rect x={0} y={-40} width={70} height={32} fill="#2a1a2a" rx={2} />
+        {[0, 22, 44].map((dx, i) => (
+          <rect
+            key={i}
+            x={dx + 6}
+            y={-36}
+            width={16}
+            height={24}
+            fill={["#ff7fb3", "#ffd1dc", accent][i]}
+            stroke="#fff"
+            strokeWidth={0.5}
+          />
+        ))}
+      </WallDecal>
+      <Desk x={1.6} y={1.9} w={2.5} d={0.85} color="#2a1a2a" />
+      <Monitor x={1.85} y={1.95} z={1.32} w={0.9} accent={accent} content="design" />
+      <Laptop x={3.0} y={2.05} z={1.32} accent={accent} />
+      {/* Drafting tablet front-and-center on the desk — small dark slab
+          with a glowing stylus line. */}
+      <Box x={2.45} y={2.42} z={1.32} w={0.7} d={0.45} h={0.04} color="#10101a" />
+      <Box x={2.65} y={2.5}  z={1.36} w={0.06} d={0.28} h={0.02} color={accent} />
+      <Mug x={1.7} y={2.4} z={1.3} drink="#ff7fb3" />
+      <Papers x={2.95} y={2.45} z={1.34} accent={accent} />
+      {/* Floor pedestal — finished anime figurine on display. */}
+      <Pedestal x={4.4} y={4.1} accent={accent} display="figure" color="#fff1f6" />
+      <ChairAt cx={3.0} cy={3.4} accent={accent} face="back-left" />
+      <TallPlant x={5.0} y={0.4} color="#5fa057" />
+    </>
+  );
+}
+
+// ────────────────── HERO STUDIO (hero_studio) ──────────────────
+// Niche props: a cape on a mannequin stand, a comic-book shelf, a small
+// action-figure pedestal, primary-color reference panels.
+export function HeroStudio({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#e5ebff" />
+      {/* Back wall — comic book shelf (taller, thinner spines in a primary mix). */}
+      <Bookshelf x={0.4} y={0.4} w={1.4} d={0.4} h={2.0} color="#1a2440" books="#ffd23f" />
+      {/* Primary-color reference panel on the side wall — three big
+          color-block swatches that read as a "hero palette" chart. */}
+      <WallDecal wall="right" u={1.4} v={1.05}>
+        <g transform="scale(-1, 1)">
+          <rect x={0} y={-32} width={66} height={28} fill="#101220" rx={2} />
+          <rect x={4}  y={-28} width={18} height={20} fill="#e63946" />
+          <rect x={24} y={-28} width={18} height={20} fill={accent} />
+          <rect x={44} y={-28} width={18} height={20} fill="#ffd23f" />
+        </g>
+      </WallDecal>
+      {/* Cape mannequin — a torso stand with a draped cape flaring out
+          behind. Hero-defining silhouette prop. */}
+      <g>
+        {/* Mannequin base (small disc) */}
+        <Cylinder x={4.5} y={0.7} r={0.3} h={0.08} color="#1a1c22" />
+        {/* Vertical pole */}
+        <Box x={4.475} y={0.675} z={0.08} w={0.05} d={0.05} h={1.0} color="#1a1c22" />
+        {/* Torso block (cape shoulders) */}
+        <Box x={4.32} y={0.55}  z={1.08} w={0.4} d={0.3} h={0.5} color="#202028" />
+        {/* Cape — a long polygon hanging from the shoulders. Drawn as a
+            free polygon in iso world coordinates to read as fabric. */}
+        {(() => {
+          const top = iso3(4.32, 0.55, 1.58);
+          const topR = iso3(4.72, 0.55, 1.58);
+          const bot = iso3(4.05, 1.05, 0.08);
+          const botR = iso3(4.95, 1.05, 0.08);
+          const accentDark = accent;
+          return (
+            <>
+              <polygon
+                points={`${top.x},${top.y} ${topR.x},${topR.y} ${botR.x},${botR.y} ${bot.x},${bot.y}`}
+                fill={accentDark}
+              />
+              {/* Inner cape lining (lighter line for fabric fold) */}
+              <line x1={(top.x + topR.x) / 2} y1={(top.y + topR.y) / 2} x2={(bot.x + botR.x) / 2} y2={(bot.y + botR.y) / 2} stroke="#fff" strokeOpacity={0.18} strokeWidth={0.6} />
+              {/* Hero crest on the shoulders — small star */}
+              <polygon
+                points={`${top.x + (topR.x - top.x) * 0.5},${top.y + 4}
+                         ${top.x + (topR.x - top.x) * 0.6},${top.y + 9}
+                         ${top.x + (topR.x - top.x) * 0.85},${top.y + 9}
+                         ${top.x + (topR.x - top.x) * 0.65},${top.y + 13}
+                         ${top.x + (topR.x - top.x) * 0.75},${top.y + 18}
+                         ${top.x + (topR.x - top.x) * 0.5},${top.y + 15}
+                         ${top.x + (topR.x - top.x) * 0.25},${top.y + 18}
+                         ${top.x + (topR.x - top.x) * 0.35},${top.y + 13}
+                         ${top.x + (topR.x - top.x) * 0.15},${top.y + 9}
+                         ${top.x + (topR.x - top.x) * 0.4},${top.y + 9}`}
+                fill="#ffd23f"
+              />
+            </>
+          );
+        })()}
+      </g>
+      <Desk x={1.6} y={1.9} w={2.5} d={0.85} color="#202028" />
+      <UltraWide x={1.7} y={1.95} z={1.32} w={1.6} accent={accent} content="design" />
+      <Keyboard x={2.0} y={2.45} z={1.32} w={1.2} accent={accent} />
+      <Mug x={1.7} y={2.4} z={1.32} drink="#5a3a24" />
+      <Papers x={3.5} y={2.45} z={1.34} accent="#e63946" />
+      {/* Action-figure pedestal — finished superhero mini under a spotlight. */}
+      <Pedestal x={0.4} y={4.0} accent={accent} display="figure" color="#fff1e6" />
+      <ChairAt cx={3.0} cy={3.4} accent={accent} face="back-left" />
+      <Plant x={5.0} y={4.9} color="#4f9a5f" />
+    </>
+  );
+}
+
+// ────────────────── MECHA BAY (mecha_bay) ──────────────────
+// Niche props: a small overhead gantry, a robot torso WIP, panel
+// servos on a bench, a parts cabinet with industrial orange caution
+// stripes, blueprint tube rack.
+export function MechaBay({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#ffe2c5" />
+      {/* Caution-stripe parts cabinet on the back-left. */}
+      <Cabinet x={0.4} y={0.4} color="#2a2c30" w={0.84} d={0.6} h={1.6} />
+      {/* Three stacked caution stripes painted across the cabinet front */}
+      {[0.6, 1.0, 1.4].map((cz, i) => {
+        const a = iso3(0.4, 0.4, cz);
+        const b = iso3(1.24, 0.4, cz);
+        return (
+          <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={accent} strokeWidth={1.6} opacity={0.85} />
+        );
+      })}
+      {/* Server-rack stand-in for the industrial backdrop. */}
+      <ServerRack x={1.4} y={0.4} accent={accent} />
+      {/* Blueprint tube rack on the right wall — three rolled tubes leaning. */}
+      <WallDecal wall="right" u={2.6} v={0.45}>
+        <g transform="scale(-1, 1)">
+          {[0, 7, 14].map((dx, i) => (
+            <g key={i}>
+              <rect x={dx + 4} y={-32} width={4} height={32} fill="#bda57a" rx={1.5} />
+              <rect x={dx + 4} y={-32} width={4} height={4} fill={accent} rx={1.5} />
+            </g>
+          ))}
+        </g>
+      </WallDecal>
+      {/* Gantry crane — H-shaped beam crossing the bay overhead, with a
+          hook hanging from the center. Drawn as 3 thin boxes at z=2.0. */}
+      {(() => {
+        const beamZ = 2.0;
+        const lA = iso3(1.0, 1.4, beamZ);
+        const lB = iso3(5.0, 1.4, beamZ);
+        const lC = iso3(1.0, 1.4, beamZ - 0.16);
+        const lD = iso3(5.0, 1.4, beamZ - 0.16);
+        const lE = iso3(1.0, 1.4, 0);
+        const lF = iso3(5.0, 1.4, 0);
+        return (
+          <g>
+            {/* Posts (left + right) */}
+            <line x1={lA.x} y1={lA.y} x2={lE.x} y2={lE.y} stroke="#3a3c40" strokeWidth={2.4} />
+            <line x1={lB.x} y1={lB.y} x2={lF.x} y2={lF.y} stroke="#3a3c40" strokeWidth={2.4} />
+            {/* Beam */}
+            <polygon points={`${lA.x},${lA.y} ${lB.x},${lB.y} ${lD.x},${lD.y} ${lC.x},${lC.y}`} fill="#5a5c60" />
+            <line x1={lA.x} y1={lA.y} x2={lB.x} y2={lB.y} stroke={accent} strokeWidth={0.8} />
+            {/* Hook — vertical wire + claw */}
+            {(() => {
+              const mid = iso3(3.0, 1.4, beamZ - 0.16);
+              const hook = iso3(3.0, 1.4, 1.3);
+              return (
+                <g>
+                  <line x1={mid.x} y1={mid.y} x2={hook.x} y2={hook.y} stroke="#1a1c22" strokeWidth={1.6} />
+                  <circle cx={hook.x} cy={hook.y} r={2.6} fill="none" stroke="#1a1c22" strokeWidth={1.6} />
+                </g>
+              );
+            })()}
+          </g>
+        );
+      })()}
+      {/* Robot torso WIP sitting under the gantry — chest block with
+          shoulder pauldrons and panel lines. */}
+      <Box x={2.7} y={1.8}  z={0.0} w={0.6} d={0.6} h={0.8}
+        color="#42464c" colors={{ top: "#5a5e64", left: "#2a2c30", right: "#3a3c40" }} />
+      <Box x={2.55} y={1.95} z={0.7} w={0.18} d={0.32} h={0.18} color="#2a2c30" />
+      <Box x={3.27} y={1.95} z={0.7} w={0.18} d={0.32} h={0.18} color="#2a2c30" />
+      {/* Glow eyes painted on a small face plate */}
+      {(() => {
+        const eye1 = iso3(2.88, 1.78, 0.65);
+        const eye2 = iso3(3.12, 1.78, 0.65);
+        return (
+          <g>
+            <circle cx={eye1.x} cy={eye1.y} r={1.0} fill={accent} />
+            <circle cx={eye2.x} cy={eye2.y} r={1.0} fill={accent} />
+            <circle cx={eye1.x} cy={eye1.y} r={1.6} fill={accent} fillOpacity={0.25} />
+            <circle cx={eye2.x} cy={eye2.y} r={1.6} fill={accent} fillOpacity={0.25} />
+          </g>
+        );
+      })()}
+      {/* Work desk — engineer's CAD station with monitor + servo parts. */}
+      <Desk x={1.0} y={3.6} w={3.6} d={0.85} color="#42464c" />
+      <Monitor x={1.2} y={3.65} z={1.32} w={0.95} accent={accent} content="code" />
+      <Box x={2.4} y={3.95} z={1.32} w={0.3} d={0.18} h={0.1} color="#1a1c22" />
+      <Box x={2.78} y={3.95} z={1.32} w={0.3} d={0.18} h={0.1} color="#1a1c22" />
+      <Box x={3.16} y={3.95} z={1.32} w={0.3} d={0.18} h={0.1} color={accent} />
+      <Mug x={1.05} y={4.0} z={1.3} drink="#5a3a24" />
+      <ChairAt cx={2.8} cy={4.9} accent={accent} face="back-left" />
+    </>
+  );
+}
+
+// ────────────────── CHIBI CORNER (chibi_corner) ──────────────────
+// Niche props: plush toy bin overflowing with rounded shapes, ribbon
+// spools on a wall rack, sticker sheets, pastel mood palette.
+export function ChibiCorner({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#f5e1ff" />
+      {/* Sticker-sheet bookshelf — pastel-spined volumes representing
+          sticker stock. */}
+      <Bookshelf x={0.4} y={0.4} w={1.4} d={0.4} h={1.7} color="#f0d4ff" books={accent} />
+      {/* Ribbon spool wall rack on the right wall — six small horizontal
+          dowels with colored ribbon dangling. */}
+      <WallDecal wall="right" u={1.4} v={1.05}>
+        <g transform="scale(-1, 1)">
+          <rect x={0} y={-22} width={66} height={20} fill="#f5e1ff" stroke={accent} strokeWidth={0.6} rx={2} />
+          {[
+            { x: 6,  c: "#ffb6d9" },
+            { x: 18, c: "#d8a8ff" },
+            { x: 30, c: accent },
+            { x: 42, c: "#ffe1f0" },
+            { x: 54, c: "#a3c8ff" },
+          ].map(({ x, c }, i) => (
+            <g key={i}>
+              {/* Dowel */}
+              <rect x={x - 0.5} y={-19} width={1.5} height={3.5} fill="#a07050" />
+              {/* Ribbon strand */}
+              <path d={`M ${x + 0.25} ${-15} Q ${x + 4} ${-10} ${x + 0.25} ${-5}`} fill="none" stroke={c} strokeWidth={2.4} />
+            </g>
+          ))}
+        </g>
+      </WallDecal>
+      {/* Plush toy bin — open box with three rounded plush spheres
+          peeking out. */}
+      <g>
+        <Box x={4.3} y={0.6} z={0.0} w={0.9} d={0.9} h={0.6}
+          color="#ffd0e8" colors={{ top: "#ffe0f0", left: "#e09cc0", right: "#e8b0d0" }} />
+        {/* Plushies */}
+        <Sphere x={4.55} y={1.0}  z={0.7} r={0.25} color="#ffb6d9" />
+        <Sphere x={4.95} y={0.85} z={0.7} r={0.22} color="#d8a8ff" />
+        <Sphere x={4.75} y={1.15} z={0.78} r={0.2} color="#fff1e6" />
+        {/* Two tiny dot eyes on the front plushie */}
+        {(() => {
+          const e1 = iso3(4.5, 1.05, 0.78);
+          const e2 = iso3(4.62, 1.05, 0.78);
+          return (
+            <g>
+              <circle cx={e1.x} cy={e1.y} r={0.5} fill="#1a1c22" />
+              <circle cx={e2.x} cy={e2.y} r={0.5} fill="#1a1c22" />
+            </g>
+          );
+        })()}
+      </g>
+      {/* Work desk with laptop + papers (sticker sheet) + mug + plant. */}
+      <Desk x={1.6} y={2.0} w={2.4} d={0.85} color="#e6c8e8" />
+      <Laptop x={1.85} y={2.15} z={1.32} accent={accent} />
+      {/* "Sticker sheet" on the desk — a small grid of pastel circles. */}
+      {(() => {
+        const sx = 2.8, sy = 2.18, sz = 1.34;
+        const cells: ReactNode[] = [];
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 4; c++) {
+            const p = iso3(sx + c * 0.16, sy + r * 0.16, sz);
+            const colors = ["#ffb6d9", "#d8a8ff", "#fff1e6", accent];
+            cells.push(
+              <circle key={`${r}-${c}`} cx={p.x} cy={p.y} r={2.4} fill={colors[(r + c) % colors.length]} stroke="#fff" strokeWidth={0.4} />
+            );
+          }
+        }
+        return <g>{cells}</g>;
+      })()}
+      <Mug x={1.7} y={2.5} z={1.32} drink="#ffb6d9" />
+      <ChairAt cx={3.0} cy={3.4} accent={accent} face="back-left" />
+      <Plant x={5.0} y={4.9} color="#7fcf8a" />
+    </>
+  );
+}
+
+// ────────────────── DEITY ATELIER (deity_atelier) ──────────────────
+// Niche props: a central altar pedestal with a finished deity bust, an
+// obelisk in the back corner, a small brazier flame, ceremonial bookshelf
+// with stone-spined tomes.
+export function DeityAtelier({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#fff1c5" />
+      {/* Stone-tome shelf on the back wall */}
+      <Bookshelf x={0.4} y={0.4} w={1.4} d={0.4} h={2.0} color="#5a4530" books="#bda57a" />
+      {/* Obelisk in the back-right corner — tall narrow tapered prism. */}
+      {(() => {
+        const baseW = 0.42;
+        const topW = 0.18;
+        const h = 2.4;
+        const ox = 4.6, oy = 0.6;
+        const a = iso3(ox, oy, 0);
+        const b = iso3(ox + baseW, oy, 0);
+        const c = iso3(ox + baseW, oy + baseW, 0);
+        const ta = iso3(ox + (baseW - topW) / 2, oy + (baseW - topW) / 2, h);
+        const tb = iso3(ox + baseW - (baseW - topW) / 2, oy + (baseW - topW) / 2, h);
+        const tc = iso3(ox + baseW - (baseW - topW) / 2, oy + baseW - (baseW - topW) / 2, h);
+        const td = iso3(ox + (baseW - topW) / 2, oy + baseW - (baseW - topW) / 2, h);
+        return (
+          <g>
+            <polygon points={`${a.x},${a.y} ${b.x},${b.y} ${tb.x},${tb.y} ${ta.x},${ta.y}`} fill="#9a8868" />
+            <polygon points={`${b.x},${b.y} ${c.x},${c.y} ${tc.x},${tc.y} ${tb.x},${tb.y}`} fill="#7a6850" />
+            <polygon points={`${ta.x},${ta.y} ${tb.x},${tb.y} ${tc.x},${tc.y} ${td.x},${td.y}`} fill="#bda57a" />
+            {/* Carved gold accent line down the front face */}
+            <line x1={(a.x + b.x) / 2} y1={(a.y + b.y) / 2} x2={(ta.x + tb.x) / 2} y2={(ta.y + tb.y) / 2} stroke={accent} strokeWidth={0.8} opacity={0.85} />
+          </g>
+        );
+      })()}
+      {/* Hieroglyph panel on the right wall — vertical strip of small
+          glyph squares. */}
+      <WallDecal wall="right" u={1.7} v={0.4}>
+        <g transform="scale(-1, 1)">
+          <rect x={0} y={-32} width={20} height={30} fill="#3a2818" rx={2} />
+          {[0, 1, 2, 3].map((i) => (
+            <rect key={i} x={5} y={-28 + i * 6} width={10} height={4} fill={accent} opacity={0.85} rx={0.5} />
+          ))}
+        </g>
+      </WallDecal>
+      {/* Central altar pedestal with a finished deity bust on top + small
+          brazier flame beside it. */}
+      <Pedestal x={2.6} y={2.4} accent={accent} display="figure" color="#f0e2c2" />
+      {/* Brazier — a low bowl with a flickering accent flame. */}
+      <g>
+        <Cylinder x={1.8} y={2.7} r={0.18} h={0.15} color="#3a2818" />
+        <Cylinder x={1.8} y={2.7} z={0.15} r={0.16} h={0.05} color="#bda57a" />
+        {(() => {
+          const f = iso3(1.8, 2.7, 0.3);
+          return (
+            <g>
+              <ellipse cx={f.x} cy={f.y - 6} rx={3.2} ry={6} fill={accent} fillOpacity={0.85}>
+                <animate attributeName="ry" values="5;7;5" dur="1.8s" repeatCount="indefinite" />
+              </ellipse>
+              <ellipse cx={f.x} cy={f.y - 8} rx={1.6} ry={3.5} fill="#fff1c5" opacity={0.85} />
+            </g>
+          );
+        })()}
+      </g>
+      {/* Work desk with sketchpad + laptop */}
+      <Desk x={1.2} y={3.6} w={3.0} d={0.85} color="#5a4530" />
+      <Laptop x={1.45} y={3.75} z={1.32} accent={accent} />
+      <Papers x={2.6} y={4.05} z={1.34} accent={accent} />
+      <Mug x={1.3} y={4.05} z={1.32} drink="#bda57a" />
+      <ChairAt cx={2.6} cy={4.9} accent={accent} face="back-left" />
+    </>
+  );
+}
+
+// ────────────────── CREATURE DEN (creature_den) ──────────────────
+// Niche props: a horn/tusk wall rack, a scaled hide draped over a chair,
+// a bone shelf with skull silhouettes, a moss-tone jade palette.
+export function CreatureDen({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#c8e8d4" />
+      {/* Bone shelf on the back wall — three rounded "skull" lumps as
+          shelf decor on a darker shelf. */}
+      <Bookshelf x={0.4} y={0.4} w={1.6} d={0.4} h={1.7} color="#3a2a1a" books="#d8c2a0" />
+      {(() => {
+        const skullX = [0.6, 1.0, 1.4];
+        return (
+          <g>
+            {skullX.map((sx, i) => {
+              const s = iso3(sx, 0.45, 1.35 + (i % 2) * 0.05);
+              return (
+                <g key={i}>
+                  <ellipse cx={s.x} cy={s.y} rx={5.5} ry={4.0} fill="#e8d5b0" />
+                  <ellipse cx={s.x - 1.8} cy={s.y + 0.5} rx={1.0} ry={1.4} fill="#1a1410" />
+                  <ellipse cx={s.x + 1.8} cy={s.y + 0.5} rx={1.0} ry={1.4} fill="#1a1410" />
+                </g>
+              );
+            })}
+          </g>
+        );
+      })()}
+      {/* Horn/tusk wall rack on the right wall — two curved horns flanking
+          a central tooth-row trophy plate. */}
+      <WallDecal wall="right" u={1.6} v={1.0}>
+        <g transform="scale(-1, 1)">
+          {/* Mounting plate */}
+          <rect x={0} y={-26} width={64} height={20} fill="#3a2a1a" rx={2} />
+          {/* Left horn */}
+          <path d={`M 6 -16 Q 14 -25 22 -14 Q 18 -14 14 -10 Q 10 -14 6 -16 Z`} fill="#e8d5b0" />
+          {/* Right horn (mirrored) */}
+          <path d={`M 58 -16 Q 50 -25 42 -14 Q 46 -14 50 -10 Q 54 -14 58 -16 Z`} fill="#e8d5b0" />
+          {/* Tooth-row trophy plate in the middle */}
+          <rect x={26} y={-22} width={12} height={6} fill={accent} stroke="#1a1a14" strokeWidth={0.5} />
+          {[0, 4, 8].map((d, i) => (
+            <polygon key={i} points={`${27 + d},${-16} ${29 + d},${-16} ${28 + d},${-12}`} fill="#fff1e6" />
+          ))}
+        </g>
+      </WallDecal>
+      {/* Scaled hide draped over an armchair in the back corner */}
+      <Armchair x={4.3} y={0.6} color="#2a3a2a" face="back-right" />
+      {(() => {
+        const a = iso3(4.3, 0.6, 1.0);
+        const b = iso3(5.05, 0.6, 1.0);
+        const c = iso3(5.05, 1.4, 0.3);
+        const d = iso3(4.3, 1.4, 0.3);
+        return (
+          <g>
+            <polygon points={`${a.x},${a.y} ${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`} fill={accent} />
+            {/* Scale texture — small diamond cells stitched across the hide */}
+            {[0.2, 0.45, 0.7].map((u, i) =>
+              [0.25, 0.5, 0.75].map((v, j) => {
+                const p = iso3(4.3 + u * 0.75, 0.6 + v * 0.8, 1.0 - v * 0.7);
+                return <circle key={`${i}-${j}`} cx={p.x} cy={p.y} r={0.9} fill="#1a3024" opacity={0.55} />;
+              })
+            )}
+          </g>
+        );
+      })()}
+      {/* Sculpting bench — slab with a clay creature WIP and tools. */}
+      <LabBench x={1.0} y={2.4} w={3.2} color="#3a2a1a" />
+      {/* Clay creature WIP — a low-poly creature blob (sphere on a base). */}
+      <Cylinder x={2.0} y={2.65} z={1.32} r={0.32} h={0.06} color="#5a4030" />
+      <Sphere x={2.0} y={2.65} z={1.42} r={0.18} color="#7a6050" />
+      {/* Sculpting tools (three thin metal sticks) */}
+      {[2.6, 2.75, 2.9].map((tx, i) => {
+        const a = iso3(tx, 2.6, 1.34);
+        const b = iso3(tx, 3.1, 1.34);
+        return <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#bdbdc0" strokeWidth={1.0} />;
+      })}
+      <Laptop x={3.4} y={2.6} z={1.32} accent={accent} />
+      <ChairAt cx={2.7} cy={3.6} accent={accent} face="back-left" />
+      <TallPlant x={5.0} y={4.9} color="#1f5a3a" />
+    </>
+  );
+}
+
+// ────────────────── HUMANOID FORGE (humanoid_forge) ──────────────────
+// Niche props: a shield rack (three shields), a sword cabinet, a scroll
+// table with parchment + quill, a leather mood-board.
+export function HumanoidForge({ accent }: { accent: string }): ReactNode {
+  return (
+    <>
+      <SmallFootprint accent={accent} glow="#f5e1c2" />
+      {/* Sword cabinet on the back-left — tall cabinet with two crossed
+          sword blades on the front. */}
+      <Cabinet x={0.4} y={0.4} color="#5a3a20" w={0.84} d={0.6} h={2.0} />
+      {(() => {
+        const x = 0.4, y = 0.4, w = 0.84;
+        const cb1 = iso3(x + 0.1, y + 0.05, 0.4);
+        const ct1 = iso3(x + w - 0.1, y + 0.05, 1.9);
+        const cb2 = iso3(x + w - 0.1, y + 0.05, 0.4);
+        const ct2 = iso3(x + 0.1, y + 0.05, 1.9);
+        return (
+          <g>
+            <line x1={cb1.x} y1={cb1.y} x2={ct1.x} y2={ct1.y} stroke="#d8d8e0" strokeWidth={2.0} />
+            <line x1={cb2.x} y1={cb2.y} x2={ct2.x} y2={ct2.y} stroke="#d8d8e0" strokeWidth={2.0} />
+            <circle cx={(cb1.x + ct2.x) / 2} cy={(cb1.y + ct2.y) / 2} r={2.6} fill={accent} stroke="#1a1a14" strokeWidth={0.5} />
+          </g>
+        );
+      })()}
+      {/* Shield rack on the right wall — three round shields with cross
+          quarterings in primary heraldic tones. */}
+      <WallDecal wall="right" u={1.0} v={1.0}>
+        <g transform="scale(-1, 1)">
+          <rect x={0} y={-26} width={64} height={22} fill="#3a2818" rx={2} />
+          {[
+            { cx: 12, fill: "#a02828" },
+            { cx: 32, fill: accent },
+            { cx: 52, fill: "#284fa0" },
+          ].map(({ cx, fill }, i) => (
+            <g key={i}>
+              <circle cx={cx} cy={-15} r={8} fill={fill} stroke="#1a1a14" strokeWidth={0.6} />
+              <line x1={cx} y1={-23} x2={cx} y2={-7} stroke="#1a1a14" strokeWidth={0.5} opacity={0.7} />
+              <line x1={cx - 8} y1={-15} x2={cx + 8} y2={-15} stroke="#1a1a14" strokeWidth={0.5} opacity={0.7} />
+              <circle cx={cx} cy={-15} r={1.6} fill="#fff1c5" />
+            </g>
+          ))}
+        </g>
+      </WallDecal>
+      {/* Scroll table — small side table with parchment and a quill */}
+      <SideTable x={4.0} y={0.6} color="#5a3a20" />
+      {(() => {
+        const s = iso3(4.0, 0.6, 1.1);
+        const sLeft = iso3(4.0, 0.6, 1.1);
+        const sRight = iso3(4.6, 0.6, 1.1);
+        const sBack = iso3(4.0, 1.2, 1.1);
+        return (
+          <g>
+            {/* Scroll (curled at one end) */}
+            <polygon points={`${sLeft.x},${sLeft.y} ${sRight.x},${sRight.y} ${sRight.x},${sBack.y} ${sLeft.x},${sBack.y}`} fill="#f0e2c2" />
+            <line x1={sLeft.x + 2} y1={s.y - 1} x2={sLeft.x + 16} y2={s.y - 1} stroke="#3a2818" strokeWidth={0.6} />
+            <line x1={sLeft.x + 2} y1={s.y + 2} x2={sLeft.x + 12} y2={s.y + 2} stroke="#3a2818" strokeWidth={0.6} />
+            {/* Quill rising up to the right */}
+            <line x1={sRight.x - 4} y1={s.y + 1} x2={sRight.x + 4} y2={s.y - 12} stroke="#3a2818" strokeWidth={1.4} />
+            <path d={`M ${sRight.x + 4} ${s.y - 12} Q ${sRight.x + 6} ${s.y - 9} ${sRight.x + 2} ${s.y - 6}`} fill={accent} />
+          </g>
+        );
+      })()}
+      {/* Pedestal in the back showing a finished humanoid mini */}
+      <Pedestal x={2.6} y={0.4} accent={accent} display="figure" color="#f0e2c2" />
+      {/* Work desk — leather-topped writing desk with a monitor + laptop. */}
+      <Desk x={1.4} y={2.4} w={3.0} d={0.9} color="#5a3a20" />
+      <Monitor x={1.6} y={2.5} z={1.32} w={0.95} accent={accent} content="design" />
+      <Laptop x={2.85} y={2.6} z={1.32} accent={accent} />
+      <Papers x={3.7} y={2.95} z={1.34} accent={accent} />
+      <Mug x={1.55} y={2.95} z={1.32} drink="#5a3a24" />
+      <ChairAt cx={3.0} cy={3.7} accent={accent} face="back-left" />
+      <Plant x={5.0} y={4.9} color="#5fa057" />
+    </>
   );
 }

@@ -8,12 +8,21 @@ export type IsoThemeName = "warm" | "clinic" | "night";
 
 export type AvatarArchetype =
   | "authoritative" | "slim" | "relaxed" | "office"
-  | "friendly" | "formal" | "lab";
+  | "friendly" | "formal" | "lab"
+  // Designer-wing specialists. Each maps to a distinct hair/hat
+  // silhouette in Avatar.tsx so the small avatars stay readable.
+  | "anime_spec" | "hero_spec" | "mecha_spec" | "chibi_spec"
+  | "deity_spec" | "creature_spec" | "humanoid_spec";
 
 export type RoomTag =
   | "bridge" | "analyst" | "creative" | "copy" | "comms"
   | "finance" | "rd" | "ops" | "legal" | "archive" | "dev"
-  | "marketing";
+  | "marketing"
+  // Specialist rooms that work UNDER the lead designer. Smaller visual
+  // footprint than founding rooms; each one is themed for one character
+  // archetype the designer routes briefs to.
+  | "anime_studio" | "hero_studio" | "mecha_bay" | "chibi_corner"
+  | "deity_atelier" | "creature_den" | "humanoid_forge";
 
 export type WallFeature =
   | "kanban" | "trends" | "moodboard" | "ledger" | "logwall"

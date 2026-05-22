@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { computeFacilityLayout, computeCorridors } from "../layout";
+import { ROOM_H, GAP } from "../geometry";
 import type { Room } from "../../state/types";
+
+// y0 of the corridor strip between row 1 and row 2, derived from shared spacing.
+const ROW_1_2_GAP_Y0 = 2 * ROOM_H + GAP;
 
 const FOUNDING_ROOMS: Room[] = [
   { id: "strategy", name: "Strategy",  col: 0, row: 0 },
@@ -23,8 +27,8 @@ describe("layout regen on room removal", () => {
     const withSilab = computeCorridors(FOUNDING_ROOMS);
     const withoutSilab = computeCorridors(FOUNDING_ROOMS.filter(r => r.id !== "silab"));
     // Without silab, no row gap between row 1 and row 2 should exist.
-    const hasRow12After = withoutSilab.some(s => Math.abs(s.y0 - 13) < 0.01);
-    const hasRow12Before = withSilab.some(s => Math.abs(s.y0 - 13) < 0.01);
+    const hasRow12After = withoutSilab.some(s => Math.abs(s.y0 - ROW_1_2_GAP_Y0) < 0.01);
+    const hasRow12Before = withSilab.some(s => Math.abs(s.y0 - ROW_1_2_GAP_Y0) < 0.01);
     expect(hasRow12Before).toBe(true);
     expect(hasRow12After).toBe(false);
   });

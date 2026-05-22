@@ -24,10 +24,25 @@ describe("founding fixtures", () => {
     }
   });
 
-  it("FOUNDING_HIRE_EVENTS has 9 entries with reason=founding", () => {
-    expect(FOUNDING_HIRE_EVENTS).toHaveLength(9);
+  it("FOUNDING_HIRE_EVENTS covers every founding role with reason=founding", () => {
+    // 9 founding office roles + 7 designer-wing specialists. The exact count
+    // is bumped here intentionally so the test catches accidental additions
+    // — when a real new founding role lands, update this number on purpose.
+    expect(FOUNDING_HIRE_EVENTS).toHaveLength(16);
     for (const e of FOUNDING_HIRE_EVENTS) {
       expect(e.justification.reason).toBe("founding");
+    }
+  });
+
+  it("every designer-wing specialist room renders with a kit and one occupant", () => {
+    const specialistIds = [
+      "anime", "hero", "mecha", "chibi", "deity", "creature", "humanoid",
+    ];
+    for (const id of specialistIds) {
+      expect(ROOMS[id], `room ${id} missing`).toBeDefined();
+      expect(ROOMS[id].kit, `room ${id} missing kit`).toBeDefined();
+      expect(ROOMS[id].kit?.capacity).toBe(1);
+      expect((ROOMS[id].occupants ?? []).length).toBe(1);
     }
   });
 });

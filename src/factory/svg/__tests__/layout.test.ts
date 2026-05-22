@@ -4,7 +4,14 @@ import { computeDoors } from "../layout";
 import { placeNewRoom } from "../layout";
 import { findPath } from "../layout";
 import { MAX_COLS, MAX_ROWS } from "../layout";
+import { ROOM_W, ROOM_H, GAP } from "../geometry";
 import type { Room, RoomKit, RoomTag } from "../../state/types";
+
+// World coordinates derive from the shared room/gap constants. Expressing the
+// expected strip positions in terms of those constants keeps these regression
+// guards correct if the platform spacing (GAP) is ever retuned.
+const STEP_X = ROOM_W + GAP;
+const STEP_Y = ROOM_H + GAP;
 
 const FOUNDING_ROOMS: Room[] = [
   { id: "strategy", name: "Strategy", col: 0, row: 0 },
@@ -23,19 +30,22 @@ describe("computeCorridors", () => {
     expect(strips.some((s) => s.x1 - s.x0 < s.y1 - s.y0)).toBe(true);
   });
 
-  it("includes a vertical corridor at col gap 6..7 (x0=6, x1=7)", () => {
+  it("includes a vertical corridor at the col 0|1 gap", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
-    expect(strips.some((s) => Math.abs(s.x0 - 6) < 0.01 && Math.abs(s.x1 - 7) < 0.01)).toBe(true);
+    const x0 = ROOM_W, x1 = ROOM_W + GAP;
+    expect(strips.some((s) => Math.abs(s.x0 - x0) < 0.01 && Math.abs(s.x1 - x1) < 0.01)).toBe(true);
   });
 
-  it("includes a vertical corridor at col gap 13..14 (x0=13, x1=14)", () => {
+  it("includes a vertical corridor at the col 1|2 gap", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
-    expect(strips.some((s) => Math.abs(s.x0 - 13) < 0.01 && Math.abs(s.x1 - 14) < 0.01)).toBe(true);
+    const x0 = 2 * ROOM_W + GAP, x1 = x0 + GAP;
+    expect(strips.some((s) => Math.abs(s.x0 - x0) < 0.01 && Math.abs(s.x1 - x1) < 0.01)).toBe(true);
   });
 
-  it("includes a horizontal corridor at row gap 6..7 (y0=6, y1=7)", () => {
+  it("includes a horizontal corridor at the row 0|1 gap", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
-    expect(strips.some((s) => Math.abs(s.y0 - 6) < 0.01 && Math.abs(s.y1 - 7) < 0.01)).toBe(true);
+    const y0 = ROOM_H, y1 = ROOM_H + GAP;
+    expect(strips.some((s) => Math.abs(s.y0 - y0) < 0.01 && Math.abs(s.y1 - y1) < 0.01)).toBe(true);
   });
 
   it("returns no strips when given a single room", () => {
@@ -43,26 +53,28 @@ describe("computeCorridors", () => {
     expect(computeCorridors(single)).toEqual([]);
   });
 
-  it("vertical corridor y1 equals 20 for founding 7-room layout", () => {
+  it("vertical corridors span down to the bottom edge of the founding 7-room layout", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
     const verticals = strips.filter((s) => s.x1 - s.x0 < s.y1 - s.y0);
-    for (const v of verticals) expect(v.y1).toBeCloseTo(20, 5);
+    const yBot = 3 * STEP_Y - GAP; // rowMax (2) + 1 rows tall, minus the trailing gap
+    for (const v of verticals) expect(v.y1).toBeCloseTo(yBot, 5);
   });
 
-  it("horizontal corridor at y=13..14 spans only col 1 (cs↔silab adjacent)", () => {
+  it("horizontal corridor at the row 1|2 gap spans only col 1 (cs↔silab adjacent)", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
-    const row12 = strips.find((s) => Math.abs(s.y0 - 13) < 0.01);
+    const y0 = 2 * ROOM_H + GAP;
+    const row12 = strips.find((s) => Math.abs(s.y0 - y0) < 0.01);
     expect(row12).toBeDefined();
-    expect(row12!.x0).toBeCloseTo(7, 5);   // col 1 left edge
-    expect(row12!.x1).toBeCloseTo(13, 5);  // col 1 right edge
+    expect(row12!.x0).toBeCloseTo(STEP_X, 5);          // col 1 left edge
+    expect(row12!.x1).toBeCloseTo(STEP_X + ROOM_W, 5); // col 1 right edge
   });
 
-  it("horizontal corridor at y=6..7 spans full width 0..20 for row 0↔1", () => {
+  it("horizontal corridor at the row 0|1 gap spans the full grid width for row 0↔1", () => {
     const strips = computeCorridors(FOUNDING_ROOMS);
-    const row01 = strips.find((s) => Math.abs(s.y0 - 6) < 0.01);
+    const row01 = strips.find((s) => Math.abs(s.y0 - ROOM_H) < 0.01);
     expect(row01).toBeDefined();
     expect(row01!.x0).toBeCloseTo(0, 5);
-    expect(row01!.x1).toBeCloseTo(20, 5);
+    expect(row01!.x1).toBeCloseTo(3 * ROOM_W + 2 * GAP, 5); // col 2 right edge
   });
 });
 
@@ -144,7 +156,8 @@ describe("findPath", () => {
   it("returns a path that crosses the central corridor for diagonally placed rooms", () => {
     const path = findPath(FOUNDING_ROOMS, "strategy", "finance");
     expect(path.length).toBeGreaterThan(2);
-    expect(path.some((p) => p.y >= 6 && p.y <= 7)).toBe(true);
+    // Crosses the row 0|1 corridor band [ROOM_H, ROOM_H + GAP].
+    expect(path.some((p) => p.y >= ROOM_H - 0.01 && p.y <= ROOM_H + GAP + 0.01)).toBe(true);
   });
 
   it("returns empty when source or dest is unknown", () => {

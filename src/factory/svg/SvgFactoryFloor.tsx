@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState, useCallback } from "react";
+import { Profiler, useMemo, useRef, useState, useCallback } from "react";
+import { profilerCallback } from "../perf/collector";
 import { useFactoryStore } from "../state/factoryStore";
 import { Room } from "../state/types";
 import { GAP, ROOM_W, ROOM_H, WALL_H, iso } from "./geometry";
@@ -193,33 +194,39 @@ export default function SvgFactoryFloor() {
       onWheel={onWheel}
       onMouseDown={onMouseDown}
     >
-      <svg
-        ref={svgRef}
-        id="iso-svg"
-        className="stage-svg"
-        viewBox={vb}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", height: "100%", display: "block" }}
-      >
-        <defs>
-          <radialGradient id="ground-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#5fd4f0" stopOpacity={0.06} />
-            <stop offset="100%" stopColor="#5fd4f0" stopOpacity={0} />
-          </radialGradient>
-        </defs>
-        <IsoDefs />
-        <Corridors strips={layout.corridors} />
-        {ordered.map((id) => (
-          <RoomShell
-            key={id}
-            roomId={id}
-            doors={layout.doors.get(id)}
-            detailLevel={detailLevels.get(id) ?? "full"}
-          />
-        ))}
-      </svg>
-      <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} detailLevels={detailLevels} />
-      <HandoffLayer svgRef={svgRef} zoom={zoom} />
+      <Profiler id="svg-scene" onRender={profilerCallback}>
+        <svg
+          ref={svgRef}
+          id="iso-svg"
+          className="stage-svg"
+          viewBox={vb}
+          preserveAspectRatio="xMidYMid meet"
+          style={{ width: "100%", height: "100%", display: "block" }}
+        >
+          <defs>
+            <radialGradient id="ground-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#5fd4f0" stopOpacity={0.06} />
+              <stop offset="100%" stopColor="#5fd4f0" stopOpacity={0} />
+            </radialGradient>
+          </defs>
+          <IsoDefs />
+          <Corridors strips={layout.corridors} />
+          {ordered.map((id) => (
+            <RoomShell
+              key={id}
+              roomId={id}
+              doors={layout.doors.get(id)}
+              detailLevel={detailLevels.get(id) ?? "full"}
+            />
+          ))}
+        </svg>
+      </Profiler>
+      <Profiler id="avatars" onRender={profilerCallback}>
+        <AvatarLayer svgRef={svgRef} zoom={zoom} pan={pan} detailLevels={detailLevels} />
+      </Profiler>
+      <Profiler id="handoffs" onRender={profilerCallback}>
+        <HandoffLayer svgRef={svgRef} zoom={zoom} />
+      </Profiler>
       <ZoomControls
         zoom={zoom}
         onZoomIn={zoomIn}

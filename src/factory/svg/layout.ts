@@ -1,8 +1,5 @@
 import { Room } from "../state/types";
-
-export const ROOM_W = 6;
-export const ROOM_H = 6;
-export const GAP = 1;
+import { ROOM_W, ROOM_H, GAP } from "./geometry";
 
 // Hard upper bound on the grid extent. The factory floor is a 10x10 grid of
 // rooms; placeNewRoom will refuse to produce coordinates outside this range.
@@ -39,8 +36,8 @@ export function computeCorridors(rooms: Room[]): Strip[] {
   // Vertical corridors: between every pair of adjacent col indices in the
   // bounding box.
   for (let c = colMin; c < colMax; c++) {
-    const gapX0 = (c + 1) * (ROOM_W + GAP) - GAP;       // = c*7 + 6
-    const gapX1 = gapX0 + GAP;                          // = c*7 + 7
+    const gapX0 = (c + 1) * (ROOM_W + GAP) - GAP;
+    const gapX1 = gapX0 + GAP;
     const hasLeft = rooms.some((r) => r.col === c);
     const hasRight = rooms.some((r) => r.col === c + 1);
     if (!hasLeft && !hasRight) continue;

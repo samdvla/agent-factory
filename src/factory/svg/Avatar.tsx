@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { Role, AgentVisualState } from "../state/types";
 
 function RoleWorkFx({ roleId }: { roleId: string }) {
@@ -68,24 +68,94 @@ function RoleWorkFx({ roleId }: { roleId: string }) {
           <i className="check" />
         </span>
       );
+    case "strategist":
+      // Calliope writing prompt steers — three pen-scribble lines.
+      return (
+        <span className="fx fx-scribble" aria-hidden>
+          <i className="line l1" />
+          <i className="line l2" />
+          <i className="line l3" />
+        </span>
+      );
+    case "marketing":
+      // Pinterest-style pin feed — three rectangles tiled like masonry.
+      return (
+        <span className="fx fx-pinfeed" aria-hidden>
+          <i className="pin p1" />
+          <i className="pin p2" />
+          <i className="pin p3" />
+        </span>
+      );
+    case "anime_spec":
+      // Anime sparkle — three small stars twinkling on/off.
+      return (
+        <span className="fx fx-sparkle" aria-hidden>
+          <i className="star s1" />
+          <i className="star s2" />
+          <i className="star s3" />
+        </span>
+      );
+    case "hero_spec":
+      // Comic-book burst — two action lines + a star center.
+      return (
+        <span className="fx fx-burst" aria-hidden>
+          <i className="ray r1" />
+          <i className="ray r2" />
+          <i className="hero-star" />
+        </span>
+      );
+    case "mecha_spec":
+      // Mecha gear — a single cog spinning.
+      return (
+        <span className="fx fx-gear" aria-hidden>
+          <i className="cog" />
+        </span>
+      );
+    case "chibi_spec":
+      // Pulsing heart with a tiny shimmer.
+      return (
+        <span className="fx fx-heart" aria-hidden>
+          <i className="heart" />
+          <i className="heart-glint" />
+        </span>
+      );
+    case "deity_spec":
+      // Halo / aura ring radiating outward.
+      return (
+        <span className="fx fx-halo" aria-hidden>
+          <i className="halo-ring r1" />
+          <i className="halo-ring r2" />
+        </span>
+      );
+    case "creature_spec":
+      // Three diagonal claw-rake marks.
+      return (
+        <span className="fx fx-claw" aria-hidden>
+          <i className="slash s1" />
+          <i className="slash s2" />
+          <i className="slash s3" />
+        </span>
+      );
+    case "humanoid_spec":
+      // Shield + crossed sword silhouette.
+      return (
+        <span className="fx fx-shield" aria-hidden>
+          <i className="shield" />
+          <i className="blade" />
+        </span>
+      );
     default:
-      return <span className="fx fx-paper" aria-hidden />;
+      // Generic fallback for any future role: a faint pulsing dot. Replaces
+      // the previous `display: none` fx-paper so unknown agents still get a
+      // visible "working" indicator when their state flips to working.
+      return (
+        <span className="fx fx-pulse" aria-hidden>
+          <i className="pulse-dot" />
+        </span>
+      );
   }
 }
 
-
-const STATE_GLYPH: Record<AgentVisualState, string> = {
-  working:       "W",
-  idle:          ".",
-  walking:       ">",
-  awaiting:      "?",
-  paused:        "Z",
-  crashed:       "!",
-  killed:        "X",
-  quarantined:   "Q",
-  materializing: "+",
-  dissolving:    "-",
-};
 
 const W = 32;
 const H = 44;
@@ -272,17 +342,327 @@ function IsoBody({ torsoH, torsoW, accent }: { torsoH: number; torsoW: number; a
 }
 
 /**
- * Handoff-style head — skin ellipse with a soft drop shadow, a simple swoop
- * hair cap, two dot eyes, and a small mouth when the agent is working. No
- * role-specific accessories: the role identity now comes from the body's
- * accent color, matching the handoff zip's agent design exactly.
+ * Specialist hair/hat silhouettes. Each shape sits over the base skull
+ * ellipse and is the PRIMARY way a viewer tells one specialist apart from
+ * another at the floor's small avatar scale. Silhouette-first per the
+ * project pin: distinct profile beats layered details.
  */
-function IsoHead({ torsoH, headR, state }: { torsoH: number; headR: number; state: import("../state/types").AgentVisualState }) {
+function SpecialistHat({
+  archetype, headR, hcy, accent,
+}: {
+  archetype: import("../state/types").AvatarArchetype;
+  headR: number; hcy: number; accent: string;
+}) {
+  switch (archetype) {
+    case "anime_spec":
+      // Spiked twin-tail — two pointed pigtails flaring outward from a
+      // tall spiky crown.
+      return (
+        <g>
+          {/* Crown — tall jagged hairline */}
+          <path
+            d={`M ${-headR} ${hcy + 0.2}
+                L ${-headR * 0.7} ${hcy - headR * 1.6}
+                L ${-headR * 0.3} ${hcy - headR * 0.6}
+                L 0 ${hcy - headR * 2.0}
+                L ${headR * 0.3} ${hcy - headR * 0.6}
+                L ${headR * 0.7} ${hcy - headR * 1.6}
+                L ${headR} ${hcy + 0.2}
+                L ${headR - 0.4} ${hcy - 0.4}
+                L ${-headR + 0.4} ${hcy - 0.4} Z`}
+            fill={accent}
+          />
+          {/* Left pigtail */}
+          <path
+            d={`M ${-headR - 0.1} ${hcy - headR * 0.2}
+                L ${-headR - 2.5} ${hcy + headR * 0.4}
+                L ${-headR - 1.6} ${hcy + headR * 0.6}
+                L ${-headR + 0.2} ${hcy + 0.4} Z`}
+            fill={accent}
+          />
+          {/* Right pigtail */}
+          <path
+            d={`M ${headR + 0.1} ${hcy - headR * 0.2}
+                L ${headR + 2.5} ${hcy + headR * 0.4}
+                L ${headR + 1.6} ${hcy + headR * 0.6}
+                L ${headR - 0.2} ${hcy + 0.4} Z`}
+            fill={accent}
+          />
+        </g>
+      );
+    case "hero_spec":
+      // Domino mask + slicked-back hair. The mask is the silhouette anchor.
+      return (
+        <g>
+          {/* Hair (slicked back, low) */}
+          <path
+            d={`M ${-headR} ${hcy + 0.15}
+                Q 0 ${hcy - headR * 0.9}
+                  ${headR} ${hcy + 0.15}
+                L ${headR - 0.4} ${hcy - 0.4}
+                Q 0 ${hcy - headR + 0.5}
+                  ${-headR + 0.4} ${hcy - 0.4} Z`}
+            fill="#101015"
+          />
+          {/* Domino mask — solid stripe across the eyes */}
+          <path
+            d={`M ${-headR + 0.1} ${hcy - 0.5}
+                L ${-headR * 0.15} ${hcy - 0.9}
+                L ${headR * 0.15} ${hcy - 0.9}
+                L ${headR - 0.1} ${hcy - 0.5}
+                L ${headR - 0.1} ${hcy + 0.7}
+                L ${headR * 0.15} ${hcy + 0.6}
+                L ${-headR * 0.15} ${hcy + 0.6}
+                L ${-headR + 0.1} ${hcy + 0.7} Z`}
+            fill={accent}
+          />
+          {/* Mask eye-slit highlights */}
+          <ellipse cx={-headR * 0.36} cy={hcy + 0.05} rx={0.7} ry={0.45} fill="#fff" />
+          <ellipse cx={headR * 0.36} cy={hcy + 0.05} rx={0.7} ry={0.45} fill="#fff" />
+        </g>
+      );
+    case "mecha_spec":
+      // Pilot helmet with a forward visor and a single antenna.
+      return (
+        <g>
+          {/* Helmet shell — wraps the top half of the head + a bit below */}
+          <path
+            d={`M ${-headR - 0.4} ${hcy + 0.8}
+                Q ${-headR - 0.4} ${hcy - headR * 1.4}
+                  0 ${hcy - headR * 1.6}
+                Q ${headR + 0.4} ${hcy - headR * 1.4}
+                  ${headR + 0.4} ${hcy + 0.8}
+                Q 0 ${hcy + headR * 0.4}
+                  ${-headR - 0.4} ${hcy + 0.8} Z`}
+            fill={accent}
+            stroke="#101015"
+            strokeWidth={0.25}
+          />
+          {/* Visor — dark band across eye level */}
+          <path
+            d={`M ${-headR - 0.2} ${hcy - 0.5}
+                Q 0 ${hcy - 0.2}
+                  ${headR + 0.2} ${hcy - 0.5}
+                L ${headR + 0.2} ${hcy + 0.6}
+                Q 0 ${hcy + 0.8}
+                  ${-headR - 0.2} ${hcy + 0.6} Z`}
+            fill="#10131a"
+          />
+          {/* Visor reflection sheen */}
+          <line x1={-headR * 0.6} y1={hcy - 0.1} x2={headR * 0.2} y2={hcy + 0.3} stroke={accent} strokeWidth={0.45} opacity={0.85} />
+          {/* Antenna on the right side */}
+          <line x1={headR + 0.1} y1={hcy - headR * 1.1} x2={headR + 0.7} y2={hcy - headR * 1.9} stroke="#101015" strokeWidth={0.4} />
+          <circle cx={headR + 0.7} cy={hcy - headR * 1.9} r={0.35} fill={accent} />
+        </g>
+      );
+    case "chibi_spec":
+      // Cat-ear headband — two pointed ears poking up from a soft round hair.
+      return (
+        <g>
+          {/* Round hair dome (softer than default) */}
+          <path
+            d={`M ${-headR - 0.2} ${hcy + 0.2}
+                Q 0 ${hcy - headR * 1.5}
+                  ${headR + 0.2} ${hcy + 0.2}
+                L ${headR - 0.4} ${hcy - 0.4}
+                Q 0 ${hcy - headR + 0.5}
+                  ${-headR + 0.4} ${hcy - 0.4} Z`}
+            fill={accent}
+          />
+          {/* Left ear */}
+          <polygon
+            points={`${-headR * 0.7},${hcy - headR * 1.0}
+                     ${-headR * 0.2},${hcy - headR * 1.0}
+                     ${-headR * 0.45},${hcy - headR * 1.9}`}
+            fill={accent}
+          />
+          <polygon
+            points={`${-headR * 0.6},${hcy - headR * 1.05}
+                     ${-headR * 0.3},${hcy - headR * 1.05}
+                     ${-headR * 0.45},${hcy - headR * 1.55}`}
+            fill="#fff1f6"
+          />
+          {/* Right ear */}
+          <polygon
+            points={`${headR * 0.2},${hcy - headR * 1.0}
+                     ${headR * 0.7},${hcy - headR * 1.0}
+                     ${headR * 0.45},${hcy - headR * 1.9}`}
+            fill={accent}
+          />
+          <polygon
+            points={`${headR * 0.3},${hcy - headR * 1.05}
+                     ${headR * 0.6},${hcy - headR * 1.05}
+                     ${headR * 0.45},${hcy - headR * 1.55}`}
+            fill="#fff1f6"
+          />
+        </g>
+      );
+    case "deity_spec":
+      // Laurel wreath crown — two arcs of small leaves over a low hair cap.
+      return (
+        <g>
+          {/* Hair cap (low so the laurel reads on top) */}
+          <path
+            d={`M ${-headR} ${hcy + 0.15}
+                Q 0 ${hcy - headR * 0.8}
+                  ${headR} ${hcy + 0.15}
+                L ${headR - 0.4} ${hcy - 0.4}
+                Q 0 ${hcy - headR + 0.5}
+                  ${-headR + 0.4} ${hcy - 0.4} Z`}
+            fill="#4a3520"
+          />
+          {/* Laurel — two arcs of small leaves at temple level */}
+          {[
+            { dx: -headR * 0.85, dy: -headR * 0.7, rot: -25 },
+            { dx: -headR * 0.55, dy: -headR * 0.95, rot: -15 },
+            { dx: -headR * 0.18, dy: -headR * 1.05, rot: -5 },
+            { dx:  headR * 0.18, dy: -headR * 1.05, rot:  5 },
+            { dx:  headR * 0.55, dy: -headR * 0.95, rot: 15 },
+            { dx:  headR * 0.85, dy: -headR * 0.7, rot: 25 },
+          ].map((p, i) => (
+            <ellipse
+              key={i}
+              cx={p.dx}
+              cy={hcy + p.dy}
+              rx={0.9}
+              ry={0.45}
+              fill={accent}
+              transform={`rotate(${p.rot} ${p.dx} ${hcy + p.dy})`}
+            />
+          ))}
+        </g>
+      );
+    case "creature_spec":
+      // Hooded silhouette with two short curled horns poking through.
+      return (
+        <g>
+          {/* Hood — wraps head + extends down past the chin */}
+          <path
+            d={`M ${-headR - 0.6} ${hcy + 1.2}
+                Q ${-headR - 0.6} ${hcy - headR * 1.2}
+                  0 ${hcy - headR * 1.3}
+                Q ${headR + 0.6} ${hcy - headR * 1.2}
+                  ${headR + 0.6} ${hcy + 1.2}
+                Q 0 ${hcy + headR * 0.6}
+                  ${-headR - 0.6} ${hcy + 1.2} Z`}
+            fill={accent}
+          />
+          {/* Hood inner shadow ring */}
+          <path
+            d={`M ${-headR + 0.2} ${hcy + 0.6}
+                Q 0 ${hcy - headR * 0.6}
+                  ${headR - 0.2} ${hcy + 0.6}
+                Q 0 ${hcy + headR * 0.45}
+                  ${-headR + 0.2} ${hcy + 0.6} Z`}
+            fill="#000"
+            fillOpacity={0.35}
+          />
+          {/* Left horn (small curled tusk) */}
+          <path
+            d={`M ${-headR * 0.6} ${hcy - headR * 1.0}
+                Q ${-headR * 1.0} ${hcy - headR * 1.6}
+                  ${-headR * 0.5} ${hcy - headR * 1.7}
+                Q ${-headR * 0.4} ${hcy - headR * 1.2}
+                  ${-headR * 0.6} ${hcy - headR * 1.0} Z`}
+            fill="#e8d5b0"
+            stroke="#1a1410"
+            strokeWidth={0.18}
+          />
+          {/* Right horn (mirrored) */}
+          <path
+            d={`M ${headR * 0.6} ${hcy - headR * 1.0}
+                Q ${headR * 1.0} ${hcy - headR * 1.6}
+                  ${headR * 0.5} ${hcy - headR * 1.7}
+                Q ${headR * 0.4} ${hcy - headR * 1.2}
+                  ${headR * 0.6} ${hcy - headR * 1.0} Z`}
+            fill="#e8d5b0"
+            stroke="#1a1410"
+            strokeWidth={0.18}
+          />
+        </g>
+      );
+    case "humanoid_spec":
+      // Winged helm — open-face helmet with a centerline ridge and a pair
+      // of small wings flaring out at the temples.
+      return (
+        <g>
+          {/* Helmet shell — wraps the top + sides, leaves the face open */}
+          <path
+            d={`M ${-headR - 0.3} ${hcy + 0.6}
+                Q ${-headR - 0.3} ${hcy - headR * 1.4}
+                  0 ${hcy - headR * 1.5}
+                Q ${headR + 0.3} ${hcy - headR * 1.4}
+                  ${headR + 0.3} ${hcy + 0.6}
+                L ${headR - 0.2} ${hcy + 0.2}
+                Q 0 ${hcy - headR * 0.6}
+                  ${-headR + 0.2} ${hcy + 0.2} Z`}
+            fill={accent}
+          />
+          {/* Center ridge crest */}
+          <path
+            d={`M -0.25 ${hcy - headR * 1.5}
+                L 0.25 ${hcy - headR * 1.5}
+                L 0.1 ${hcy + 0.4}
+                L -0.1 ${hcy + 0.4} Z`}
+            fill="#f0e2c2"
+          />
+          {/* Left wing */}
+          <path
+            d={`M ${-headR - 0.2} ${hcy - headR * 0.5}
+                L ${-headR - 2.4} ${hcy - headR * 0.95}
+                L ${-headR - 1.6} ${hcy - headR * 0.5}
+                L ${-headR - 0.2} ${hcy - headR * 0.2} Z`}
+            fill="#f0e2c2"
+            stroke="#3a2818"
+            strokeWidth={0.2}
+          />
+          {/* Right wing */}
+          <path
+            d={`M ${headR + 0.2} ${hcy - headR * 0.5}
+                L ${headR + 2.4} ${hcy - headR * 0.95}
+                L ${headR + 1.6} ${hcy - headR * 0.5}
+                L ${headR + 0.2} ${hcy - headR * 0.2} Z`}
+            fill="#f0e2c2"
+            stroke="#3a2818"
+            strokeWidth={0.2}
+          />
+        </g>
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * Handoff-style head — skin ellipse with a soft drop shadow, a simple swoop
+ * hair cap, two dot eyes, and a small mouth when the agent is working.
+ * Specialist archetypes swap the default hair for a distinct hat/silhouette
+ * via SpecialistHat — the small avatar scale means hair/hat is the only
+ * thing that reads, so each specialist has its own unmistakable shape.
+ */
+function IsoHead({
+  torsoH, headR, state, archetype, accent,
+}: {
+  torsoH: number; headR: number;
+  state: import("../state/types").AgentVisualState;
+  archetype: import("../state/types").AvatarArchetype;
+  accent: string;
+}) {
   const hcy = -torsoH - 12 - headR - 0.5;
   const hair = "var(--uniform-dark)";
   const skin = "var(--skin)";
   // Soft drop shadow under the head
   const shadowY = hcy + 1.4;
+  const isSpecialist =
+    archetype === "anime_spec" || archetype === "hero_spec" ||
+    archetype === "mecha_spec" || archetype === "chibi_spec" ||
+    archetype === "deity_spec" || archetype === "creature_spec" ||
+    archetype === "humanoid_spec";
+  // Helm / hood / mask styles cover the eyes themselves — don't draw the
+  // dot eyes on top of an opaque mask/visor/hood.
+  const coversEyes =
+    archetype === "hero_spec" || archetype === "mecha_spec" ||
+    archetype === "creature_spec";
   return (
     <g>
       {/* Neck — small skin-toned slab between torso and head */}
@@ -290,29 +670,38 @@ function IsoHead({ torsoH, headR, state }: { torsoH: number; headR: number; stat
       {/* Head shadow + main skin ellipse */}
       <ellipse cx={0} cy={shadowY} rx={headR} ry={headR * 0.96} fill="#000" fillOpacity={0.18} />
       <ellipse cx={0} cy={hcy} rx={headR} ry={headR * 0.96} fill={skin} />
-      {/* Hair cap — gentle dome over the top of the head */}
-      <path
-        d={`M ${-headR} ${hcy + 0.15}
-            Q 0 ${hcy - headR - 1.4}
-              ${headR} ${hcy + 0.15}
-            L ${headR - 0.4} ${hcy - 0.4}
-            Q 0 ${hcy - headR + 0.5}
-              ${-headR + 0.4} ${hcy - 0.4} Z`}
-        fill={hair}
-      />
-      {/* Eyes — two small dark dots */}
-      <ellipse cx={-headR * 0.36} cy={hcy} rx={0.55} ry={0.8} fill="#1a1c22" />
-      <ellipse cx={headR * 0.36} cy={hcy} rx={0.55} ry={0.8} fill="#1a1c22" />
-      {/* Mouth — present only when working */}
-      {state === "working" && (
+      {isSpecialist ? (
+        <SpecialistHat archetype={archetype} headR={headR} hcy={hcy} accent={accent} />
+      ) : (
+        /* Default hair cap — gentle dome over the top of the head */
+        <path
+          d={`M ${-headR} ${hcy + 0.15}
+              Q 0 ${hcy - headR - 1.4}
+                ${headR} ${hcy + 0.15}
+              L ${headR - 0.4} ${hcy - 0.4}
+              Q 0 ${hcy - headR + 0.5}
+                ${-headR + 0.4} ${hcy - 0.4} Z`}
+          fill={hair}
+        />
+      )}
+      {/* Eyes — two small dark dots; suppressed when the silhouette covers
+          them (mask, visor, deep hood) so they don't bleed through. */}
+      {!coversEyes && (
+        <>
+          <ellipse cx={-headR * 0.36} cy={hcy} rx={0.55} ry={0.8} fill="#1a1c22" />
+          <ellipse cx={headR * 0.36} cy={hcy} rx={0.55} ry={0.8} fill="#1a1c22" />
+        </>
+      )}
+      {/* Mouth — present only when working AND the lower face isn't hooded */}
+      {state === "working" && archetype !== "creature_spec" && (
         <ellipse cx={0} cy={hcy + headR * 0.4} rx={1.0} ry={0.32} fill="#1a1c22" opacity={0.7} />
       )}
     </g>
   );
 }
 
-export default function Avatar({
-  role, state, onClick, sizeScale = 1, lifetimeNet, rewards,
+function Avatar({
+  role, state, onClick, sizeScale = 1, lifetimeNet, rewards, thought,
 }: {
   role: Role;
   state: AgentVisualState;
@@ -322,6 +711,11 @@ export default function Avatar({
   lifetimeNet?: number;
   /** Current reward state — drives the chest stars + tier color. */
   rewards?: { stars: number; tier: number };
+  /** Short 1-2 line "what they're working on / talking about" string. When
+   *  set, renders a speech-bubble thought cloud above the avatar's head.
+   *  AvatarLayer derives this from the most recent ticker line for the role
+   *  (falling back to the agent's task), so it reflects live activity. */
+  thought?: string;
 }) {
   if (state === "killed") return null;
 
@@ -355,6 +749,26 @@ export default function Avatar({
         } as React.CSSProperties
       }
     >
+      {/* Thought cloud — a small speech bubble above the head showing what
+          the agent is currently working on / talking about. BOTH its size
+          (scale) AND its vertical offset (bottom) scale with sizeScale: the
+          avatar figure is `sh = H * sizeScale` tall, so anchoring the
+          bubble's bottom edge at `sh` keeps it sitting right on top of the
+          head at every zoom level. A fixed-px bottom dropped it to body
+          level when zoomed in. transform-origin 50% 100% means the bubble
+          grows upward from that head-top anchor. */}
+      {thought && (
+        <div
+          className="avatar-thought"
+          style={{
+            bottom: sh,
+            transform: `translateX(-50%) scale(${sizeScale})`,
+            transformOrigin: "50% 100%",
+          }}
+        >
+          <span className="thought-text">{thought}</span>
+        </div>
+      )}
       {/* FX layer — keeps its natural 32×44 box and scales as a unit so all
           internal pixel-positioned children stay in proportion. */}
       <div
@@ -378,7 +792,7 @@ export default function Avatar({
         <ellipse cx={0} cy={2} rx={7}  ry={2} fill={c} fillOpacity={0.7}  />
         <ellipse cx={0} cy={3} rx={9}  ry={2} fill="#000" fillOpacity={0.45} />
         <IsoBody torsoH={torsoH} torsoW={torsoW} accent={c} />
-        <IsoHead torsoH={torsoH} headR={headR} state={state} />
+        <IsoHead torsoH={torsoH} headR={headR} state={state} archetype={a} accent={c} />
         {rewards && rewards.stars > 0 && (() => {
           // Reward stars sit on the front face of the iso torso.
           const STAR_R = 0.45;
@@ -408,28 +822,32 @@ export default function Avatar({
           return <g aria-label={`${rewards.stars} ${TIER_NAMES[Math.min(rewards.tier, TIER_NAMES.length - 1)]} stars`}>{slots}</g>;
         })()}
       </svg>
-      {state !== "idle" && (
-        <span
-          className={`avatar-glyph glyph-${state}`}
-          style={{
-            // Sit clearly above the head — the avatar's head occupies the
-            // top ~8 viewBox units, so -24*sizeScale leaves visible space
-            // between the badge and the figure's face at every zoom level.
-            top: -24 * sizeScale,
-            // Scale via font + padding rather than transform: scale() so the
-            // glyph (a unicode character) re-rasterizes crisp at every zoom
-            // instead of being bitmap-stretched.
-            fontSize: 11 * sizeScale,
-            padding: `${1 * sizeScale}px ${4 * sizeScale}px`,
-            minWidth: 14 * sizeScale,
-            borderRadius: 8 * sizeScale,
-            borderWidth: Math.max(1, sizeScale),
-            transform: `translateX(-50%)`,
-          }}
-        >
-          {STATE_GLYPH[state]}
-        </span>
-      )}
+      {/* The old state-glyph badge (W / > / ? above the head) was removed —
+          the natural thought cloud now conveys what each agent is doing, so
+          the single-letter pill is redundant. */}
     </div>
   );
 }
+
+// Avatar renders a heavy SVG figure. Skip re-rendering it unless a prop that
+// actually changes the picture changed. `onClick` is intentionally excluded:
+// the parent recreates the closure every render, but it always resolves to
+// the same stable store action for this role, so ignoring it is correct and
+// keeps the figure from re-rendering on every animation frame / pan tick.
+// role and rewards are referentially stable from the store between visual
+// changes, so a reference compare is both safe and cheap.
+function avatarPropsEqual(
+  prev: Parameters<typeof Avatar>[0],
+  next: Parameters<typeof Avatar>[0],
+): boolean {
+  return (
+    prev.role === next.role &&
+    prev.state === next.state &&
+    prev.sizeScale === next.sizeScale &&
+    prev.lifetimeNet === next.lifetimeNet &&
+    prev.rewards === next.rewards &&
+    prev.thought === next.thought
+  );
+}
+
+export default memo(Avatar, avatarPropsEqual);

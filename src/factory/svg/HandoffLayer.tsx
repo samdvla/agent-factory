@@ -19,6 +19,11 @@ export default function HandoffLayer({
   const lastTrailAt = useRef(0);
 
   useEffect(() => {
+    // Nothing in flight → don't spin a rAF loop. Previously the loop re-armed
+    // unconditionally, so HandoffLayer re-rendered 60×/sec even on a totally
+    // idle floor. The effect re-runs whenever `handoffs` changes, so a new
+    // handoff restarts the loop and the floor going empty stops it.
+    if (!handoffs.length) return;
     let raf = 0;
     const tick = () => {
       force({});
@@ -91,9 +96,13 @@ export default function HandoffLayer({
             className="handoff-doc"
             style={
               {
-                left: pos.left,
-                top: pos.top,
-                transform: `scale(${zoom}) rotate(${arc}deg)`,
+                left: 0,
+                top: 0,
+                // Position via GPU transform (translate first, then the
+                // existing scale/rotate) so the in-flight doc composites
+                // instead of reflowing the layer every frame. Centering is
+                // handled by the element's margin in CSS, so visuals match.
+                transform: `translate3d(${pos.left}px, ${pos.top}px, 0) scale(${zoom}) rotate(${arc}deg)`,
                 ["--doc-color" as string]: h.color,
               } as React.CSSProperties
             }
